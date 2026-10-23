@@ -10,6 +10,7 @@ struct MockFetcher {
     batches: Vec<Vec<Puzzle>>,
     calls: Arc<AtomicU32>,
     cancel_batch: bool,
+    themes: Arc<std::sync::Mutex<Vec<Option<String>>>>,
 }
 impl PuzzleFetcher for MockFetcher {
     fn batch(
@@ -20,7 +21,7 @@ impl PuzzleFetcher for MockFetcher {
         cancel: &CancelFlag,
     ) -> std::result::Result<Vec<Puzzle>, SourceError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
-        assert_eq!(theme, Some("fork"));
+        self.themes.lock().unwrap().push(theme.map(Into::into));
         assert_eq!(target, 1000);
         assert_eq!(count, 20);
         if self.cancel_batch {
@@ -231,6 +232,7 @@ fn mocked_fallback_filters_band_theme_and_invalid_rows_and_regenerates() {
         ..Default::default()
     };
     let calls = mock.calls.clone();
+    let mock_themes = mock.themes.clone();
     let mut service = service(Store::memory().unwrap(), mock);
     let job = service
         .submit(Job::CreateSetWithFallback {
@@ -244,6 +246,13 @@ fn mocked_fallback_filters_band_theme_and_invalid_rows_and_regenerates() {
     };
     assert_eq!(created.shortfall(), 0);
     assert_eq!(calls.load(Ordering::Relaxed), 2);
+    assert!(
+        mock_themes
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|t| t.as_deref() == Some("fork"))
+    );
     assert_eq!(service.puzzle_count().unwrap(), 20);
     let puzzles = lock(&service.store)
         .unwrap()
@@ -260,6 +269,55 @@ fn mocked_fallback_filters_band_theme_and_invalid_rows_and_regenerates() {
         .unwrap();
     finish(&mut service, next.id).unwrap();
     assert_eq!(calls.load(Ordering::Relaxed), 2);
+}
+#[test]
+fn fallback_rotates_included_themes_and_filters_exclusions_locally() {
+    let tagged = |prefix: &str, themes: &[&str], n: u32| -> Vec<Puzzle> {
+        pool(n)
+            .into_iter()
+            .map(|mut p| {
+                p.id = format!("{prefix}{}", p.id);
+                p.themes = themes.iter().map(|t| (*t).to_string()).collect();
+                p
+            })
+            .collect()
+    };
+    let mut forks = tagged("f", &["fork"], 10);
+    forks.extend(tagged("m", &["fork", "mate"], 5));
+    let mock = MockFetcher {
+        batches: vec![forks, tagged("p", &["pin"], 10)],
+        ..Default::default()
+    };
+    let themes = mock.themes.clone();
+    let mut service = service(Store::memory().unwrap(), mock);
+    let params = BuilderParams {
+        include_themes: vec!["fork".into(), "pin".into()],
+        exclude_themes: vec!["mate".into()],
+        ..params()
+    };
+    let job = service
+        .submit(Job::CreateSetWithFallback {
+            params,
+            seed: 1,
+            now: 1,
+        })
+        .unwrap();
+    let JobOutput::SetCreated(created) = finish(&mut service, job.id).unwrap() else {
+        panic!()
+    };
+    assert_eq!(created.shortfall(), 0);
+    assert_eq!(
+        *themes.lock().unwrap(),
+        vec![Some("fork".to_string()), Some("pin".to_string())]
+    );
+    // Excluded rows are never stored, and the set honours both include themes.
+    assert_eq!(service.puzzle_count().unwrap(), 20);
+    let puzzles = lock(&service.store)
+        .unwrap()
+        .set_puzzles(created.set_id.unwrap())
+        .unwrap();
+    assert!(puzzles.iter().all(|p| !p.themes.contains(&"mate".into())));
+    assert_eq!(puzzles.iter().filter(|p| p.themes == ["pin"]).count(), 10);
 }
 #[test]
 fn api_fallback_skips_lines_without_a_player_move_before_saving_or_creating_a_set() {

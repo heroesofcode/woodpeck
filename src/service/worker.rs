@@ -124,6 +124,12 @@ fn execute(
     }
 }
 
+/// The anonymous API filters by one theme, so rotate through the included themes per batch;
+/// exclusions and match-all are enforced locally on every returned puzzle.
+fn fallback_theme(params: &crate::sets::BuilderParams, batch: u32) -> Option<&str> {
+    let include = &params.include_themes;
+    (!include.is_empty()).then(|| include[(batch as usize - 1) % include.len()].as_str())
+}
 fn fallback(
     store: &SharedStore,
     params: &crate::sets::BuilderParams,
@@ -147,7 +153,7 @@ fn fallback(
             Err(error) => return Err(error.into()),
         }
         let puzzles = fetcher.batch(
-            params.include_themes.first().map(String::as_str),
+            fallback_theme(params, batches),
             params.target_rating,
             params.size.min(100),
             cancel,
