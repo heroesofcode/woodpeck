@@ -52,6 +52,9 @@ pub fn parse_batch(json: &str) -> Result<Vec<Puzzle>, SourceError> {
     let batch: Batch = serde_json::from_str(json)?;
     batch.puzzles.into_iter().map(reconstruct).collect()
 }
+pub fn parse_puzzle(json: &str) -> Result<Puzzle, SourceError> {
+    reconstruct(serde_json::from_str(json)?)
+}
 fn reconstruct(entry: Entry) -> Result<Puzzle, SourceError> {
     let p = entry.puzzle;
     let moves = Reader::new(Cursor::new(entry.game.pgn))
