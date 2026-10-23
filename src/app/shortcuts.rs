@@ -115,6 +115,51 @@ mod tests {
             ),
             Some(Action::Promote('q'))
         );
+        assert_eq!(
+            dispatch(
+                Key::S,
+                Context {
+                    editing: false,
+                    modified: false,
+                    blocked: false,
+                    walkthrough: false,
+                    advance: false,
+                    promotion: false
+                }
+            ),
+            Some(Action::Skip)
+        );
+        assert_eq!(
+            dispatch(
+                Key::Left,
+                Context {
+                    editing: false,
+                    modified: false,
+                    blocked: false,
+                    walkthrough: true,
+                    advance: false,
+                    promotion: false
+                }
+            ),
+            Some(Action::Previous)
+        );
+        assert_eq!(
+            dispatch(
+                Key::Escape,
+                Context {
+                    editing: false,
+                    modified: false,
+                    blocked: true,
+                    walkthrough: false,
+                    advance: false,
+                    promotion: false
+                }
+            ),
+            Some(Action::Close)
+        );
+    }
+    #[test]
+    fn editing_modifiers_and_menus_suppress_actions() {
         for key in [Key::S, Key::T, Key::Space, Key::Enter, Key::Q] {
             assert_eq!(
                 dispatch(
@@ -159,47 +204,5 @@ mod tests {
                 None
             );
         }
-        assert_eq!(
-            dispatch(
-                Key::S,
-                Context {
-                    editing: false,
-                    modified: false,
-                    blocked: false,
-                    walkthrough: false,
-                    advance: false,
-                    promotion: false
-                }
-            ),
-            Some(Action::Skip)
-        );
-        assert_eq!(
-            dispatch(
-                Key::Left,
-                Context {
-                    editing: false,
-                    modified: false,
-                    blocked: false,
-                    walkthrough: true,
-                    advance: false,
-                    promotion: false
-                }
-            ),
-            Some(Action::Previous)
-        );
-        assert_eq!(
-            dispatch(
-                Key::Escape,
-                Context {
-                    editing: false,
-                    modified: false,
-                    blocked: true,
-                    walkthrough: false,
-                    advance: false,
-                    promotion: false
-                }
-            ),
-            Some(Action::Close)
-        );
     }
 }

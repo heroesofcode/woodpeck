@@ -78,9 +78,16 @@ impl BoardWidget {
         let (allocation, response) =
             ui.allocate_exact_size(Vec2::new(size, size + 6.0), Sense::click_and_drag());
         let rect = Rect::from_min_size(allocation.min, Vec2::splat(size));
-        let sq = size / 8.0;
         let now = ui.input(|i| i.time);
         let board = position.board();
+        self.update_board(board, engine.state(), now);
+        self.paint_squares(ui, engine, rect, theme, white);
+        self.paint_pieces(ui, board, rect, rendering, white, &response);
+        self.paint_flash(ui, rect, now);
+        let played = self.pointer_move(ui, engine, rect, white, &response);
+        self.promotion_picker(ui, rect).or(played)
+    }
+    fn update_board(&mut self, board: &Board, state: State, now: f64) {
         if self.previous.as_ref() != Some(board) {
             self.moving.clear();
             self.last_move.clear();
@@ -100,18 +107,27 @@ impl BoardWidget {
             self.changed = now;
             self.previous = Some(board.clone());
         }
-        if self.last_state != Some(engine.state()) {
-            if matches!(
-                engine.state(),
-                State::Incorrect | State::Skipped | State::Complete
-            ) {
-                self.flash = Some((now, engine.state() == State::Complete));
+        if self.last_state != Some(state) {
+            if matches!(state, State::Incorrect | State::Skipped | State::Complete) {
+                self.flash = Some((now, state == State::Complete));
             }
-            self.last_state = Some(engine.state());
+            self.last_state = Some(state);
         }
+    }
+    fn paint_squares(&self, ui: &Ui, engine: &Engine, rect: Rect, theme: BoardTheme, white: bool) {
+        let Some(position) = engine.position() else {
+            return;
+        };
+        let board = position.board();
+        let sq = rect.width() / 8.0;
         let c = theme.colors();
         let painter = ui.painter();
-        painter.rect_filled(allocation, 8, color(c.lip));
+        painter.rect_filled(
+            rect.expand2(Vec2::new(0.0, 3.0))
+                .translate(Vec2::new(0.0, 3.0)),
+            8,
+            color(c.lip),
+        );
         for square in Square::ALL {
             let r = square_rect(rect, square, white);
             let dark = (u32::from(square.file()) + u32::from(square.rank())).is_multiple_of(2);
@@ -179,6 +195,19 @@ impl BoardWidget {
                 }
             }
         }
+    }
+    fn paint_pieces(
+        &mut self,
+        ui: &Ui,
+        board: &Board,
+        rect: Rect,
+        rendering: PieceRendering,
+        white: bool,
+        response: &egui::Response,
+    ) {
+        let now = ui.input(|i| i.time);
+        let sq = rect.width() / 8.0;
+        let painter = ui.painter();
         let fraction = ((now - self.changed) / 0.14).clamp(0.0, 1.0) as f32;
         let dragging = response.dragged() && self.selected.is_some();
         for square in Square::ALL {
@@ -230,6 +259,9 @@ impl BoardWidget {
         if fraction < 1.0 {
             ui.ctx().request_repaint();
         }
+    }
+    fn paint_flash(&self, ui: &Ui, rect: Rect, now: f64) {
+        let painter = ui.painter();
         if let Some((then, correct)) = self.flash
             && now - then < 0.35
         {
@@ -254,6 +286,18 @@ impl BoardWidget {
             );
             ui.ctx().request_repaint();
         }
+    }
+    fn pointer_move(
+        &mut self,
+        ui: &Ui,
+        engine: &Engine,
+        rect: Rect,
+        white: bool,
+        response: &egui::Response,
+    ) -> Option<String> {
+        let position = engine.position()?;
+        let board = position.board();
+        let size = rect.width();
         let hit = |p: Pos2| hit_square([p.x, p.y], [rect.left(), rect.top()], size, white);
         let interactive = engine.state() == State::PlayerTurn && self.promotion.is_none();
         if interactive
@@ -293,6 +337,12 @@ impl BoardWidget {
                 self.selected = (board.color_at(to) == Some(position.turn())).then_some(to);
             }
         }
+        played
+    }
+    fn promotion_picker(&mut self, ui: &mut Ui, rect: Rect) -> Option<String> {
+        let painter = ui.painter().clone();
+        let size = rect.width();
+        let mut played = None;
         if self.promotion.is_some() {
             let overlay = Rect::from_center_size(rect.center(), Vec2::new(size.min(340.0), 90.0));
             painter.rect_filled(overlay, 12, ui.visuals().window_fill);

@@ -38,75 +38,16 @@ impl Woodpeck {
         });
         ui.add_space(6.0);
         if self.sets.is_empty() {
-            widgets::card(ui).show(ui,|ui|{ui.heading("Make your first set");ui.label("Start with 50–100 puzzles, a little below your peak. Your positions stay fixed as you work through each cycle.");if widgets::primary(ui,"Build a training set").clicked(){self.navigate(Screen::Builder);}});
+            widgets::card(ui).show(ui, |ui| {
+                ui.heading("Make your first set");
+                ui.label("Start with 50–100 puzzles, a little below your peak. Your positions stay fixed as you work through each cycle.");
+                if widgets::primary(ui, "Build a training set").clicked() {
+                    self.navigate(Screen::Builder);
+                }
+            });
         }
         for set in self.sets.clone() {
-            widgets::card(ui).show(ui, |ui| {
-                ui.set_width((ui.available_width() - 1.0).max(0.0));
-                ui.horizontal_wrapped(|ui| {
-                    widgets::chip(
-                        ui,
-                        if set.completed {
-                            "COMPLETED"
-                        } else {
-                            "IN PRACTICE"
-                        },
-                        accent,
-                    );
-                    widgets::caption(
-                        ui,
-                        format!(
-                            "{} PUZZLES · {}–{}",
-                            set.set.params.size,
-                            set.set.params.band().0,
-                            set.set.params.band().1
-                        ),
-                    );
-                });
-                ui.add_space(5.0);
-                ui.label(RichText::new(&set.set.params.name).size(23.0).strong());
-                ui.label(format!(
-                    "Cycle {} / {} · {} of {} positions",
-                    set.latest_cycle.as_ref().map_or(1, |c| c.number),
-                    set.set.params.target_cycles,
-                    set.stats.attempted(),
-                    set.set.params.size
-                ));
-                ui.add(
-                    egui::ProgressBar::new(
-                        set.stats.attempted() as f32 / set.set.params.size.max(1) as f32,
-                    )
-                    .desired_height(5.0),
-                );
-                ui.horizontal_wrapped(|ui| {
-                    ui.small(format!(
-                        "{:.0}% accuracy",
-                        set.stats.accuracy(set.set.params.size)
-                    ));
-                    ui.small(format!(
-                        "{} solving time",
-                        widgets::duration(set.stats.time_ms)
-                    ));
-                    if set.review_pending > 0 {
-                        widgets::chip(ui, format!("{} in Review", set.review_pending), accent);
-                    }
-                });
-                ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    if widgets::primary(ui, "Continue  >").clicked() {
-                        self.selected_set = Some(set.set.id);
-                        self.screen = Screen::Training;
-                        self.resume_selected();
-                    }
-                    if ui.button("Progress").clicked() {
-                        self.selected_set = Some(set.set.id);
-                        self.navigate(Screen::Progress);
-                    }
-                    if ui.small_button("Delete").clicked() {
-                        self.delete = Some(set.set.id);
-                    }
-                });
-            });
+            self.dashboard_set(ui, &set);
             ui.add_space(6.0);
         }
         ui.add_space(16.0);
@@ -123,5 +64,74 @@ impl Woodpeck {
         ui.separator();
         ui.small("Puzzles from the Lichess puzzle database (CC0)");
         ui.small("Your practice stays on this device.");
+    }
+    fn dashboard_set(&mut self, ui: &mut Ui, set: &crate::service::SetSummary) {
+        let accent = style::color(self.palette.semantic().accent);
+        widgets::card(ui).show(ui, |ui| {
+            ui.set_width((ui.available_width() - 1.0).max(0.0));
+            ui.horizontal_wrapped(|ui| {
+                widgets::chip(
+                    ui,
+                    if set.completed {
+                        "COMPLETED"
+                    } else {
+                        "IN PRACTICE"
+                    },
+                    accent,
+                );
+                widgets::caption(
+                    ui,
+                    format!(
+                        "{} PUZZLES · {}–{}",
+                        set.set.params.size,
+                        set.set.params.band().0,
+                        set.set.params.band().1
+                    ),
+                );
+            });
+            ui.add_space(5.0);
+            ui.label(RichText::new(&set.set.params.name).size(23.0).strong());
+            ui.label(format!(
+                "Cycle {} / {} · {} of {} positions",
+                set.latest_cycle.as_ref().map_or(1, |c| c.number),
+                set.set.params.target_cycles,
+                set.stats.attempted(),
+                set.set.params.size
+            ));
+            ui.add(
+                egui::ProgressBar::new(
+                    set.stats.attempted() as f32 / set.set.params.size.max(1) as f32,
+                )
+                .desired_height(5.0),
+            );
+            ui.horizontal_wrapped(|ui| {
+                ui.small(format!(
+                    "{:.0}% accuracy",
+                    set.stats.accuracy(set.set.params.size)
+                ));
+                ui.small(format!(
+                    "{} solving time",
+                    widgets::duration(set.stats.time_ms)
+                ));
+                if set.review_pending > 0 {
+                    widgets::chip(ui, format!("{} in Review", set.review_pending), accent);
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                if widgets::primary(ui, "Continue  >").clicked() {
+                    self.selected_set = Some(set.set.id);
+                    self.screen = Screen::Training;
+                    self.resume_selected();
+                }
+                if ui.button("Progress").clicked() {
+                    self.selected_set = Some(set.set.id);
+                    self.navigate(Screen::Progress);
+                }
+                if ui.small_button("Delete").clicked() {
+                    self.delete = Some(set.set.id);
+                }
+            });
+        });
     }
 }

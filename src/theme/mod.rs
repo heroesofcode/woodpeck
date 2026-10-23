@@ -33,7 +33,7 @@ impl BoardTheme {
         }
     }
 }
-/// Values consumed by the later egui adapter, with safe defaults for incomplete themes.
+/// Values consumed by the egui adapter, with safe defaults for incomplete themes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SemanticColors {
     pub background: Rgb,

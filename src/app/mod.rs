@@ -48,13 +48,13 @@ impl Screen {
             _ => None,
         }
     }
-    const ALL: [(Self, &'static str, &'static str); 6] = [
-        (Self::Dashboard, "◈", "Dashboard"),
-        (Self::Training, "▷", "Train"),
-        (Self::Review, "◎", "Review"),
-        (Self::Progress, "▥", "Progress"),
-        (Self::Builder, "+", "New set"),
-        (Self::Settings, "⚙", "Settings"),
+    const ALL: [(Self, &'static str); 6] = [
+        (Self::Dashboard, "Dashboard"),
+        (Self::Training, "Train"),
+        (Self::Review, "Review"),
+        (Self::Progress, "Progress"),
+        (Self::Builder, "New set"),
+        (Self::Settings, "Settings"),
     ];
 }
 #[derive(Clone, Debug)]

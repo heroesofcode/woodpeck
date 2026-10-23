@@ -96,101 +96,10 @@ impl Woodpeck {
             ui.separator();
             self.review_filters(ui);
             ui.add_space(4.0);
-            if let Some((card, then)) = &self.clearing_card {
-                let fraction =
-                    (self.now().saturating_sub(*then).as_secs_f32() / 0.45).clamp(0.0, 1.0);
-                if fraction < 1.0 {
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), 80.0 * (1.0 - fraction)),
-                        egui::Sense::hover(),
-                    );
-                    let painter = ui.painter().with_clip_rect(rect);
-                    let color = style::color(self.palette.semantic().correct)
-                        .gamma_multiply(1.0 - fraction);
-                    painter.rect_stroke(
-                        rect,
-                        10,
-                        egui::Stroke::new(1.0, color),
-                        egui::StrokeKind::Inside,
-                    );
-                    painter.text(
-                        rect.min + egui::vec2(12.0, 16.0),
-                        egui::Align2::LEFT_TOP,
-                        &card.set_name,
-                        egui::FontId::proportional(14.0),
-                        color,
-                    );
-                    painter.text(
-                        rect.min + egui::vec2(12.0, 42.0),
-                        egui::Align2::LEFT_TOP,
-                        "Cleared from Review",
-                        egui::FontId::proportional(12.0),
-                        color,
-                    );
-                    ui.ctx().request_repaint();
-                }
-            }
+            self.clearing_review(ui);
             let mut chosen = None;
             for card in self.reviews.clone() {
-                let selected = self
-                    .session
-                    .as_ref()
-                    .is_some_and(|s| s.set_id == card.item.set_id && s.puzzle.id == card.puzzle.id);
-                let accent = style::color(self.palette.semantic().accent);
-                let response = widgets::card(ui)
-                    .inner_margin(14)
-                    .stroke(egui::Stroke::new(
-                        if selected { 1.5 } else { 1.0 },
-                        if selected {
-                            accent
-                        } else {
-                            ui.visuals().widgets.noninteractive.bg_stroke.color
-                        },
-                    ))
-                    .show(ui, |ui| {
-                        ui.set_width((ui.available_width() - 1.0).max(0.0));
-                        ui.label(RichText::new(&card.set_name).strong().size(15.0));
-                        ui.small(format!(
-                            "Position {} · {}",
-                            card.position,
-                            widgets::relative_time(
-                                chrono::Local::now().timestamp(),
-                                card.item.last_missed_at
-                            )
-                        ));
-                        ui.horizontal_wrapped(|ui| {
-                            widgets::chip(
-                                ui,
-                                card.puzzle.rating.to_string(),
-                                style::color(self.palette.semantic().warning),
-                            );
-                            let (chips, overflow) = widgets::chip_overflow(&card.puzzle.themes, 2);
-                            for t in chips {
-                                widgets::chip(ui, crate::sets::theme_label(t), accent);
-                            }
-                            if overflow > 0 {
-                                widgets::chip(
-                                    ui,
-                                    format!("+{overflow}"),
-                                    ui.visuals().weak_text_color(),
-                                );
-                            }
-                        });
-                        widgets::caption(
-                            ui,
-                            format!(
-                                "ACCURACY   {:.0}% · {}/{}",
-                                card.accuracy.percent(),
-                                card.accuracy.correct,
-                                card.accuracy.attempts
-                            ),
-                        );
-                        ui.add(
-                            egui::ProgressBar::new(card.accuracy.percent() as f32 / 100.0)
-                                .desired_height(4.0),
-                        );
-                    })
-                    .response;
+                let response = self.review_card(ui, &card);
                 if ui
                     .interact(
                         response.rect,
@@ -212,5 +121,97 @@ impl Woodpeck {
                 );
             }
         });
+    }
+    fn clearing_review(&self, ui: &mut Ui) {
+        if let Some((card, then)) = &self.clearing_card {
+            let fraction = (self.now().saturating_sub(*then).as_secs_f32() / 0.45).clamp(0.0, 1.0);
+            if fraction < 1.0 {
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 80.0 * (1.0 - fraction)),
+                    egui::Sense::hover(),
+                );
+                let painter = ui.painter().with_clip_rect(rect);
+                let color =
+                    style::color(self.palette.semantic().correct).gamma_multiply(1.0 - fraction);
+                painter.rect_stroke(
+                    rect,
+                    10,
+                    egui::Stroke::new(1.0, color),
+                    egui::StrokeKind::Inside,
+                );
+                painter.text(
+                    rect.min + egui::vec2(12.0, 16.0),
+                    egui::Align2::LEFT_TOP,
+                    &card.set_name,
+                    egui::FontId::proportional(14.0),
+                    color,
+                );
+                painter.text(
+                    rect.min + egui::vec2(12.0, 42.0),
+                    egui::Align2::LEFT_TOP,
+                    "Cleared from Review",
+                    egui::FontId::proportional(12.0),
+                    color,
+                );
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+    fn review_card(&self, ui: &mut Ui, card: &crate::review::ReviewCard) -> egui::Response {
+        let selected = self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.set_id == card.item.set_id && s.puzzle.id == card.puzzle.id);
+        let accent = style::color(self.palette.semantic().accent);
+        widgets::card(ui)
+            .inner_margin(14)
+            .stroke(egui::Stroke::new(
+                if selected { 1.5 } else { 1.0 },
+                if selected {
+                    accent
+                } else {
+                    ui.visuals().widgets.noninteractive.bg_stroke.color
+                },
+            ))
+            .show(ui, |ui| {
+                ui.set_width((ui.available_width() - 1.0).max(0.0));
+                ui.label(RichText::new(&card.set_name).strong().size(15.0));
+                ui.small(format!(
+                    "Position {} · {}",
+                    card.position,
+                    widgets::relative_time(
+                        chrono::Local::now().timestamp(),
+                        card.item.last_missed_at
+                    )
+                ));
+                ui.horizontal_wrapped(|ui| {
+                    widgets::chip(
+                        ui,
+                        card.puzzle.rating.to_string(),
+                        style::color(self.palette.semantic().warning),
+                    );
+                    let (chips, overflow) = widgets::chip_overflow(&card.puzzle.themes, 2);
+                    for t in chips {
+                        widgets::chip(ui, crate::sets::theme_label(t), accent);
+                    }
+                    if overflow > 0 {
+                        widgets::chip(ui, format!("+{overflow}"), ui.visuals().weak_text_color());
+                    }
+                });
+                widgets::caption(
+                    ui,
+                    format!(
+                        "ACCURACY   {:.0}% · {}/{}",
+                        card.accuracy.percent(),
+                        card.accuracy.correct,
+                        card.accuracy.attempts
+                    ),
+                );
+                ui.add(
+                    egui::ProgressBar::new(card.accuracy.percent() as f32 / 100.0)
+                        .desired_height(4.0),
+                );
+            })
+            .response
     }
 }

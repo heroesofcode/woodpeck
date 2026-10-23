@@ -155,50 +155,13 @@ impl Woodpeck {
                     ui.strong(format!("{:.0}%", set.stats.accuracy(set.set.params.size)));
                 });
             });
-            self.segments(ui, set.stats, set.set.params.size);
+            self.segments(ui, set.set.params.size);
             ui.add_space(7.0);
             self.timer_row(ui, color, false);
             ui.add_space(7.0);
             ui.separator();
             ui.add_space(10.0);
-            widgets::caption(ui, "THIS CYCLE");
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new(format!("{:.0}%", set.stats.accuracy(set.set.params.size)))
-                            .size(26.0)
-                            .strong(),
-                    );
-                    widgets::caption(ui, "ACCURACY");
-                });
-                ui.add_space(18.0);
-                ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new(widgets::duration(
-                            set.stats.average_ms(set.set.params.size) as u64
-                        ))
-                        .size(26.0)
-                        .strong(),
-                    );
-                    widgets::caption(ui, "AVG / PUZZLE");
-                });
-            });
-            ui.horizontal_wrapped(|ui| {
-                widgets::chip(
-                    ui,
-                    format!("{} correct", set.stats.correct),
-                    style::color(self.palette.semantic().correct),
-                );
-                widgets::chip(
-                    ui,
-                    format!("{} missed", set.stats.incorrect),
-                    style::color(self.palette.semantic().incorrect),
-                );
-                ui.small(format!("{} skipped", set.stats.skipped));
-            });
-            ui.add_space(7.0);
-            ui.separator();
-            ui.add_space(10.0);
+            self.training_stats(ui, &set);
             widgets::caption(ui, "THIS PUZZLE");
             ui.horizontal(|ui| {
                 widgets::chip(
@@ -287,7 +250,7 @@ impl Woodpeck {
                 });
             });
     }
-    fn segments(&self, ui: &mut Ui, _stats: crate::stats::CycleStats, total: u32) {
+    fn segments(&self, ui: &mut Ui, total: u32) {
         let (r, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 7.0), egui::Sense::hover());
         let gap = if total < 60 { 2.0 } else { 0.5 };
@@ -391,36 +354,7 @@ impl Woodpeck {
                 }
             }
         }
-        if is_review
-            && self.session.as_ref().is_some_and(|s| {
-                matches!(
-                    s.engine.outcome(),
-                    Some(Outcome::Incorrect | Outcome::Skipped)
-                )
-            })
-        {
-            ui.colored_label(
-                style::color(self.palette.semantic().warning),
-                "Still pending",
-            );
-        }
-        if !is_review
-            && self
-                .session
-                .as_ref()
-                .is_some_and(|s| s.engine.outcome().is_some_and(Outcome::is_miss))
-        {
-            ui.colored_label(
-                style::color(self.palette.semantic().accent),
-                "Added to Review",
-            );
-        }
-        ui.add_space(6.0);
-        if ui.link("Open on Lichess").clicked() {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(format!(
-                "https://lichess.org/training/{puzzle_id}"
-            )));
-        }
+        self.solve_membership_note(ui, is_review, &puzzle_id);
     }
     fn cycle_complete(&mut self, ui: &mut Ui) {
         let Some(set) = self
@@ -472,31 +406,7 @@ impl Woodpeck {
                     widgets::duration(set.stats.average_ms(set.set.params.size) as u64),
                     "per puzzle",
                 );
-                if let Ok(p) = self.service.progress(set.set.id) {
-                    for (label, baseline) in [
-                        ("vs cycle 1", p.cycles.first()),
-                        ("vs previous", p.cycles.iter().rev().nth(1)),
-                    ] {
-                        if let Some(base) = baseline {
-                            let d = compare(set.stats, base.stats, set.set.params.size);
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(label);
-                                if let Some(t) = d.time_reduction_percent {
-                                    widgets::chip(
-                                        ui,
-                                        widgets::delta_time(t),
-                                        style::color(self.palette.semantic().accent),
-                                    );
-                                }
-                                widgets::chip(
-                                    ui,
-                                    widgets::delta_points(d.accuracy_points),
-                                    style::color(self.palette.semantic().accent),
-                                );
-                            });
-                        }
-                    }
-                }
+                self.cycle_comparisons(ui, &set);
                 ui.label(format!("{} puzzles waiting in Review", self.pending));
                 if !set.completed {
                     if widgets::primary(ui, "Start next cycle").clicked() {
@@ -526,5 +436,104 @@ impl Woodpeck {
                 }
             });
         });
+    }
+    fn training_stats(&self, ui: &mut Ui, set: &crate::service::SetSummary) {
+        widgets::caption(ui, "THIS CYCLE");
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(
+                    RichText::new(format!("{:.0}%", set.stats.accuracy(set.set.params.size)))
+                        .size(26.0)
+                        .strong(),
+                );
+                widgets::caption(ui, "ACCURACY");
+            });
+            ui.add_space(18.0);
+            ui.vertical(|ui| {
+                ui.label(
+                    RichText::new(widgets::duration(
+                        set.stats.average_ms(set.set.params.size) as u64
+                    ))
+                    .size(26.0)
+                    .strong(),
+                );
+                widgets::caption(ui, "AVG / PUZZLE");
+            });
+        });
+        ui.horizontal_wrapped(|ui| {
+            widgets::chip(
+                ui,
+                format!("{} correct", set.stats.correct),
+                style::color(self.palette.semantic().correct),
+            );
+            widgets::chip(
+                ui,
+                format!("{} missed", set.stats.incorrect),
+                style::color(self.palette.semantic().incorrect),
+            );
+            ui.small(format!("{} skipped", set.stats.skipped));
+        });
+        ui.add_space(7.0);
+        ui.separator();
+        ui.add_space(10.0);
+    }
+    fn solve_membership_note(&self, ui: &mut Ui, is_review: bool, puzzle_id: &str) {
+        if is_review
+            && self.session.as_ref().is_some_and(|s| {
+                matches!(
+                    s.engine.outcome(),
+                    Some(Outcome::Incorrect | Outcome::Skipped)
+                )
+            })
+        {
+            ui.colored_label(
+                style::color(self.palette.semantic().warning),
+                "Still pending",
+            );
+        }
+        if !is_review
+            && self
+                .session
+                .as_ref()
+                .is_some_and(|s| s.engine.outcome().is_some_and(Outcome::is_miss))
+        {
+            ui.colored_label(
+                style::color(self.palette.semantic().accent),
+                "Added to Review",
+            );
+        }
+        ui.add_space(6.0);
+        if ui.link("Open on Lichess").clicked() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(format!(
+                "https://lichess.org/training/{puzzle_id}"
+            )));
+        }
+    }
+    fn cycle_comparisons(&self, ui: &mut Ui, set: &crate::service::SetSummary) {
+        if let Ok(p) = self.service.progress(set.set.id) {
+            for (label, baseline) in [
+                ("vs cycle 1", p.cycles.first()),
+                ("vs previous", p.cycles.iter().rev().nth(1)),
+            ] {
+                if let Some(base) = baseline {
+                    let d = compare(set.stats, base.stats, set.set.params.size);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(label);
+                        if let Some(t) = d.time_reduction_percent {
+                            widgets::chip(
+                                ui,
+                                widgets::delta_time(t),
+                                style::color(self.palette.semantic().accent),
+                            );
+                        }
+                        widgets::chip(
+                            ui,
+                            widgets::delta_points(d.accuracy_points),
+                            style::color(self.palette.semantic().accent),
+                        );
+                    });
+                }
+            }
+        }
     }
 }
