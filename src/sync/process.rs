@@ -75,3 +75,23 @@ pub fn run(program: &str, args: &[&str], cwd: &Path, deadline: Instant) -> Resul
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn child_timeout_is_bounded_and_pipes_do_not_block_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = Instant::now();
+        assert!(matches!(
+            run(
+                "sh",
+                &["-c", "while :; do printf x; done"],
+                dir.path(),
+                start + Duration::from_millis(100)
+            ),
+            Err(SyncError::Offline)
+        ));
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+}
