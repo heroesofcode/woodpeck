@@ -82,7 +82,7 @@ fn every_screen_keeps_content_within_tiled_widths() {
         (1920.0, 1080.0),
     ] {
         let layout = layout::calculate(width, height);
-        for (screen, _, _) in Screen::ALL {
+        for (screen, _) in Screen::ALL {
             app.navigate(screen);
             for _ in 0..2 {
                 let output = ctx.run_ui(

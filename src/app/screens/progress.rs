@@ -1,4 +1,5 @@
 use super::super::{Screen, Woodpeck, charts, style, widgets};
+use crate::service::SetProgress;
 use eframe::egui::{self, RichText, Ui};
 impl Woodpeck {
     pub(in crate::app) fn set_selector(&mut self, ui: &mut Ui, id: &str) {
@@ -39,6 +40,17 @@ impl Woodpeck {
                 return;
             }
         };
+        let total = self
+            .sets
+            .iter()
+            .find(|s| s.set.id == id)
+            .map_or(0, |s| s.set.params.size);
+        self.progress_comparison(ui, &p);
+        Self::progress_tiles(ui, &p, total);
+        self.progress_charts(ui, &p, total);
+        self.progress_details(ui, &p);
+    }
+    fn progress_comparison(&self, ui: &mut Ui, p: &SetProgress) {
         let accent = style::color(self.palette.semantic().accent);
         widgets::card(ui).show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.0).max(0.0));
@@ -106,13 +118,10 @@ impl Woodpeck {
                 ui.label("Finish your first cycle to establish a baseline.");
             }
         });
+    }
+    fn progress_tiles(ui: &mut Ui, p: &SetProgress, total: u32) {
         ui.add_space(10.0);
         let latest = p.cycles.last();
-        let total = self
-            .sets
-            .iter()
-            .find(|s| s.set.id == id)
-            .map_or(0, |s| s.set.params.size);
         let detail = latest.map_or_else(String::new, |c| {
             format!("{} of {} in cycle {}", c.stats.attempted(), total, c.number)
         });
@@ -154,6 +163,9 @@ impl Woodpeck {
                 }
             });
         }
+    }
+    fn progress_charts(&self, ui: &mut Ui, p: &SetProgress, total: u32) {
+        let accent = style::color(self.palette.semantic().accent);
         ui.add_space(15.0);
         ui.heading("Cycle performance");
         ui.label("Solve time and accuracy for each cycle. Hollow marks show a cycle in progress.");
@@ -190,6 +202,9 @@ impl Woodpeck {
                 });
             }
         }
+    }
+    fn progress_details(&self, ui: &mut Ui, p: &SetProgress) {
+        let accent = style::color(self.palette.semantic().accent);
         ui.add_space(12.0);
         widgets::card(ui).show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.0).max(0.0));

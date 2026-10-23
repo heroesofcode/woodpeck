@@ -5,12 +5,8 @@
 #![allow(clippy::cast_precision_loss)]
 // Independent persisted switches and timer pause gates are intentionally separate booleans.
 #![allow(clippy::struct_excessive_bools)]
-// UI geometry is bounded before pixel conversion; declarative egui trees keep each card together.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::too_many_lines
-)]
+// UI geometry is bounded before pixel conversion.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub mod app;
 pub mod cli;
 pub mod layout;
