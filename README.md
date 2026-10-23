@@ -4,22 +4,48 @@ A local Woodpecker Method chess puzzle trainer, written in Rust. Build a fixed
 set, repeat it across cycles, and solve misses in a separate review queue.
 Puzzles from the Lichess puzzle database (CC0).
 
-Milestone 1 implements the core library. The executable intentionally opens no
-window. Rust 1.97 or newer is required; the crate uses edition 2024. Native
-`eframe` dependencies already include Glow, Wayland, X11, and default fonts.
+Milestone 2 implements the core library, puzzle sourcing, and application service.
+The executable imports puzzles and initializes offline data; the desktop window
+arrives in the next milestone. Rust 1.97 or newer is required (edition 2024).
+Native `eframe` dependencies include Glow, Wayland, X11, and default fonts.
+
+```sh
+cargo run -- --help
+cargo run -- --version
+cargo run                         # install/update the embedded starter pack
+cargo run -- import puzzles.csv.zst
+cargo run -- import https://example.org/puzzles.csv.zst
+cargo run -- import --lichess      # stream the full Lichess database
+```
+
+Imports accept plain CSV or zstd, including the skippable frame prefix in the
+full Lichess dump. Columns are read by name; the current 11-column format,
+10-column format, reordered headers, and omitted trailing fields are supported.
+Quality filtering requires popularity ≥80, rating deviation ≤100, ≥500 plays,
+and no `veryLong` tag. Invalid chess lines are rejected. Imports commit batches
+of 1,000 accepted rows; cancellation retains committed batches and drops the
+unfinished batch. Progress includes compressed bytes consumed and rows scanned,
+accepted, and rejected. The full dump is downloaded as a stream, never buffered
+in memory. The embedded CC0 starter pack contains 8,540 puzzles; its version
+marker advances only after success, and force import restores its source rows.
 
 Run the quality checks with:
 
 ```sh
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+cargo clippy --all-targets --no-default-features -- -D warnings
+cargo test --all-features
+cargo test --no-default-features
 ```
 
-There are 92 unit tests, with no network-dependent tests. `unsafe` is forbidden;
+Tests run offline using fixtures and loopback HTTP servers. `unsafe` is forbidden;
 Clippy pedantic is enabled in Cargo.toml. SQLite is bundled and HTTPS uses rustls.
-If the environment makes the default Cargo cache read-only, prefix Cargo commands
-with `CARGO_HOME=/tmp/woodpeck-cargo`.
+The default `sound` feature uses rodio's playback support. Linux sound builds
+require ALSA development files and pkg-config (Debian: `libasound2-dev pkgconf`).
+Use `--no-default-features` to omit audio entirely. Device discovery and the
+short generated sine chime run on a separate thread; unavailable devices are
+ignored. Tests validate the generated samples without opening an audio device.
 
 The library modules are:
 
@@ -40,13 +66,17 @@ The library modules are:
 - `settings`: serialized preferences with defaults for missing keys.
 - `store`: versioned SQLite migrations and repositories for source puzzles,
   immutable set snapshots, cycles, attempts, review, and settings.
-- `source`: streaming quality-filtered CSV/zstd input, fixture-tested Lichess batch
-  reconstruction, attribution, links, and SAN PGN export.
+- `source`: streaming CSV/zstd import, versioned embedded starter pack, Lichess
+  batch/daily/by-id client, PGN reconstruction, attribution, links, and PGN export.
+- `service`: UI-independent application operations plus a serial background
+  worker with cancellation handles and polled channel events.
+- `motivation`: local calendar-day streaks, XP, levels, and ranks.
+- `sound`: optional generated completion chime.
 - `app`: reserved for the desktop UI milestone.
 
 Record outcomes through `Store::record_attempt`. The attempt, review transition,
-and cycle completion are committed in one transaction. Wrong and skipped cycle
-answers immediately enqueue a review item. Correct cycle answers leave pending
+cycle completion, and streak/XP changes are committed in one transaction. Wrong
+and skipped cycle answers immediately enqueue a review item. Correct cycle answers leave pending
 review items alone; only a correct Review attempt clears them. Review attempts
 update lifetime accuracy and never cycle statistics. Duplicate cycle attempts,
 out-of-order answers, cross-set cycle references, and reviews of nonpending
@@ -67,21 +97,37 @@ SQLite. Theme discovery prefers `$HOME/.local/state/omarchy/current/theme` over
 the legacy `.config` location. `ThemePoller` re-discovers the directory every two
 seconds and should be called by a worker in the desktop shell.
 
-Later milestones add the application window and stable app ID, screens and board
-interaction, pieces and animation rendering, theme-to-egui wiring, background
-import/download jobs with cancellation and rate-limit handling, CLI import,
-starter-pack installation, sound, and packaging. The desktop entry is already in
-`assets/woodpeck.desktop`. No starter pack or piece artwork is bundled yet.
+`AppService::open` (or `new` with an existing `Store`) starts a serial worker
+and automatically queues the starter import. Call `poll_events` each frame to
+receive job start, import/fetch progress, and completion/error events. `submit`
+returns a cancellation handle; `cancel_job` also accepts the startup event ID.
+Dropping the service cancels pending jobs. Database locks cover only bounded
+writes and local operations; downloads and rate-limit waits never hold them.
 
-This milestone's execution environment makes this checkout's `.git` read-only.
-Focused Conventional Commits are preserved in `milestone-1.bundle`, made from a
-writable temporary history copy. The working files here match that history.
-When `.git` becomes writable, attach the history while retaining these files:
+The service exposes set summaries, builder creation results with shortfall and
+widening information, start/resume/current puzzle, next/extended cycles,
+attempt recording, review filtering/sorting/counts, progress reports, settings,
+motivation, PGN export to a path, and transactional set deletion. Source updates
+and deletion never change other sets' snapshots or erase earned XP.
 
-```sh
-git fetch ./milestone-1.bundle feat/woodpeck-app
-git reset --mixed FETCH_HEAD
-```
+Set generation first uses the local database. When it reports a shortfall, the
+UI can inform the user and enqueue `CreateSetWithFallback`. The worker fetches
+at most five batches, filters by the requested band/theme, inserts valid rows,
+and regenerates using the same selection rules. Remaining shortfalls never
+save a partial set. Anonymous API difficulty is mapped relative to rating 1500;
+requests are sequential across clients, use `woodpeck/<version>`, have connect,
+response, and read timeouts, and wait 60 seconds after HTTP 429. Cancellation
+interrupts the wait; an in-flight blocking read is bounded by its timeout.
+`PuzzleFetcher` is injectable for offline application tests.
+
+Streaks use local calendar dates and are updated once per active day. Use
+`Motivation::streak_on` with today's local day to display an expired streak as
+zero. Correct cycle/review solves earn 10 XP; finishing a cycle earns 50 XP.
+Level L starts at `100 × (L − 1)²` XP, with the ranks from the functional spec.
+
+Later milestones add the native window and stable app ID, screens and board
+interaction, piece artwork and animations, theme-to-egui wiring, and packaging.
+The desktop entry is already in `assets/woodpeck.desktop`.
 
 License: GPL-3.0-or-later, compatible with shakmaty and pgn-reader. Puzzle data is
 CC0. Omarchy palette examples and the resolver fixture were supplied with the
