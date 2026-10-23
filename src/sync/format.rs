@@ -9,7 +9,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 2: set `focus_theme` became `include_themes`, `exclude_themes` and `theme_match`.
-pub const SCHEMA_VERSION: u32 = 2;
+/// 3: set `target_rating`, `variance` and `restrict_recommended` became `rating_min`/`rating_max`.
+pub const SCHEMA_VERSION: u32 = 3;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     pub app: String,
@@ -115,6 +116,38 @@ fn upgrade_v1_set(set: &mut Set) {
             .or_insert(Field { value, updated_at });
     }
 }
+/// Rewrites a schema 2 set's `target_rating ± variance` band into the schema 3 inclusive range
+/// using [`crate::sets::legacy_range`], exactly like the `SQLite` migration. Both range fields take
+/// the later legacy clock. Malformed legacy values are left in place for validation to reject.
+fn upgrade_v2_set(set: &mut Set) {
+    let number = |key: &str| {
+        set.fields
+            .get(key)
+            .and_then(|f| f.value.as_u64())
+            .and_then(|v| u16::try_from(v).ok())
+    };
+    let (Some(target), Some(variance)) = (number("target_rating"), number("variance")) else {
+        return;
+    };
+    let updated_at = ["target_rating", "variance"]
+        .iter()
+        .filter_map(|key| set.fields.get(*key).map(|f| f.updated_at))
+        .max()
+        .unwrap_or(set.created_at.saturating_mul(1000));
+    for key in ["target_rating", "variance", "restrict_recommended"] {
+        set.fields.remove(key);
+    }
+    let (min, max) = crate::sets::legacy_range(target, variance);
+    for (key, value) in [("rating_min", min), ("rating_max", max)] {
+        set.fields.insert(
+            key.into(),
+            Field {
+                value: Value::from(value),
+                updated_at,
+            },
+        );
+    }
+}
 impl State {
     pub fn validate(&self) -> Result<()> {
         if self.manifest.schema_version > SCHEMA_VERSION {
@@ -145,11 +178,8 @@ impl State {
             if set.fields.keys().any(|key| known_fields.get(key).is_none()) {
                 return Err(SyncError::Invalid("Unknown set field.".into()));
             }
-            // Recommendation bounds are machine preferences; validate absolute bounds instead.
-            let mut absolute = params.clone();
-            absolute.restrict_recommended = false;
-            absolute
-                .validate(1200)
+            params
+                .validate()
                 .map_err(|e| SyncError::Invalid(e.to_string()))?;
             let ids: BTreeSet<_> = set.puzzles.iter().map(|p| p.id.clone()).collect();
             if ids.len() != set.puzzles.len() || ids.len() != params.size as usize {
@@ -236,8 +266,9 @@ impl State {
         if manifest.schema_version > SCHEMA_VERSION {
             return Err(SyncError::NewerSchema(manifest.schema_version));
         }
-        let legacy = manifest.schema_version == 1;
-        if legacy {
+        let from_version = manifest.schema_version;
+        if from_version >= 1 {
+            // Older snapshots are upgraded in memory; the next push writes the current schema.
             manifest.schema_version = SCHEMA_VERSION;
         }
         let mut state = Self {
@@ -252,8 +283,11 @@ impl State {
                 .and_then(|p| p.strip_suffix(".json"))
             {
                 let mut set: Set = serde_json::from_str(contents)?;
-                if legacy {
+                if from_version < 2 {
                     upgrade_v1_set(&mut set);
+                }
+                if from_version < 3 {
+                    upgrade_v2_set(&mut set);
                 }
                 state.sets.insert(uid.into(), set);
             } else if let Some(uid) = path
@@ -299,89 +333,147 @@ mod tests {
         }
         assert!(valid_uid("0123456789abcdef0123456789abcdef"));
     }
-    #[test]
-    fn upgrades_schema_one_focus_theme_and_rejects_unknown_fields() {
-        let uid = "b".repeat(32);
-        let puzzles: Vec<Puzzle> = (0..20)
-            .map(|i| {
-                let mut p = crate::puzzle::fixture();
-                p.id = format!("p{i:02}");
-                p
-            })
-            .collect();
-        let mut fields: BTreeMap<String, Field> =
-            serde_json::from_value::<BTreeMap<String, Value>>(
-                serde_json::to_value(crate::sets::BuilderParams {
-                    size: 20,
-                    ..Default::default()
-                })
-                .unwrap(),
-            )
+    /// A set exactly as an older release wrote it: schema 1 has `focus_theme`, schema 2 has
+    /// the theme lists; both still carry `target_rating ± variance`.
+    fn legacy_set(uid: &str, version: u32) -> Set {
+        let mut value = serde_json::json!({
+            "name": "Legacy", "target_rating": 1137, "variance": 75, "size": 20,
+            "target_cycles": 5, "restrict_recommended": true, "preset_id": "general",
+            "shuffle_each_cycle": false,
+        });
+        let extra = if version == 1 {
+            serde_json::json!({"focus_theme": "fork"})
+        } else {
+            serde_json::json!({"include_themes": ["fork"], "exclude_themes": ["mate"], "theme_match": "any"})
+        };
+        value
+            .as_object_mut()
             .unwrap()
-            .into_iter()
-            .filter(|(k, _)| {
-                !["include_themes", "exclude_themes", "theme_match"].contains(&k.as_str())
-            })
-            .map(|(k, value)| {
-                (
-                    k,
-                    Field {
-                        value,
-                        updated_at: 5,
-                    },
-                )
-            })
-            .collect();
-        fields.insert(
-            "focus_theme".into(),
-            Field {
-                value: Value::String("fork".into()),
-                updated_at: 9,
-            },
-        );
-        let set = Set {
-            uid: uid.clone(),
-            fields,
+            .extend(extra.as_object().unwrap().clone());
+        let clock = |key: &str| match key {
+            "focus_theme" => 9,
+            "target_rating" => 6,
+            "variance" => 8,
+            _ => 5,
+        };
+        Set {
+            uid: uid.into(),
+            fields: serde_json::from_value::<BTreeMap<String, Value>>(value)
+                .unwrap()
+                .into_iter()
+                .map(|(k, value)| {
+                    let updated_at = clock(&k);
+                    (k, Field { value, updated_at })
+                })
+                .collect(),
             created_at: 1,
             seed: 7,
-            puzzles,
+            puzzles: (0..20)
+                .map(|i| {
+                    let mut p = crate::puzzle::fixture();
+                    p.id = format!("p{i:02}");
+                    p
+                })
+                .collect(),
             cycles: BTreeMap::new(),
-        };
+        }
+    }
+    fn legacy_files(uid: &str, version: u32) -> BTreeMap<String, String> {
         let mut files = State::default().files().unwrap();
         files.insert(
             "manifest.json".into(),
-            "{\"app\":\"woodpeck\",\"schema_version\":1}".into(),
+            format!("{{\"app\":\"woodpeck\",\"schema_version\":{version}}}"),
         );
-        files.insert(format!("sets/{uid}.json"), pretty(&set).unwrap());
-        let state = State::from_files(&files).unwrap();
-        assert_eq!(state.manifest, Manifest::default());
-        let upgraded = &state.sets[&uid].fields;
-        assert!(!upgraded.contains_key("focus_theme"));
-        assert_eq!(
-            upgraded["include_themes"].value,
-            serde_json::json!(["fork"])
+        files.insert(
+            format!("sets/{uid}.json"),
+            pretty(&legacy_set(uid, version)).unwrap(),
         );
-        assert_eq!(upgraded["include_themes"].updated_at, 9);
-        assert_eq!(upgraded["exclude_themes"].value, serde_json::json!([]));
-        assert_eq!(upgraded["theme_match"].value, serde_json::json!("any"));
-        // The upgraded snapshot is written back as schema 2 and round-trips unchanged.
-        let rewritten = state.files().unwrap();
-        assert!(rewritten["manifest.json"].contains("\"schema_version\": 2"));
-        assert_eq!(
-            State::from_files(&rewritten).unwrap().files().unwrap(),
-            rewritten
-        );
-        // A schema 2 file must not carry the legacy field.
-        let mut legacy_files = rewritten.clone();
-        legacy_files.insert(format!("sets/{uid}.json"), pretty(&set).unwrap());
-        assert!(State::from_files(&legacy_files).is_err());
-        // A null legacy focus upgrades to an empty include list.
-        let mut null_focus = set.clone();
+        files
+    }
+    #[test]
+    fn upgrades_schema_one_and_two_sets_to_rating_ranges() {
+        let uid = "b".repeat(32);
+        for version in [1, 2] {
+            let state = State::from_files(&legacy_files(&uid, version)).unwrap();
+            assert_eq!(state.manifest, Manifest::default());
+            let upgraded = &state.sets[&uid].fields;
+            for gone in [
+                "focus_theme",
+                "target_rating",
+                "variance",
+                "restrict_recommended",
+            ] {
+                assert!(!upgraded.contains_key(gone), "{gone}");
+            }
+            // 1137 ± 75, the same rule the SQLite migration applies; the later legacy clock wins.
+            assert_eq!(upgraded["rating_min"].value, serde_json::json!(1062));
+            assert_eq!(upgraded["rating_max"].value, serde_json::json!(1212));
+            assert_eq!(upgraded["rating_min"].updated_at, 8);
+            assert_eq!(upgraded["rating_max"].updated_at, 8);
+            assert_eq!(
+                upgraded["include_themes"].value,
+                serde_json::json!(["fork"])
+            );
+            let expected_exclude = if version == 1 {
+                serde_json::json!([])
+            } else {
+                serde_json::json!(["mate"])
+            };
+            assert_eq!(upgraded["exclude_themes"].value, expected_exclude);
+            if version == 1 {
+                assert_eq!(upgraded["include_themes"].updated_at, 9);
+            }
+            // The upgraded snapshot is written back in the current schema and round-trips.
+            let rewritten = state.files().unwrap();
+            assert!(
+                rewritten["manifest.json"]
+                    .contains(&format!("\"schema_version\": {SCHEMA_VERSION}"))
+            );
+            assert_eq!(
+                State::from_files(&rewritten).unwrap().files().unwrap(),
+                rewritten
+            );
+            // A current-schema file must not carry legacy fields.
+            let mut outdated = rewritten.clone();
+            outdated.insert(
+                format!("sets/{uid}.json"),
+                pretty(&legacy_set(&uid, version)).unwrap(),
+            );
+            assert!(State::from_files(&outdated).is_err());
+        }
+    }
+    #[test]
+    fn upgrade_edge_cases_and_invalid_ranges() {
+        let uid = "c".repeat(32);
+        // A null schema 1 focus upgrades to an empty include list.
+        let mut null_focus = legacy_set(&uid, 1);
         null_focus.fields.get_mut("focus_theme").unwrap().value = Value::Null;
         upgrade_v1_set(&mut null_focus);
         assert_eq!(
             null_focus.fields["include_themes"].value,
             serde_json::json!([])
         );
+        // A band clamped at the old floor grows to the minimum width, like the migration.
+        let mut edge = legacy_set(&uid, 2);
+        edge.fields.get_mut("target_rating").unwrap().value = serde_json::json!(420);
+        edge.fields.get_mut("variance").unwrap().value = serde_json::json!(50);
+        upgrade_v2_set(&mut edge);
+        assert_eq!(edge.fields["rating_min"].value, serde_json::json!(400));
+        assert_eq!(edge.fields["rating_max"].value, serde_json::json!(500));
+        // Malformed legacy values are not guessed at; validation rejects the snapshot.
+        let mut files = legacy_files(&uid, 2);
+        let mut bad = legacy_set(&uid, 2);
+        bad.fields.get_mut("variance").unwrap().value = serde_json::json!("wide");
+        files.insert(format!("sets/{uid}.json"), pretty(&bad).unwrap());
+        assert!(State::from_files(&files).is_err());
+        // Current-schema ranges are validated: min == max, inverted and out of bounds fail.
+        let good = State::from_files(&legacy_files(&uid, 2)).unwrap();
+        for (min, max) in [(1200, 1200), (1300, 1200), (300, 1000), (3000, 3300)] {
+            let mut state = good.clone();
+            let fields = &mut state.sets.get_mut(&uid).unwrap().fields;
+            fields.get_mut("rating_min").unwrap().value = serde_json::json!(min);
+            fields.get_mut("rating_max").unwrap().value = serde_json::json!(max);
+            assert!(state.validate().is_err(), "{min}-{max}");
+        }
     }
 }
