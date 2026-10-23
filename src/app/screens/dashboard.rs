@@ -65,6 +65,43 @@ impl Woodpeck {
         ui.small("Puzzles from the Lichess puzzle database (CC0)");
         ui.small("Your practice stays on this device.");
     }
+    /// Theme chips for a set card: included themes in the accent color, excluded ones as "not …".
+    fn dashboard_set_themes(&self, ui: &mut Ui, params: &crate::sets::BuilderParams) {
+        let Some(summary) = params.theme_summary() else {
+            return;
+        };
+        let semantic = self.palette.semantic();
+        let (accent, avoid) = (
+            style::color(semantic.accent),
+            style::color(semantic.incorrect),
+        );
+        let chips: Vec<(String, egui::Color32)> = params
+            .include_themes
+            .iter()
+            .map(|t| (crate::sets::theme_name(t), accent))
+            .chain(
+                params
+                    .exclude_themes
+                    .iter()
+                    .map(|t| (format!("not {}", crate::sets::theme_name(t)), avoid)),
+            )
+            .collect();
+        let (shown, hidden) = widgets::chip_overflow(&chips, 4);
+        ui.add_space(3.0);
+        ui.horizontal_wrapped(|ui| {
+            if params.theme_match == crate::sets::ThemeMatch::All {
+                widgets::caption(ui, "ALL OF");
+            }
+            for (text, color) in shown {
+                widgets::chip(ui, text.as_str(), *color);
+            }
+            if hidden > 0 {
+                widgets::chip(ui, format!("+{hidden}"), ui.visuals().weak_text_color());
+            }
+        })
+        .response
+        .on_hover_text(summary);
+    }
     fn dashboard_set(&mut self, ui: &mut Ui, set: &crate::service::SetSummary) {
         let accent = style::color(self.palette.semantic().accent);
         widgets::card(ui).show(ui, |ui| {
@@ -89,6 +126,7 @@ impl Woodpeck {
                     ),
                 );
             });
+            self.dashboard_set_themes(ui, &set.set.params);
             ui.add_space(5.0);
             ui.label(RichText::new(&set.set.params.name).size(23.0).strong());
             ui.label(format!(
