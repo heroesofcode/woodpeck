@@ -72,7 +72,12 @@ fn execute(
             target,
             count,
         } => {
-            let puzzles = fetcher.batch(theme.as_deref(), target, count, cancel)?;
+            let puzzles = fetcher.batch(
+                theme.as_deref(),
+                crate::source::difficulty(target),
+                count,
+                cancel,
+            )?;
             cancel.check()?;
             let puzzles: Vec<_> = puzzles
                 .into_iter()
@@ -124,11 +129,25 @@ fn execute(
     }
 }
 
-/// The anonymous API filters by one theme, so rotate through the included themes per batch;
-/// exclusions and match-all are enforced locally on every returned puzzle.
-fn fallback_theme(params: &crate::sets::BuilderParams, batch: u32) -> Option<&str> {
+/// The anonymous API takes one theme and one coarse difficulty per request, so batches walk
+/// every included theme for each difficulty level overlapping the rating range. The exact
+/// range, exclusions and match-all are then enforced locally on every returned puzzle.
+fn fallback_request(
+    params: &crate::sets::BuilderParams,
+    batch: u32,
+) -> (Option<&str>, &'static str) {
+    let k = batch as usize - 1;
     let include = &params.include_themes;
-    (!include.is_empty()).then(|| include[(batch as usize - 1) % include.len()].as_str())
+    let levels = crate::source::difficulties(params.rating_min, params.rating_max);
+    let themes = include.len().max(1);
+    let theme = (!include.is_empty()).then(|| include[k % themes].as_str());
+    let level = levels
+        .get((k / themes) % levels.len().max(1))
+        .copied()
+        .unwrap_or_else(|| {
+            crate::source::difficulty(u16::midpoint(params.rating_min, params.rating_max))
+        });
+    (theme, level)
 }
 fn fallback(
     store: &SharedStore,
@@ -139,31 +158,25 @@ fn fallback(
     mut report: impl FnMut(u32, usize),
     fetcher: &mut dyn PuzzleFetcher,
 ) -> Result<JobOutput> {
-    let rating = lock(store)?.settings()?.user_rating;
     params
-        .validate(rating)
+        .validate()
         .map_err(crate::sets::GenerationError::from)?;
     let mut inserted = 0;
     // Bound requests even if the anonymous API cannot satisfy the requested band.
     for batches in 1..=5 {
         cancel.check()?;
-        match generate(&*lock(store)?, params, rating, seed) {
+        match generate(&*lock(store)?, params, seed) {
             Ok(_) => break,
             Err(crate::sets::GenerationError::Insufficient { .. }) => {}
             Err(error) => return Err(error.into()),
         }
-        let puzzles = fetcher.batch(
-            fallback_theme(params, batches),
-            params.target_rating,
-            params.size.min(100),
-            cancel,
-        )?;
+        let (theme, difficulty) = fallback_request(params, batches);
+        let puzzles = fetcher.batch(theme, difficulty, params.size.min(100), cancel)?;
         cancel.check()?;
-        let band = params.band();
         let puzzles: Vec<_> = puzzles
             .into_iter()
             .filter(|p| {
-                (band.0..=band.1).contains(&p.rating)
+                params.rating_in_range(p.rating)
                     && params.theme_filter().matches(&p.themes)
                     && p.validate().is_ok()
             })

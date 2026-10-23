@@ -5,21 +5,41 @@ use std::{sync::Mutex, time::Duration};
 const API_BASE: &str = "https://lichess.org/api/puzzle";
 static API_SERIAL: Mutex<()> = Mutex::new(());
 
+/// Lichess `difficulty` levels and the puzzle ratings each one targets for an anonymous
+/// (1500-rated) client, as inclusive windows that tile the whole rating scale.
+const LEVELS: [(&str, u16, u16); 5] = [
+    ("easiest", 0, 1100),
+    ("easier", 1101, 1350),
+    ("normal", 1351, 1649),
+    ("harder", 1650, 1899),
+    ("hardest", 1900, u16::MAX),
+];
 pub fn difficulty(target: u16) -> &'static str {
-    match i32::from(target) - 1500 {
-        ..=-400 => "easiest",
-        -399..=-150 => "easier",
-        -149..=149 => "normal",
-        150..=399 => "harder",
-        _ => "hardest",
-    }
+    LEVELS
+        .iter()
+        .find(|(_, low, high)| (*low..=*high).contains(&target))
+        .map_or("hardest", |(level, ..)| level)
+}
+/// Every level whose window overlaps the inclusive range, widest overlap first (ties easiest
+/// first). The API cannot filter by rating, so callers must still filter results locally.
+pub fn difficulties(min: u16, max: u16) -> Vec<&'static str> {
+    let mut levels: Vec<_> = LEVELS
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (level, low, high))| {
+            let overlap = max.min(*high).checked_sub(min.max(*low))?;
+            Some((std::cmp::Reverse(overlap), i, *level))
+        })
+        .collect();
+    levels.sort_unstable();
+    levels.into_iter().map(|(.., level)| level).collect()
 }
 /// Injectable boundary for offline service/fallback tests. Implementations must honor cancellation.
 pub trait PuzzleFetcher: Send {
     fn batch(
         &mut self,
         theme: Option<&str>,
-        target: u16,
+        difficulty: &str,
         count: u32,
         cancel: &CancelFlag,
     ) -> Result<Vec<Puzzle>, SourceError>;
@@ -123,16 +143,17 @@ impl PuzzleFetcher for LichessClient {
     fn batch(
         &mut self,
         theme: Option<&str>,
-        target: u16,
+        difficulty: &str,
         count: u32,
         cancel: &CancelFlag,
     ) -> Result<Vec<Puzzle>, SourceError> {
         let angle = identifier(theme.unwrap_or("mix"))?;
+        let difficulty = identifier(difficulty)?;
         parse_batch(&self.json(
             &format!(
                 "batch/{angle}?nb={}&difficulty={}",
                 count.clamp(1, 100),
-                difficulty(target)
+                difficulty
             ),
             cancel,
         )?)
@@ -163,6 +184,23 @@ mod tests {
         ] {
             assert_eq!(difficulty(r), expected);
         }
+        for (low, high) in [(1100, 1101), (1350, 1351), (1649, 1650), (1899, 1900)] {
+            assert_ne!(difficulty(low), difficulty(high));
+        }
+    }
+    #[test]
+    fn rating_ranges_map_to_every_overlapping_difficulty() {
+        assert_eq!(difficulties(400, 500), vec!["easiest"]);
+        assert_eq!(difficulties(1400, 1600), vec!["normal"]);
+        // 1100 is the last "easiest" rating: inclusive edges still count.
+        assert_eq!(difficulties(1000, 1100), vec!["easiest"]);
+        assert_eq!(difficulties(1100, 1200), vec!["easier", "easiest"]);
+        assert_eq!(difficulties(1250, 1700), vec!["normal", "easier", "harder"]);
+        assert_eq!(
+            difficulties(400, 3200),
+            vec!["hardest", "easiest", "normal", "easier", "harder"]
+        );
+        assert_eq!(difficulties(3100, 3200), vec!["hardest"]);
     }
     #[test]
     fn rate_limit_retries_after_sixty_seconds_and_sets_user_agent() {
