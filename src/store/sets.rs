@@ -29,10 +29,9 @@ impl Store {
         puzzles: &[Puzzle],
         created_at: i64,
         seed: u64,
-        user_rating: u16,
     ) -> Result<i64> {
         params
-            .validate(user_rating)
+            .validate()
             .map_err(|e| StoreError::InvalidData(e.to_string()))?;
         if puzzles.len() != params.size as usize
             || puzzles.iter().map(|p| &p.id).collect::<BTreeSet<_>>().len() != puzzles.len()
@@ -42,7 +41,7 @@ impl Store {
             ));
         }
         let tx = self.connection.transaction()?;
-        tx.execute("INSERT INTO sets(name,include_themes,exclude_themes,theme_match,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![params.name,serde_json::to_string(&params.include_themes)?,serde_json::to_string(&params.exclude_themes)?,theme_match_name(params.theme_match),params.target_rating,params.variance,params.size,params.target_cycles,created_at,params.preset_id,if params.shuffle_each_cycle {"shuffle"} else {"fixed"},params.restrict_recommended,seed.to_string()])?;
+        tx.execute("INSERT INTO sets(name,include_themes,exclude_themes,theme_match,rating_min,rating_max,size,target_cycles,created_at,preset_id,order_mode,seed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![params.name,serde_json::to_string(&params.include_themes)?,serde_json::to_string(&params.exclude_themes)?,theme_match_name(params.theme_match),params.rating_min,params.rating_max,params.size,params.target_cycles,created_at,params.preset_id,if params.shuffle_each_cycle {"shuffle"} else {"fixed"},seed.to_string()])?;
         let id = tx.last_insert_rowid();
         for (i, p) in puzzles.iter().enumerate() {
             tx.execute("INSERT INTO set_puzzles(set_id,position,puzzle_id,puzzle_json) VALUES(?1,?2,?3,?4)",params![id,i64::try_from(i+1).map_err(|_|StoreError::InvalidData("Set is too large.".into()))?,p.id,serde_json::to_string(p)?])?;
@@ -51,10 +50,10 @@ impl Store {
         Ok(id)
     }
     pub fn set(&self, id: i64) -> Result<Option<StoredSet>> {
-        Ok(self.connection.query_row("SELECT id,name,include_themes,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed,exclude_themes,theme_match FROM sets WHERE id=?1",[id],read_set).optional()?)
+        Ok(self.connection.query_row("SELECT id,name,include_themes,rating_min,rating_max,size,target_cycles,created_at,preset_id,order_mode,seed,exclude_themes,theme_match FROM sets WHERE id=?1",[id],read_set).optional()?)
     }
     pub fn sets(&self) -> Result<Vec<StoredSet>> {
-        let mut stmt=self.connection.prepare("SELECT id,name,include_themes,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed,exclude_themes,theme_match FROM sets ORDER BY created_at,id")?;
+        let mut stmt=self.connection.prepare("SELECT id,name,include_themes,rating_min,rating_max,size,target_cycles,created_at,preset_id,order_mode,seed,exclude_themes,theme_match FROM sets ORDER BY created_at,id")?;
         Ok(stmt
             .query_map([], read_set)?
             .collect::<std::result::Result<_, _>>()?)
@@ -188,34 +187,33 @@ pub(super) fn theme_match_name(mode: ThemeMatch) -> &'static str {
     }
 }
 fn read_set(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSet> {
-    let seed: String = r.get(11)?;
+    let seed: String = r.get(10)?;
     let mode: String = r.get(9)?;
     let themes = |column: usize| -> rusqlite::Result<Vec<String>> {
         let json: String = r.get(column)?;
         serde_json::from_str(&json).map_err(|e| conversion_error(column, e))
     };
-    let theme_match: String = r.get(13)?;
+    let theme_match: String = r.get(12)?;
     Ok(StoredSet {
         id: r.get(0)?,
         params: BuilderParams {
             name: r.get(1)?,
             include_themes: themes(2)?,
-            exclude_themes: themes(12)?,
+            exclude_themes: themes(11)?,
             theme_match: if theme_match == "all" {
                 ThemeMatch::All
             } else {
                 ThemeMatch::Any
             },
-            target_rating: r.get(3)?,
-            variance: r.get(4)?,
+            rating_min: r.get(3)?,
+            rating_max: r.get(4)?,
             size: r.get(5)?,
             target_cycles: r.get(6)?,
             preset_id: r.get(8)?,
             shuffle_each_cycle: mode == "shuffle",
-            restrict_recommended: r.get(10)?,
         },
         created_at: r.get(7)?,
-        seed: seed.parse().map_err(|e| conversion_error(11, e))?,
+        seed: seed.parse().map_err(|e| conversion_error(10, e))?,
     })
 }
 fn read_cycle(r: &rusqlite::Row<'_>) -> rusqlite::Result<CycleRecord> {

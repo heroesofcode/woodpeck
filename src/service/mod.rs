@@ -42,9 +42,8 @@ pub struct SetCreation {
     pub set_id: Option<i64>,
     pub available: usize,
     pub requested: u32,
-    pub original_band: (u16, u16),
-    pub used_band: (u16, u16),
-    pub widening_steps: u16,
+    /// The exact inclusive rating range searched; it is never widened.
+    pub range: (u16, u16),
 }
 impl SetCreation {
     pub fn shortfall(&self) -> usize {
@@ -436,17 +435,14 @@ fn create_set(
     seed: u64,
     now: i64,
 ) -> Result<SetCreation> {
-    let rating = store.settings()?.user_rating;
-    match generate(store, params, rating, seed) {
+    match generate(store, params, seed) {
         Ok(generated) => {
-            let id = store.create_set(params, &generated.puzzles, now, seed, rating)?;
+            let id = store.create_set(params, &generated.puzzles, now, seed)?;
             Ok(SetCreation {
                 set_id: Some(id),
                 available: generated.puzzles.len(),
                 requested: params.size,
-                original_band: generated.original_band,
-                used_band: generated.used_band,
-                widening_steps: generated.widening_steps,
+                range: params.range(),
             })
         }
         Err(GenerationError::Insufficient {
@@ -456,14 +452,7 @@ fn create_set(
             set_id: None,
             available,
             requested,
-            original_band: params.band(),
-            used_band: (400, 3000),
-            widening_steps: (params
-                .band()
-                .0
-                .saturating_sub(400)
-                .max(3000_u16.saturating_sub(params.band().1)))
-            .div_ceil(50),
+            range: params.range(),
         }),
         Err(error) => Err(error.into()),
     }

@@ -31,7 +31,6 @@ fn setup(store: &mut Store) -> i64 {
             &pool(),
             1,
             42,
-            1200,
         )
         .unwrap()
 }
@@ -75,7 +74,7 @@ fn finish(store: &mut Store, cycle_id: i64, at: i64) {
 #[test]
 fn migrations_idempotent_and_reject_future_schema() {
     let store = Store::memory().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 4);
+    assert_eq!(store.schema_version().unwrap(), schema::VERSION);
     let mut conn = store.connection;
     schema::migrate(&mut conn).unwrap();
     conn.pragma_update(None, "user_version", 99).unwrap();
@@ -114,7 +113,7 @@ fn migrates_focus_theme_to_include_list_with_its_sync_clock() {
     )
     .unwrap();
     let s = Store::from_connection(old).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 4);
+    assert_eq!(s.schema_version().unwrap(), schema::VERSION);
     let sets = s.sets().unwrap();
     assert_eq!(sets[0].params.include_themes, vec!["fork".to_string()]);
     assert_eq!(sets[0].params.exclude_themes, Vec::<String>::new());
@@ -150,8 +149,76 @@ fn migrates_focus_theme_to_include_list_with_its_sync_clock() {
         theme_match: ThemeMatch::All,
         ..BuilderParams::default()
     };
-    let id = s.create_set(&params, &rows, 5, 1, 1200).unwrap();
+    let id = s.create_set(&params, &rows, 5, 1).unwrap();
     assert_eq!(s.set(id).unwrap().unwrap().params, params);
+}
+#[test]
+fn migrates_target_and_variance_to_an_equivalent_range_with_sync_clocks() {
+    let mut old = version_one_connection();
+    let mut expected = Vec::new();
+    {
+        let tx = old.transaction().unwrap();
+        let mut id = 0;
+        for target in (400..=3250).step_by(13) {
+            for variance in [50, 75, 100, 125, 150, 175, 200] {
+                id += 1;
+                tx.execute(
+                    "INSERT INTO sets VALUES(?1,'Old',NULL,?2,?3,20,2,1,NULL,'fixed',1,'42')",
+                    rusqlite::params![id, target, variance],
+                )
+                .unwrap();
+                expected.push(crate::sets::legacy_range(target, variance));
+            }
+        }
+        tx.commit().unwrap();
+    }
+    super::schema::migrate_until(&mut old, 4).unwrap();
+    old.execute_batch(
+        "INSERT INTO sync_fields(key,value,updated_at) SELECT 'set/'||uid||'/target_rating','400',500 FROM sets WHERE id=1;
+         INSERT INTO sync_fields(key,value,updated_at) SELECT 'set/'||uid||'/variance','50',800 FROM sets WHERE id=1;
+         INSERT INTO sync_fields(key,value,updated_at) SELECT 'set/'||uid||'/restrict_recommended','true',900 FROM sets WHERE id=1;
+         INSERT INTO sync_fields(key,value,updated_at) SELECT 'set/'||uid||'/size','20',300 FROM sets WHERE id=1;",
+    )
+    .unwrap();
+    let s = Store::from_connection(old).unwrap();
+    assert_eq!(s.schema_version().unwrap(), schema::VERSION);
+    let ranges: Vec<_> = s.sets().unwrap().iter().map(|x| x.params.range()).collect();
+    // SQL and the Rust rule used by the sync upgrade agree on every legacy band.
+    assert_eq!(ranges, expected);
+    assert_eq!(
+        ranges[0],
+        (400, 500),
+        "a clamped 400±50 band grows to 100 points"
+    );
+    assert!(
+        s.sets()
+            .unwrap()
+            .iter()
+            .all(|x| x.params.validate().is_ok())
+    );
+    let mut clocks: Vec<(String, String, i64)> = s
+        .connection
+        .prepare("SELECT substr(key,38),value,updated_at FROM sync_fields ORDER BY key")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    clocks.sort();
+    assert_eq!(
+        clocks,
+        vec![
+            ("rating_max".into(), "500".into(), 800),
+            ("rating_min".into(), "400".into(), 800),
+            ("size".into(), "20".into(), 300),
+        ]
+    );
+    // The new columns reject invalid ranges at the database level too.
+    assert!(
+        s.connection
+            .execute("UPDATE sets SET rating_max=rating_min WHERE id=1", [])
+            .is_err()
+    );
 }
 #[test]
 fn migrates_existing_version_one_and_retains_data() {
@@ -165,7 +232,7 @@ fn migrates_existing_version_one_and_retains_data() {
     )
     .unwrap();
     let s = Store::from_connection(old).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 4);
+    assert_eq!(s.schema_version().unwrap(), schema::VERSION);
     for table in ["sets", "cycles", "attempts", "review_items"] {
         let uid: String = s
             .connection
@@ -299,8 +366,7 @@ fn invalid_set_input_creates_no_partial_rows() {
             },
             &p,
             1,
-            1,
-            1200
+            1
         )
         .is_err()
     );
@@ -313,8 +379,7 @@ fn invalid_set_input_creates_no_partial_rows() {
             },
             &pool()[..19],
             1,
-            1,
-            1200
+            1
         )
         .is_err()
     );
@@ -327,7 +392,7 @@ fn sets_roundtrip_rename_and_u64_seed() {
         shuffle_each_cycle: true,
         ..Default::default()
     };
-    let id = s.create_set(&params, &pool(), 123, u64::MAX, 1200).unwrap();
+    let id = s.create_set(&params, &pool(), 123, u64::MAX).unwrap();
     let set = s.set(id).unwrap().unwrap();
     assert_eq!(set.params, params);
     assert_eq!(set.created_at, 123);
@@ -688,7 +753,7 @@ fn shuffled_order_and_settings_are_stable_across_reopen() {
             shuffle_each_cycle: true,
             ..Default::default()
         };
-        let set = s.create_set(&params, &pool(), 1, 123, 1200).unwrap();
+        let set = s.create_set(&params, &pool(), 1, 123).unwrap();
         let c = s.start_cycle(set, 1).unwrap();
         (set, c)
     };
@@ -824,7 +889,7 @@ fn multi_theme_sets_roundtrip_through_sync_files_to_another_store() {
         preset_id: None,
         ..BuilderParams::default()
     };
-    a.create_set(&params, &rows, 5, 1, 1200).unwrap();
+    a.create_set(&params, &rows, 5, 1).unwrap();
     let files = a.export_sync().unwrap().files().unwrap();
     let set_file = files
         .iter()
@@ -835,7 +900,10 @@ fn multi_theme_sets_roundtrip_through_sync_files_to_another_store() {
         assert!(set_file.contains(key), "{key}");
     }
     assert!(!set_file.contains("focus_theme"));
-    assert!(files["manifest.json"].contains("\"schema_version\": 2"));
+    assert!(files["manifest.json"].contains(&format!(
+        "\"schema_version\": {}",
+        crate::sync::format::SCHEMA_VERSION
+    )));
     let mut b = Store::memory().unwrap();
     b.import_sync(&State::from_files(&files).unwrap()).unwrap();
     assert_eq!(b.sets().unwrap()[0].params, params);
@@ -863,12 +931,12 @@ fn imported_set_field_clocks_survive_reexport() {
     let id = setup(&mut store);
     let mut remote = store.export_sync().unwrap();
     let set = remote.sets.values_mut().next().unwrap();
-    let field = set.fields.get_mut("restrict_recommended").unwrap();
-    field.value = serde_json::json!(false);
+    let field = set.fields.get_mut("rating_max").unwrap();
+    field.value = serde_json::json!(1150);
     field.updated_at = 9000;
     store.import_sync(&remote).unwrap();
     assert_eq!(store.export_sync().unwrap(), remote);
-    assert!(!store.set(id).unwrap().unwrap().params.restrict_recommended);
+    assert_eq!(store.set(id).unwrap().unwrap().params.range(), (900, 1150));
 }
 #[test]
 fn source_directory_is_never_a_data_directory() {

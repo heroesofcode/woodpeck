@@ -15,12 +15,11 @@ pub fn service() -> Result<AppService, Box<dyn std::error::Error>> {
         preset_id: None,
         size: 20,
         target_cycles: 5,
-        restrict_recommended: false,
         ..Default::default()
     };
-    let generated = generate(&store, &params, 1200, 42)?;
+    let generated = generate(&store, &params, 42)?;
     let now = chrono::Local::now().timestamp();
-    let id = store.create_set(&params, &generated.puzzles, now - 86_400 * 7, 42, 1200)?;
+    let id = store.create_set(&params, &generated.puzzles, now - 86_400 * 7, 42)?;
     for number in 1..=3 {
         let cycle = store.start_cycle(id, now - 86_400 * (4 - number))?;
         for (i, puzzle) in generated

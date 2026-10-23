@@ -103,7 +103,6 @@ fn two_machines_union_progress_review_and_latest_preferences() {
             &puzzles(),
             1,
             42,
-            1200,
         )
         .unwrap();
     let ac = a.start_cycle(aid, 1).unwrap().id;
@@ -288,7 +287,6 @@ fn worker_pulls_at_start_and_flushes_pending_progress_on_close() {
             &puzzles(),
             1,
             42,
-            1200,
         )
         .unwrap();
     let cycle = a.start_cycle(set, 1).unwrap().id;
@@ -343,7 +341,6 @@ fn simultaneous_pushes_converge_without_losing_attempts() {
             &puzzles(),
             1,
             42,
-            1200,
         )
         .unwrap();
     let ac = a.start_cycle(aid, 1).unwrap().id;

@@ -28,73 +28,46 @@ pub enum GenerationError {
 pub struct GeneratedSet {
     pub params: BuilderParams,
     pub puzzles: Vec<Puzzle>,
-    pub original_band: (u16, u16),
-    pub used_band: (u16, u16),
-    pub widening_steps: u16,
 }
-impl GeneratedSet {
-    pub fn widening_note(&self) -> Option<String> {
-        (self.widening_steps > 0).then(|| {
-            format!(
-                "Rating band widened from {}–{} to {}–{} to find enough puzzles.",
-                self.original_band.0, self.original_band.1, self.used_band.0, self.used_band.1
-            )
-        })
-    }
-}
-/// Query each expanded band; never return a partial set or silently relax a theme cap.
+/// Query exactly the chosen inclusive rating range. Never widen it, return a partial set,
+/// or silently relax a theme cap; a shortfall is reported as [`GenerationError::Insufficient`].
 pub fn generate(
     query: &impl PuzzleQuery,
     params: &BuilderParams,
-    user_rating: u16,
     seed: u64,
 ) -> Result<GeneratedSet, GenerationError> {
-    params.validate(user_rating)?;
-    let original_band = params.band();
-    let mut used_band = original_band;
-    let mut steps = 0;
-    loop {
-        let mut distinct_ids = BTreeSet::new();
-        let mut candidates: Vec<_> = query
-            .query(used_band.0, used_band.1, params.theme_filter())?
-            .into_iter()
-            .filter(|p| {
-                (used_band.0..=used_band.1).contains(&p.rating)
-                    && params.theme_filter().matches(&p.themes)
-                    && distinct_ids.insert(p.id.clone())
-                    && p.validate().is_ok()
-            })
-            .collect();
-        // Normalize query ordering before seeded selection (SQLite and fixture sources agree).
-        candidates.sort_by(|a, b| a.id.cmp(&b.id));
-        let mut best = Vec::new();
-        for retry in 0..32 {
-            let chosen = stratified(&candidates, params, seed.wrapping_add(retry), used_band.0);
-            if chosen.len() > best.len() {
-                best = chosen;
-            }
-            if best.len() == params.size as usize {
-                return Ok(GeneratedSet {
-                    params: params.clone(),
-                    puzzles: best,
-                    original_band,
-                    used_band,
-                    widening_steps: steps,
-                });
-            }
+    params.validate()?;
+    let (minimum, maximum) = params.range();
+    let mut distinct_ids = BTreeSet::new();
+    let mut candidates: Vec<_> = query
+        .query(minimum, maximum, params.theme_filter())?
+        .into_iter()
+        .filter(|p| {
+            params.rating_in_range(p.rating)
+                && params.theme_filter().matches(&p.themes)
+                && distinct_ids.insert(p.id.clone())
+                && p.validate().is_ok()
+        })
+        .collect();
+    // Normalize query ordering before seeded selection (SQLite and fixture sources agree).
+    candidates.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut best = Vec::new();
+    for retry in 0..32 {
+        let chosen = stratified(&candidates, params, seed.wrapping_add(retry), minimum);
+        if chosen.len() > best.len() {
+            best = chosen;
         }
-        if used_band == (400, 3000) {
-            return Err(GenerationError::Insufficient {
-                available: best.len(),
-                requested: params.size,
+        if best.len() == params.size as usize {
+            return Ok(GeneratedSet {
+                params: params.clone(),
+                puzzles: best,
             });
         }
-        used_band = (
-            used_band.0.saturating_sub(50).max(400),
-            used_band.1.saturating_add(50).min(3000),
-        );
-        steps += 1;
     }
+    Err(GenerationError::Insufficient {
+        available: best.len(),
+        requested: params.size,
+    })
 }
 fn stratified(
     candidates: &[Puzzle],
@@ -176,7 +149,7 @@ mod tests {
     #[test]
     fn exact_distinct_band_stratification_cap_and_stability() {
         let q = pool();
-        let g = generate(&q, &params(), 1200, 42).unwrap();
+        let g = generate(&q, &params(), 42).unwrap();
         assert_eq!(g.puzzles.len(), 20);
         assert_eq!(
             g.puzzles
@@ -186,7 +159,6 @@ mod tests {
                 .len(),
             20
         );
-        assert_eq!(g.widening_steps, 0);
         let mut counts = BTreeMap::new();
         for p in &g.puzzles {
             assert!((900..=1100).contains(&p.rating));
@@ -195,7 +167,7 @@ mod tests {
             }
         }
         assert!(counts.values().all(|n| *n <= 6));
-        assert_eq!(g, generate(&q, &params(), 1200, 42).unwrap());
+        assert_eq!(g, generate(&q, &params(), 42).unwrap());
         let lower = g.puzzles.iter().filter(|p| p.rating < 1000).count();
         assert_eq!(lower, 10);
     }
@@ -212,20 +184,70 @@ mod tests {
             include_themes: vec!["fork".into()],
             ..params()
         };
-        let g = generate(&q, &p, 1200, 1).unwrap();
+        let g = generate(&q, &p, 1).unwrap();
         assert!(g.puzzles.iter().all(|p| p.themes.contains(&"fork".into())));
         assert_eq!(g.puzzles.len(), 20);
     }
     #[test]
-    fn widens_in_fifty_point_steps_and_reports() {
+    fn never_widens_past_the_chosen_range() {
         let mut q = pool();
         for p in &mut q.0 {
             p.rating = 1150;
         }
-        let g = generate(&q, &params(), 1200, 4).unwrap();
-        assert_eq!(g.used_band, (850, 1150));
-        assert_eq!(g.widening_steps, 1);
-        assert!(g.widening_note().unwrap().contains("widened"));
+        // Every puzzle is one point outside 900–1100 (and far inside 400–3200).
+        assert!(matches!(
+            generate(&q, &params(), 4).unwrap_err(),
+            GenerationError::Insufficient {
+                available: 0,
+                requested: 20
+            }
+        ));
+        let p = BuilderParams {
+            rating_max: 1150,
+            ..params()
+        };
+        assert!(
+            generate(&q, &p, 4)
+                .unwrap()
+                .puzzles
+                .iter()
+                .all(|p| p.rating == 1150)
+        );
+    }
+    #[test]
+    fn range_bounds_are_inclusive() {
+        let mut q = pool();
+        for (i, p) in q.0.iter_mut().enumerate() {
+            p.rating = [899, 900, 1100, 1101][i % 4];
+            p.themes = vec![format!("motif{}", i % 20)];
+        }
+        let g = generate(
+            &q,
+            &BuilderParams {
+                size: 100,
+                ..params()
+            },
+            3,
+        )
+        .unwrap();
+        let ratings: BTreeSet<_> = g.puzzles.iter().map(|p| p.rating).collect();
+        assert_eq!(ratings, BTreeSet::from([900, 1100]));
+        // 100 in-range puzzles exist, so one more is a shortfall, never a widened band.
+        assert!(matches!(
+            generate(
+                &q,
+                &BuilderParams {
+                    size: 101,
+                    ..params()
+                },
+                3
+            )
+            .unwrap_err(),
+            GenerationError::Insufficient {
+                available: 100,
+                requested: 101
+            }
+        ));
     }
     #[test]
     fn never_relaxes_cap_and_reports_shortfall() {
@@ -233,7 +255,7 @@ mod tests {
         for p in &mut q.0 {
             p.themes = vec!["fork".into()];
         }
-        let error = generate(&q, &params(), 1200, 1).unwrap_err();
+        let error = generate(&q, &params(), 1).unwrap_err();
         assert!(matches!(
             error,
             GenerationError::Insufficient {
@@ -276,7 +298,6 @@ mod tests {
         let any = generate(
             &q,
             &with(&["fork", "pin"], &[], super::super::ThemeMatch::Any, 90),
-            1200,
             3,
         )
         .unwrap();
@@ -288,7 +309,6 @@ mod tests {
         let all = generate(
             &q,
             &with(&["fork", "pin"], &[], super::super::ThemeMatch::All, 30),
-            1200,
             3,
         )
         .unwrap();
@@ -301,7 +321,6 @@ mod tests {
             generate(
                 &q,
                 &with(&["fork", "pin"], &[], super::super::ThemeMatch::All, 31),
-                1200,
                 3
             ),
             Err(GenerationError::Insufficient {
@@ -312,7 +331,6 @@ mod tests {
         let excluded = generate(
             &q,
             &with(&[], &["pin"], super::super::ThemeMatch::Any, 60),
-            1200,
             3,
         )
         .unwrap();
@@ -325,7 +343,6 @@ mod tests {
         let both = generate(
             &q,
             &with(&["fork"], &["pin"], super::super::ThemeMatch::Any, 30),
-            1200,
             3,
         )
         .unwrap();
@@ -340,7 +357,6 @@ mod tests {
                     super::super::ThemeMatch::Any,
                     20
                 ),
-                1200,
                 3
             ),
             Err(GenerationError::Insufficient {
@@ -353,7 +369,6 @@ mod tests {
             generate(
                 &q,
                 &with(&["fork"], &["fork"], super::super::ThemeMatch::Any, 20),
-                1200,
                 3
             ),
             Err(GenerationError::InvalidParams(_))
@@ -368,7 +383,7 @@ mod tests {
             }
         }
         assert!(matches!(
-            generate(&Bad, &params(), 1200, 1),
+            generate(&Bad, &params(), 1),
             Err(GenerationError::Query(_))
         ));
     }
@@ -379,7 +394,7 @@ mod tests {
             p.fen.clear();
         }
         assert!(matches!(
-            generate(&q, &params(), 1200, 1),
+            generate(&q, &params(), 1),
             Err(GenerationError::Insufficient { available: 0, .. })
         ));
     }
@@ -395,7 +410,7 @@ mod snapshot_tests {
         }
     }
     #[test]
-    fn generated_rows_are_owned_immutable_snapshots_and_do_not_widen_unnecessarily() {
+    fn generated_rows_are_owned_immutable_snapshots() {
         let mut source = Local(
             (0..20)
                 .map(|i| {
@@ -411,11 +426,10 @@ mod snapshot_tests {
             include_themes: vec!["fork".into()],
             ..Default::default()
         };
-        let generated = generate(&source, &params, 1200, 1).unwrap();
+        let generated = generate(&source, &params, 1).unwrap();
         let original = generated.puzzles.clone();
         source.0[0].fen.clear();
         source.0[0].rating = 3000;
         assert_eq!(generated.puzzles, original);
-        assert_eq!(generated.widening_note(), None);
     }
 }

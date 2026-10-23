@@ -113,22 +113,24 @@ impl Preset {
         match self.kind {
             PresetKind::General => return None,
             PresetKind::Theme(theme) => {
-                p.target_rating = user_rating.saturating_sub(200).max(800);
+                p.set_range(around(user_rating.saturating_sub(200).max(800)));
                 p.include_themes = vec![theme.into()];
             }
-            PresetKind::Level(low, high) => {
-                p.target_rating = u16::midpoint(low, high);
-                p.restrict_recommended = false;
-            }
+            PresetKind::Level(low, high) => p.set_range((low, high)),
         }
         Some(p)
     }
     pub fn builder(self, user_rating: u16) -> BuilderParams {
-        self.prefill(user_rating).unwrap_or_else(|| BuilderParams {
-            target_rating: user_rating.saturating_sub(200).clamp(800, 3000),
-            ..Default::default()
+        self.prefill(user_rating).unwrap_or_else(|| {
+            let mut p = BuilderParams::default();
+            p.set_range(around(user_rating.saturating_sub(200).clamp(800, 3000)));
+            p
         })
     }
+}
+/// A ±100 range centred a little below the player, the default difficulty for presets.
+fn around(center: u16) -> (u16, u16) {
+    super::normalize_range(center.saturating_sub(100), center.saturating_add(100))
 }
 /// Lichess puzzle theme keys offered by the set builder, with display labels.
 pub const THEMES: [(&str, &str); 57] = [

@@ -1,6 +1,6 @@
 use super::{Result, StoreError};
 use rusqlite::Connection;
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 pub fn migrate(connection: &mut Connection) -> Result<()> {
     migrate_until(connection, VERSION)
 }
@@ -66,6 +66,9 @@ pub(super) fn migrate_until(connection: &mut Connection, target: u32) -> Result<
     }
     if version < 4 && target >= 4 {
         migrate_theme_filters(&tx)?;
+    }
+    if version < 5 && target >= 5 {
+        migrate_rating_range(&tx)?;
     }
     tx.pragma_update(None, "user_version", target.max(version))?;
     tx.commit()?;
@@ -146,5 +149,27 @@ fn migrate_theme_filters(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()>
             CROSS JOIN (SELECT 'include_themes' AS name UNION ALL SELECT 'exclude_themes' UNION ALL SELECT 'theme_match') k;
          DELETE FROM sync_fields WHERE key LIKE 'set/%/focus_theme';
          ALTER TABLE sets DROP COLUMN focus_theme;",
+    )
+}
+
+/// Replace `target_rating ± variance` (and the recommended-range toggle) with an explicit
+/// inclusive range, using the same rule as [`crate::sets::legacy_range`]: the old band clamped
+/// to 400–3000, grown upward to the 100-point minimum width. Both range fields take the later of
+/// the two legacy sync clocks, matching the portable-format upgrade.
+fn migrate_rating_range(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "ALTER TABLE sets ADD COLUMN rating_min INTEGER NOT NULL DEFAULT 900 CHECK(rating_min BETWEEN 400 AND 3200);
+         ALTER TABLE sets ADD COLUMN rating_max INTEGER NOT NULL DEFAULT 1100 CHECK(rating_max BETWEEN 400 AND 3200 AND rating_max>=rating_min+100);
+         UPDATE sets SET rating_min=min(3100,max(400,target_rating-variance)),
+            rating_max=max(min(3000,target_rating+variance),min(3100,max(400,target_rating-variance))+100);
+         INSERT OR REPLACE INTO sync_fields(key,value,updated_at)
+            SELECT 'set/'||s.uid||'/'||k.name,CASE k.name WHEN 'rating_min' THEN s.rating_min ELSE s.rating_max END,max(f.updated_at)
+            FROM sets s JOIN sync_fields f ON f.key IN ('set/'||s.uid||'/target_rating','set/'||s.uid||'/variance')
+            CROSS JOIN (SELECT 'rating_min' AS name UNION ALL SELECT 'rating_max') k
+            GROUP BY s.id,k.name;
+         DELETE FROM sync_fields WHERE key LIKE 'set/%/target_rating' OR key LIKE 'set/%/variance' OR key LIKE 'set/%/restrict_recommended';
+         ALTER TABLE sets DROP COLUMN target_rating;
+         ALTER TABLE sets DROP COLUMN variance;
+         ALTER TABLE sets DROP COLUMN restrict_recommended;",
     )
 }
