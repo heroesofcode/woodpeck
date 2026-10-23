@@ -165,3 +165,148 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+    use crate::sync::format::{Attempt, Cycle, Set};
+    use crate::{puzzle::Outcome, stats::AttemptKind};
+    fn state() -> State {
+        let uid = "a".repeat(32);
+        let mut puzzles = Vec::new();
+        for i in 0..20 {
+            let mut puzzle = crate::puzzle::fixture();
+            puzzle.id = format!("p{i:02}");
+            puzzles.push(puzzle);
+        }
+        let fields = serde_json::to_value(crate::sets::BuilderParams {
+            size: 20,
+            ..Default::default()
+        })
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(key, value)| {
+            (
+                key.clone(),
+                Field {
+                    value: value.clone(),
+                    updated_at: 10,
+                },
+            )
+        })
+        .collect();
+        let cycle = Cycle {
+            uid: format!("{uid}-1"),
+            number: 1,
+            started_at: 1,
+            completed_at: None,
+            order: puzzles.iter().map(|p| p.id.clone()).collect(),
+        };
+        let set = Set {
+            uid: uid.clone(),
+            fields,
+            created_at: 1,
+            seed: 42,
+            puzzles,
+            cycles: [(cycle.uid.clone(), cycle)].into(),
+        };
+        State {
+            sets: [(uid.clone(), set)].into(),
+            attempts: [(uid, Vec::new())].into(),
+            ..State::default()
+        }
+    }
+    fn answer(index: u8, timestamp: i64) -> Attempt {
+        Attempt {
+            uid: format!("{index:032x}"),
+            puzzle_id: format!("p{index:02}"),
+            cycle_uid: Some(format!("{}-1", "a".repeat(32))),
+            kind: AttemptKind::Cycle,
+            outcome: Outcome::Correct,
+            time_ms: 1000,
+            moves_played: vec![],
+            created_at: timestamp,
+            local_day: None,
+        }
+    }
+    #[test]
+    fn partial_cycles_complete_together_and_merge_is_associative() {
+        let uid = "a".repeat(32);
+        let mut a = state();
+        let mut b = state();
+        let mut c = state();
+        a.attempts
+            .insert(uid.clone(), (0..7).map(|i| answer(i, 2)).collect());
+        b.attempts
+            .insert(uid.clone(), (7..14).map(|i| answer(i, 3)).collect());
+        c.attempts
+            .insert(uid.clone(), (14..20).map(|i| answer(i, 4)).collect());
+        a.sets
+            .get_mut(&uid)
+            .unwrap()
+            .fields
+            .get_mut("name")
+            .unwrap()
+            .value = serde_json::json!("Renamed");
+        a.sets
+            .get_mut(&uid)
+            .unwrap()
+            .fields
+            .get_mut("name")
+            .unwrap()
+            .updated_at = 20;
+        b.sets
+            .get_mut(&uid)
+            .unwrap()
+            .fields
+            .get_mut("target_cycles")
+            .unwrap()
+            .value = serde_json::json!(7);
+        b.sets
+            .get_mut(&uid)
+            .unwrap()
+            .fields
+            .get_mut("target_cycles")
+            .unwrap()
+            .updated_at = 30;
+        let ab = merge(&a, &b).unwrap();
+        assert_eq!(ab, merge(&b, &a).unwrap());
+        let abc = merge(&ab, &c).unwrap();
+        assert_eq!(abc, merge(&a, &merge(&b, &c).unwrap()).unwrap());
+        assert_eq!(abc, merge(&abc, &abc).unwrap());
+        assert_eq!(abc.attempts[&uid].len(), 20);
+        assert_eq!(
+            abc.sets[&uid].cycles.values().next().unwrap().completed_at,
+            Some(4)
+        );
+        assert_eq!(abc.sets[&uid].fields["name"].value, "Renamed");
+        assert_eq!(abc.sets[&uid].fields["target_cycles"].value, 7);
+        assert_eq!(abc, State::from_files(&abc.files().unwrap()).unwrap());
+    }
+    #[test]
+    fn duplicate_attempts_are_idempotent_but_corrupt_uid_collisions_fail() {
+        let uid = "a".repeat(32);
+        let mut a = state();
+        a.attempts.get_mut(&uid).unwrap().push(answer(0, 2));
+        let mut b = a.clone();
+        assert_eq!(merge(&a, &b).unwrap().attempts[&uid].len(), 1);
+        b.attempts.get_mut(&uid).unwrap()[0].outcome = Outcome::Skipped;
+        assert!(merge(&a, &b).is_err());
+        let mut b = a.clone();
+        b.sets
+            .get_mut(&uid)
+            .unwrap()
+            .cycles
+            .values_mut()
+            .next()
+            .unwrap()
+            .order
+            .reverse();
+        assert!(merge(&a, &b).is_err());
+        let mut b = a.clone();
+        b.sets.get_mut(&uid).unwrap().seed = 100;
+        assert!(merge(&a, &b).is_err());
+    }
+}
