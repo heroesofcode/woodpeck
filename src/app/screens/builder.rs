@@ -246,52 +246,88 @@ impl Woodpeck {
             });
     }
     fn builder_difficulty(&mut self, ui: &mut Ui) {
+        use crate::sets::{
+            MIN_RANGE_WIDTH, RANGE_STEP, RATING_BOUNDS, RangeHandle, drag_range, quick_ranges,
+        };
+        let rating = self.settings.user_rating;
+        let accent = style::color(self.palette.semantic().accent);
+        let before = self.builder.range();
         ui.heading("Difficulty");
         ui.label(format!(
-            "A little below your peak works best. Your puzzle rating is {}.",
-            self.settings.user_rating
+            "Choose the puzzle rating range. A little below your peak works best; your puzzle rating is {rating}."
         ));
         ui.add_space(8.0);
-        widgets::caption(ui, "TARGET RATING");
-        let (low, high) = self.builder.target_limits(self.settings.user_rating);
-        self.builder.target_rating = self.builder.target_rating.clamp(low, high);
-        ui.spacing_mut().slider_width = (ui.available_width() - 74.0).clamp(100.0, 500.0);
-        ui.add(egui::Slider::new(
-            &mut self.builder.target_rating,
-            low..=high,
-        ));
-        ui.horizontal_wrapped(|ui| {
-            widgets::chip(
-                ui,
-                difficulty_caption(self.builder.target_rating, self.settings.user_rating),
-                style::color(self.palette.semantic().accent),
-            );
-            ui.small(format!("{low}–{high}"));
-        });
-        ui.checkbox(
-            &mut self.builder.restrict_recommended,
-            "Restrict to recommended range",
-        );
-        ui.add_space(6.0);
         widgets::caption(
             ui,
             format!(
-                "RATING VARIANCE · {}–{}",
-                self.builder.band().0,
-                self.builder.band().1
+                "RATING RANGE · {}–{}",
+                self.builder.rating_min, self.builder.rating_max
             ),
         );
-        ui.add(
-            egui::Slider::new(&mut self.builder.variance, 50..=200)
-                .step_by(25.0)
-                .prefix("±"),
-        );
-        ui.small("Narrow (±50)                              Wide (±200)");
+        if let Some((handle, value)) = widgets::range_slider(
+            ui,
+            self.builder.range(),
+            RATING_BOUNDS,
+            RANGE_STEP,
+            accent,
+            Some((rating, "You")),
+        ) {
+            self.builder
+                .set_range(drag_range(self.builder.range(), handle, value));
+        }
+        ui.horizontal_wrapped(|ui| {
+            let (mut min, mut max) = self.builder.range();
+            ui.label("Min");
+            let min_edit = ui
+                .add(
+                    egui::DragValue::new(&mut min)
+                        .range(RATING_BOUNDS.0..=RATING_BOUNDS.1 - MIN_RANGE_WIDTH)
+                        .speed(RANGE_STEP),
+                )
+                .on_hover_text("Lowest puzzle rating, inclusive");
+            ui.label("Max");
+            let max_edit = ui
+                .add(
+                    egui::DragValue::new(&mut max)
+                        .range(RATING_BOUNDS.0 + MIN_RANGE_WIDTH..=RATING_BOUNDS.1)
+                        .speed(RANGE_STEP),
+                )
+                .on_hover_text("Highest puzzle rating, inclusive");
+            if min_edit.changed() {
+                self.builder
+                    .set_range(drag_range(self.builder.range(), RangeHandle::Min, min));
+            } else if max_edit.changed() {
+                self.builder
+                    .set_range(drag_range(self.builder.range(), RangeHandle::Max, max));
+            }
+            widgets::chip(ui, difficulty_caption(self.builder.range(), rating), accent);
+        });
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            for (label, range) in quick_ranges(rating) {
+                if ui
+                    .selectable_label(self.builder.range() == range, label)
+                    .on_hover_text(format!("{}–{}", range.0, range.1))
+                    .clicked()
+                {
+                    self.builder.set_range(range);
+                }
+            }
+        });
+        ui.small(format!(
+            "Both ends are inclusive. Ranges span {}–{} and are at least {MIN_RANGE_WIDTH} points wide; the range is never widened for you.",
+            RATING_BOUNDS.0, RATING_BOUNDS.1
+        ));
+        if self.builder.range() != before {
+            // A shortfall notice describes the old range; drop it once the range changes.
+            self.creation = None;
+        }
     }
     fn builder_volume(&mut self, ui: &mut Ui) {
         ui.heading("Training volume");
         ui.label("Start with 50–100 puzzles if you're unsure.");
         widgets::caption(ui, "TOTAL PUZZLES");
+        ui.spacing_mut().slider_width = (ui.available_width() - 74.0).clamp(100.0, 500.0);
         ui.add(egui::Slider::new(&mut self.builder.size, 20..=500));
         ui.add_space(6.0);
         widgets::caption(ui, "TRAINING CYCLES");
@@ -351,17 +387,15 @@ impl Woodpeck {
             ui.colored_label(
                 style::color(self.palette.semantic().warning),
                 format!(
-                    "{} puzzles short. Found {} of {}{} after widening the band from {}–{} to {}–{}.",
+                    "{} puzzles short. Found {} of {} rated {}–{}{}. Widen the range, change the themes, or fetch more.",
                     c.shortfall(),
                     c.available,
                     c.requested,
+                    c.range.0,
+                    c.range.1,
                     self.builder
                         .theme_summary()
                         .map_or_else(String::new, |t| format!(" matching {t}")),
-                    c.original_band.0,
-                    c.original_band.1,
-                    c.used_band.0,
-                    c.used_band.1
                 ),
             );
             if ui

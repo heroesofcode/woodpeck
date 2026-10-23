@@ -119,10 +119,8 @@ impl Woodpeck {
                 widgets::caption(
                     ui,
                     format!(
-                        "{} PUZZLES · {}–{}",
-                        set.set.params.size,
-                        set.set.params.band().0,
-                        set.set.params.band().1
+                        "{} PUZZLES · RATED {}–{}",
+                        set.set.params.size, set.set.params.rating_min, set.set.params.rating_max
                     ),
                 );
             });
