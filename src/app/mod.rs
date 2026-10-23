@@ -94,6 +94,7 @@ pub struct Woodpeck {
     origin: Instant,
     builder: BuilderParams,
     creation: Option<SetCreation>,
+    theme_search: String,
     review_theme: String,
     review_sort: ReviewSort,
     status: String,
@@ -146,6 +147,7 @@ impl Woodpeck {
             origin,
             builder,
             creation: None,
+            theme_search: String::new(),
             review_theme: String::new(),
             review_sort: ReviewSort::MostRecent,
             status: "Preparing local puzzles…".into(),
@@ -174,6 +176,13 @@ impl Woodpeck {
         }
         if matches!(screen, Screen::Review) {
             app.select_first_review();
+        }
+        if matches!(screen, Screen::Builder) && app.screenshot.is_some() {
+            // Show the theme picker in use in reproducible screenshots.
+            for key in ["fork", "pin", "mate", "mate"] {
+                app.builder.cycle_theme(key);
+            }
+            app.builder.theme_match = crate::sets::ThemeMatch::All;
         }
         app
     }

@@ -54,6 +54,21 @@ pub fn chip(ui: &mut Ui, text: impl Into<String>, color: Color32) {
     ui.spacing_mut().button_padding = padding;
     ui.spacing_mut().interact_size.y = height;
 }
+/// A clickable chip with a trailing remove mark, tinted like [`chip`].
+pub fn removable_chip(ui: &mut Ui, text: &str, color: Color32) -> egui::Response {
+    ui.add(
+        egui::Button::new(
+            RichText::new(format!("{text}  ×"))
+                .size(11.0)
+                .strong()
+                .color(color),
+        )
+        .fill(color.gamma_multiply(0.13))
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(6)
+        .wrap_mode(egui::TextWrapMode::Extend),
+    )
+}
 pub fn card(ui: &Ui) -> egui::Frame {
     egui::Frame::new()
         .fill(ui.visuals().panel_fill)
