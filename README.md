@@ -1,184 +1,161 @@
 # woodpeck
 
-A local Woodpecker Method chess puzzle trainer, written in Rust. Build a fixed
-set, repeat it across cycles, and solve misses in a separate review queue.
+A native **Woodpecker Method chess puzzle trainer**, inspired by [Peck Chess](https://peckchess.com). Build a fixed set of positions, repeat it over several cycles, and watch your solving time and accuracy improve. No login; your sets, results, and settings stay in a local SQLite database.
+
+## Features
+
+- **A review queue that catches every miss.** Wrong answers and skips enter Review immediately, with a pending badge in navigation and a dashboard callout. Filter by theme or sort by recency and accuracy. Only a correct solve in Review clears an item; review attempts update lifetime accuracy without changing cycle results. The puzzle stays in its set for future cycles.
+- **Sets and presets.** General, tactical weakness, and rating presets; 20–500 positions; adjustable rating bands and 1–10 cycles. Fixed snapshots preserve your positions when the puzzle library changes. Optional seeded shuffling changes the order each cycle.
+- **Cycles and a count-up timer.** Resume across restarts, compare cycles, and step through the solution after a mistake. The timer pauses during animations, feedback, walkthroughs, promotion, and loss of focus. Optional completion sound and auto-advance.
+- **Progress.** Time and accuracy charts, comparisons with cycle one, performance by theme, and most-missed positions. Small local streak, XP, and rank widgets.
+- **Omarchy theme sync with live reload.** Desktop colors and fontconfig fonts, with two-second theme polling that follows directory and symlink swaps. Built-in dark and light themes and eight board palettes.
+- **Responsive tiling layout.** Native Wayland and X11, a sidebar that collapses into a rail or top bar, and a board/panel layout that stacks below 900 px. Supports narrow 360 px tiles, wide displays, and HiDPI. SVG pieces, click/click and drag/drop, legal targets, and promotion selection.
+- **Puzzles ready offline.** An embedded Lichess starter pack of 8,540 puzzles imports on first launch. Stream the full database from Settings or the CLI. If a requested set has too few local matches, the builder offers a Lichess API fallback. Export your sets as PGN from Settings.
+
 Puzzles from the Lichess puzzle database (CC0).
 
-Milestone 3 adds the native desktop: Dashboard, Train, Review, Progress, New set,
-and Settings, all backed by the persisted application service. Rust 1.97 or newer is required (edition 2024).
-Native `eframe` dependencies include Glow, Wayland, X11, and default fonts.
+## Screenshots
+
+Screenshots use an isolated demo database, with real training and review state.
+
+| Dashboard | Training |
+| --- | --- |
+| ![Dashboard with review callout and saved set](docs/screenshots/dashboard.png) | ![Training board and cycle panel](docs/screenshots/training-wide.png) |
+| Review queue | Progress |
+| ![Review board, filters, and pending cards](docs/screenshots/review-wide.png) | ![Cycle comparisons and progress charts](docs/screenshots/progress.png) |
+| Set builder | Narrow training, 360×640 |
+| ![Preset picker and set builder](docs/screenshots/builder.png) | ![Training in a narrow tile](docs/screenshots/training-narrow.png) |
+
+## Build and install
+
+Requires Rust **1.97 or newer** (edition 2024). `rust-toolchain.toml` selects stable with rustfmt and Clippy. SQLite is bundled and HTTPS uses rustls.
+
+Arch / Omarchy:
 
 ```sh
-cargo run -- --help
-cargo run -- --version
-cargo run                         # open the desktop; starter import runs in the background
-cargo run -- import puzzles.csv.zst
-cargo run -- import https://example.org/puzzles.csv.zst
-cargo run -- import --lichess      # stream the full Lichess database
+sudo pacman -S --needed rust wayland libxkbcommon alsa-lib fontconfig
 ```
 
-Imports accept plain CSV or zstd, including the skippable frame prefix in the
-full Lichess dump. Columns are read by name; the current 11-column format,
-10-column format, reordered headers, and omitted trailing fields are supported.
-Quality filtering requires popularity ≥80, rating deviation ≤100, ≥500 plays,
-and no `veryLong` tag. Invalid chess lines are rejected. Imports commit batches
-of 1,000 accepted rows; cancellation retains committed batches and drops the
-unfinished batch. Progress includes compressed bytes consumed and rows scanned,
-accepted, and rejected. The full dump is downloaded as a stream, never buffered
-in memory. The embedded CC0 starter pack contains 8,540 puzzles; its version
-marker advances only after success, and force import restores its source rows.
-
-Run the quality checks with:
+Debian / Ubuntu:
 
 ```sh
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo clippy --all-targets --no-default-features -- -D warnings
-cargo test --all-features
-cargo test --no-default-features
+sudo apt-get update
+sudo apt-get install --no-install-recommends -y \
+  build-essential pkg-config libxkbcommon-dev libwayland-dev libx11-dev \
+  libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa-dev \
+  libasound2-dev libfontconfig1-dev
 ```
 
-Tests run offline using fixtures and loopback HTTP servers. `unsafe` is forbidden;
-Clippy pedantic is enabled in Cargo.toml. SQLite is bundled and HTTPS uses rustls.
-The default `sound` feature uses rodio's playback support. Linux sound builds
-require ALSA development files and pkg-config (Debian: `libasound2-dev pkgconf`).
-Use `--no-default-features` to omit audio entirely. Device discovery and the
-short generated sine chime run on a separate thread; unavailable devices are
-ignored. Tests validate the generated samples without opening an audio device.
-
-The library modules are:
-
-- `puzzle`: full-line validation using shakmaty, orientation, promotion, alternative
-  final checkmate, injected animation deadlines, immediate failure, and walkthrough.
-- `timer`: injectable monotonic clock, independent pause gates, minimum recorded
-  time, visibility preference, and minute/second/tenth formatting.
-- `layout`: pure responsive geometry for stacked/column layouts and navigation.
-- `sets`: exact presets and labels, builder validation, estimated time, recommended
-  bands, and seeded rating-bucket generation through `PuzzleQuery`.
-- `stats`: resumable cycles, deterministic shuffling, extension through ten cycles,
-  accuracy, time deltas, best completed cycle, theme performance, and most misses.
-- `review`: one entry per puzzle and set, shared membership transition rules,
-  theme filtering, sorting, card data, and lifetime accuracy.
-- `theme`: the complete Omarchy alias cascade, mode detection, legacy Alacritty,
-  injectable HOME discovery, polling through theme swaps, optional fontconfig,
-  semantic palette values, and all eight OKLCH board themes.
-- `settings`: serialized preferences with defaults for missing keys.
-- `store`: versioned SQLite migrations and repositories for source puzzles,
-  immutable set snapshots, cycles, attempts, review, and settings.
-- `source`: streaming CSV/zstd import, versioned embedded starter pack, Lichess
-  batch/daily/by-id client, PGN reconstruction, attribution, links, and PGN export.
-- `service`: UI-independent application operations plus a serial background
-  worker with cancellation handles and polled channel events.
-- `motivation`: local calendar-day streaks, XP, levels, and ranks.
-- `sound`: optional generated completion chime.
-- `app`: reserved for the desktop UI milestone.
-
-Record outcomes through `Store::record_attempt`. The attempt, review transition,
-cycle completion, and streak/XP changes are committed in one transaction. Wrong
-and skipped cycle answers immediately enqueue a review item. Correct cycle answers leave pending
-review items alone; only a correct Review attempt clears them. Review attempts
-update lifetime accuracy and never cycle statistics. Duplicate cycle attempts,
-out-of-order answers, cross-set cycle references, and reviews of nonpending
-items are rejected. Set snapshots remain independent of source database updates.
-
-Builder variance is a half-width: default ±100 corresponds to the source form's
-200-point full width. Difficulty captions use the inferred thresholds documented
-in `sets`. Unavailable outcomes are tracked separately and excluded from accuracy;
-skips are misses. General generation enforces a 30% cap on every theme tag, even
-when multiple tags describe the same puzzle. A shortage is reported explicitly
-if the cap cannot be met after widening. Selection is deterministic for a seed,
-with 32 candidate orderings tried per band to reduce greedy-selection bias.
-
-`WOODPECK_DATA_DIR` overrides the application data directory (the database is
-`$WOODPECK_DATA_DIR/woodpeck.db`). Otherwise, the default database path is `$XDG_DATA_HOME/woodpeck/woodpeck.db`, with the usual
-`$HOME/.local/share` fallback on Linux. `Store::memory`, explicit database paths,
-and `database_path_for` support isolated tests and portable use. Settings live in
-SQLite. Theme discovery prefers `$HOME/.local/state/omarchy/current/theme` over
-the legacy `.config` location. `ThemePoller` re-discovers the directory every two
-seconds on a dedicated desktop worker, including directory/symlink swaps.
-
-`AppService::open` (or `new` with an existing `Store`) starts a serial worker
-and automatically queues the starter import. Call `poll_events` each frame to
-receive job start, import/fetch progress, and completion/error events. `submit`
-returns a cancellation handle; `cancel_job` also accepts the startup event ID.
-Dropping the service cancels pending jobs. Database locks cover only bounded
-writes and local operations; downloads and rate-limit waits never hold them.
-
-The service exposes set summaries, builder creation results with shortfall and
-widening information, start/resume/current puzzle, next/extended cycles,
-attempt recording, review filtering/sorting/counts, progress reports, settings,
-motivation, PGN export to a path, and transactional set deletion. Source updates
-and deletion never change other sets' snapshots or erase earned XP.
-
-Set generation first uses the local database. When it reports a shortfall, the
-UI can inform the user and enqueue `CreateSetWithFallback`. The worker fetches
-at most five batches, filters by the requested band/theme, inserts valid rows,
-and regenerates using the same selection rules. Remaining shortfalls never
-save a partial set. Anonymous API difficulty is mapped relative to rating 1500;
-requests are sequential across clients, use `woodpeck/<version>`, have connect,
-response, and read timeouts, and wait 60 seconds after HTTP 429. Cancellation
-interrupts the wait; an in-flight blocking read is bounded by its timeout.
-`PuzzleFetcher` is injectable for offline application tests.
-
-Streaks use local calendar dates and are updated once per active day. Use
-`Motivation::streak_on` with today's local day to display an expired streak as
-zero. Correct cycle/review solves earn 10 XP; finishing a cycle earns 50 XP.
-Level L starts at `100 × (L − 1)²` XP, with the ranks from the functional spec.
-
-The window title and native app ID/class are `woodpeck`, with Wayland and X11
-support. Navigation adapts from a sidebar to an icon rail to a top bar below
-640 logical pixels. Solving switches to a stacked, scrollable layout below
-900 pixels. The board is bounded by both content width and height, with
-click/click and drag/drop input, promotion selection, legal targets, check glow,
-move animation, and feedback flashes. `S` skips, `T` toggles the timer, arrows
-step the missed line, and Enter/Space advance. Shortcuts respect text entry,
-menus, modifiers, and promotion. Focus loss and minimizing pause the timer.
-Settings persist immediately. PGN export uses a path field; no file-dialog
-dependency is required. Full imports show byte/row progress and can be cancelled.
-The desktop entry is in `assets/woodpeck.desktop`.
-
-The embedded cburnett SVG pieces are by Colin M.L. Burnett, sourced from
-[lichess-org/lila](https://github.com/lichess-org/lila/tree/master/public/piece/cburnett),
-dual licensed GPLv2+ / CC BY-SA 3.0. See `assets/pieces/LICENSE`. `resvg` renders
-them at the physical square size and caches textures, including HiDPI sizes.
-UI fonts are loaded with fontconfig when available, with egui's built-in fallback.
-
-For a deterministic visual self-check, screenshot mode imports the starter into
-an isolated in-memory SQLite database, builds a set, and records two full cycles
-plus a partial third cycle, including misses and skips. It never opens your real
-database. After a few frames it saves a PNG and exits; a failed save returns an
-error. Egui 0.37 delivers screenshots through the viewport screenshot callback
-(the former screenshot event API was replaced).
+Build from source:
 
 ```sh
-xvfb-run -a -s "-screen 0 1920x1080x24" cargo run -- --screenshot /tmp/training.png --screen training --size 1280x800
-xvfb-run -a -s "-screen 0 1920x1080x24" cargo run -- --screenshot /tmp/narrow.png --screen training --size 360x640
-# Other screens: dashboard, review, progress, builder, settings
-# Other tiles: 640x900, 960x1080, 1920x1080; use a 3840x2160 Xvfb for 4K.
+git clone https://github.com/heroesofcode/woodpeck.git
+cd woodpeck
+cargo build --release --locked
+./target/release/woodpeck
 ```
 
-The visual validation matrix used for milestone 3 (after building the binary):
+Install the binary, desktop entry, and icon for your user:
 
 ```sh
+install -Dm755 target/release/woodpeck "$HOME/.local/bin/woodpeck"
+install -Dm644 assets/woodpeck.desktop "$HOME/.local/share/applications/woodpeck.desktop"
+install -Dm644 assets/woodpeck.svg "$HOME/.local/share/icons/hicolor/scalable/apps/woodpeck.svg"
+```
+
+Ensure `$HOME/.local/bin` is in your `PATH`. The starter pack and chess pieces are embedded in the binary, so no asset directory is needed at runtime.
+
+The default `sound` feature uses ALSA on Linux; playback happens in the background and quietly skips unavailable audio devices. To omit audio, build with `cargo build --release --locked --no-default-features`.
+
+## Usage
+
+Start with **New set**, choose a preset or a tactical focus, then create a set. **Continue** resumes its current cycle. After a wrong move, walk through the missed line or advance; the item is already in **Review**. Use Review regularly and solve each queued puzzle correctly to clear it. **Progress** compares completed cycles. **Settings** controls themes, auto-advance, sound, tactical labels, imports, and PGN export.
+
+| Key | Action |
+| --- | --- |
+| `S` | Skip on the player's turn; add to Review |
+| `T` | Toggle timer visibility |
+| `←` | Previous move in the missed-line walkthrough |
+| `→` / `Space` | Next move in the walkthrough |
+| `Enter` / `Space` | Next puzzle after completion |
+
+Shortcuts pause while typing, while a menu/dialog or promotion picker is open, or while modifiers are held. Promote using the on-screen Q/R/B/N picker.
+
+### Import puzzles
+
+```sh
+woodpeck import /path/to/lichess_db_puzzle.csv.zst
+woodpeck import /path/to/puzzles.csv
+woodpeck import https://database.lichess.org/lichess_db_puzzle.csv.zst
+woodpeck import --lichess
+woodpeck --help
+```
+
+The Settings download button uses the same streaming importer. Imports accept plain or zstd-compressed Lichess CSV, filter for popularity ≥80, rating deviation ≤100, ≥500 plays, and exclude `veryLong` puzzles. Invalid chess lines are rejected. Progress reports bytes and rows. Cancelling in Settings retains committed batches of 1,000 accepted rows and drops the unfinished batch.
+
+The API fallback is offered explicitly when local generation is short; it makes sequential requests and waits at least 60 seconds after HTTP 429. It may still find too few puzzles for a narrow band; an incomplete set is never saved.
+
+### Desktop integration and local data
+
+The window title, X11 class, and Wayland app ID are `woodpeck`. An optional Hyprland rule for configurations using the classic rule syntax:
+
+```ini
+windowrule = float, class:^(woodpeck)$
+```
+
+Keep normal tiling to use the responsive layout. Rule syntax depends on your Hyprland version.
+
+| Data | Linux location |
+| --- | --- |
+| Database, sets, attempts, review queue, settings | `$XDG_DATA_HOME/woodpeck/woodpeck.db` |
+| Default database when XDG is unset | `$HOME/.local/share/woodpeck/woodpeck.db` |
+| Optional database directory override | `$WOODPECK_DATA_DIR/woodpeck.db` |
+| Current Omarchy theme | `$HOME/.local/state/omarchy/current/theme/` |
+| Legacy Omarchy theme fallback | `$HOME/.config/omarchy/current/theme/` |
+
+Settings are stored in SQLite. Theme discovery reads `colors.toml`, falls back to legacy `alacritty.toml`, and supports Omarchy's color aliases and mode detection. System follows Omarchy when available and otherwise uses the built-in dark palette. Choose Light or Dark to override it.
+
+## Development
+
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo clippy --all-targets --no-default-features --locked -- -D warnings
+cargo test --all-features --locked
+cargo test --no-default-features --locked
+cargo build --release --locked
+cargo install cargo-deny --locked
+cargo deny check
+```
+
+Clippy pedantic is enabled; unsafe code is forbidden. Tests use fixtures, isolated SQLite databases, and loopback HTTP servers. The CI aggregate check is named `ci` and requires formatting, both Clippy configurations, tests, the release build, and supply-chain checks to succeed. PR titles use Conventional Commits.
+
+Generate a screenshot without opening your real database (requires Xvfb and `xauth`; on Debian/Ubuntu install `xvfb xauth`):
+
+```sh
+xvfb-run -a -s '-screen 0 1920x1080x24' \
+  target/release/woodpeck --screenshot /tmp/training.png --screen training --size 1920x1080
+```
+
+Validate every screen at common tiling sizes:
+
+```sh
+mkdir -p /tmp/woodpeck-screenshots
 for screen in dashboard training review progress builder settings; do
-  for size in 1280x800 360x640; do
-    xvfb-run -a -s "-screen 0 1920x1080x24" target/debug/woodpeck --screenshot "/tmp/woodpeck-${screen}-${size}.png" --screen "$screen" --size "$size"
+  for size in 360x640 960x1080 1920x1080; do
+    xvfb-run -a -s '-screen 0 1920x1080x24' \
+      target/release/woodpeck --screenshot "/tmp/woodpeck-screenshots/$screen-$size.png" \
+      --screen "$screen" --size "$size"
   done
 done
-for spec in 'training 640x900' 'review 960x1080' 'progress 1920x1080'; do
-  set -- $spec
-  xvfb-run -a -s "-screen 0 1920x1080x24" target/debug/woodpeck --screenshot "/tmp/woodpeck-$1-$2.png" --screen "$1" --size "$2"
-done
-xvfb-run -a -s "-screen 0 3840x2160x24" target/debug/woodpeck --screenshot /tmp/woodpeck-dashboard-3840x2160.png --screen dashboard --size 3840x2160
-WINIT_X11_SCALE_FACTOR=2 xvfb-run -a -s "-screen 0 3840x2160x24" target/debug/woodpeck --screenshot /tmp/woodpeck-training-hidpi.png --screen training --size 1920x1080
 ```
 
-Validation includes pure formatting, chart scaling, orientation/hit testing,
-shortcut dispatch, SVG rasterization, tile geometry, actual egui width checks for
-all screens, and a UI-to-service skip/Review flow. Run `cargo fmt --check`,
-`cargo test --all-features`, `cargo test --no-default-features`, and Clippy with
-`--all-targets` and `-- -D warnings -W clippy::pedantic` for both feature modes.
+The code separates the puzzle engine, injected timer, set generation, review rules, progress calculations, streaming sources, SQLite repositories, and background application service from the native UI in `src/app/`.
 
-License: GPL-3.0-or-later, compatible with shakmaty and pgn-reader. Puzzle data is
-CC0. Omarchy palette examples and the resolver fixture were supplied with the
-build brief; the shell fixture verifies parity with the official cascade.
+## Credits and licenses
+
+- Inspired by [Peck Chess](https://peckchess.com) and the Woodpecker Method.
+- Puzzles from the [Lichess puzzle database](https://database.lichess.org/#puzzles), released under [CC0](https://creativecommons.org/publicdomain/zero/1.0/). This includes the bundled starter pack.
+- **cburnett chess pieces** by Colin M.L. Burnett, from [lichess-org/lila](https://github.com/lichess-org/lila/tree/master/public/piece/cburnett), dual licensed **GPLv2+ / CC BY-SA 3.0**. See [assets/pieces/LICENSE](assets/pieces/LICENSE). Pieces are rasterized locally with resvg.
+- Built with Rust, eframe/egui, shakmaty, pgn-reader, rusqlite, and other open-source libraries listed in `Cargo.toml` and `Cargo.lock`.
+- woodpeck is licensed under **GPL-3.0-or-later**. See [LICENSE](LICENSE).
