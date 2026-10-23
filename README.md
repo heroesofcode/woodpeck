@@ -115,6 +115,70 @@ Keep normal tiling to use the responsive layout. Rule syntax depends on your Hyp
 
 Settings are stored in SQLite. Theme discovery reads `colors.toml`, falls back to legacy `alacritty.toml`, and supports Omarchy's color aliases and mode detection. System follows Omarchy when available and otherwise uses the built-in dark palette. Choose Light or Dark to override it.
 
+## Sync across computers
+
+Sync is opt-in. Use a **PRIVATE repository you own**: the repository contains
+training history, review mistakes, preferences, and the complete puzzles in
+your sets. Anyone with repository access can read that history. Git sync is not
+end-to-end encryption. The full puzzle library, local paths, window settings,
+audio devices, and sync credentials/configuration are not synced.
+
+With the GitHub CLI installed and authenticated, create or reuse your private
+`woodpeck-data` repository:
+
+```sh
+gh auth login
+gh auth setup-git
+woodpeck sync init --create
+```
+
+Alternatively, create an empty private repository manually and initialize it:
+
+```sh
+woodpeck sync init 'https://github.com/<user>/woodpeck-data.git'
+# Or use your configured SSH key:
+woodpeck sync init 'git@github.com:<user>/woodpeck-data.git'
+```
+
+Run the same `sync init <remote-url>` on each computer. Imported sets include
+all positions and solutions, so they work without downloading the Lichess
+library. Sync includes sets, cycles, every attempt, review state, preferences,
+and reconstructed XP/streaks. Git must be on PATH. Authentication uses your
+system Git credential helpers (`gh auth setup-git` for GitHub HTTPS), or SSH.
+woodpeck never stores tokens; do not put credentials in the remote URL. Commits
+use the fixed identity `woodpeck <woodpeck@localhost>` inside the data repository.
+Your global Git identity and source checkout are unchanged.
+
+Use Settings → Sync to edit the URL, enable/disable sync, sync now, and inspect
+the last sync and error. The navigation indicator reports pending, syncing,
+synced, offline, conflict resolved, or error. CLI equivalents:
+
+```sh
+woodpeck sync now
+woodpeck sync status
+woodpeck sync disable
+```
+
+Enabled startup pulls in the background. Changes sync after a 10-second pause;
+closing the app makes a bounded best-effort attempt. Offline training continues
+normally, with pending changes retried automatically and on next startup. A
+manual sync reports connection or authentication errors instead of prompting
+for a password.
+
+Two computers' progress is merged semantically: attempts are retained by UID,
+metadata and preferences use timestamps per field, and review items clear only
+when a correct review solve is later than their latest miss. Keep system clocks
+accurate. Equal-time review conflicts remain pending. Git text conflicts need
+no manual editing. Sets are merged as a union: deleting a local set can restore
+it from remote history on the next sync. A newer remote format stops sync until
+you upgrade. Disabling leaves local progress and existing private Git history
+in place; it does not delete the remote repository.
+
+Local sync files live in `$XDG_DATA_HOME/woodpeck/sync/` (or the platform data
+directory / `$WOODPECK_DATA_DIR` override), beside SQLite. Keep this directory
+outside the woodpeck source tree. See [the versioned format](docs/sync-format.md)
+for the portable schema and merge rules.
+
 ## Development
 
 ```sh

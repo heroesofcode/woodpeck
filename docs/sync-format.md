@@ -1,0 +1,103 @@
+# Portable progress format (schema version 1)
+
+The wire model lives in `src/sync/format.rs`. Git and SQLite are adapters around
+these serde types; a future server can exchange the same snapshot and use the
+pure join in `src/sync/merge.rs`.
+
+Every file is UTF-8 pretty JSON, with recursively sorted object keys, two-space
+indentation and one trailing newline. Maps use stable identities, never SQLite
+row IDs. There are no absolute paths, remote URLs, credentials, or machine
+configuration in the snapshot. Times are Unix seconds except `updated_at`
+(Unix milliseconds) and `local_day` (a proleptic Gregorian day number, where
+1970-01-01 is 719163). Clock synchronization between computers is recommended.
+
+| File | Contents |
+| --- | --- |
+| `manifest.json` | `{ "app": "woodpeck", "schema_version": 1 }` |
+| `settings.json` | Preference name to `{ "value": ..., "updated_at": ... }` |
+| `sets/<uid>.json` | Set identity, timestamped metadata fields, creation time, seed, ordered full puzzle snapshots, and cycles keyed by UID |
+| `attempts/<set-uid>.json` | Immutable attempts sorted by `(created_at, uid)` |
+| `review.json` | Puzzle ID to review identity, originating set UIDs, latest addition time, and retained resolution time |
+
+The only supported preferences are the fields in `Settings`: board and piece
+appearance, completion sound, tactical labels, auto advance, color theme, user
+rating, and shuffle preference. Window geometry, audio devices, library/import
+state, data paths, and all sync configuration stay local. The puzzle library is
+excluded; each set includes its own complete puzzle data (`id`, `fen`, `moves`,
+`rating`, `rd`, `popularity`, `nb_plays`, `themes`). A second computer can train
+imported sets with an empty library. XP and streaks are rebuilt from attempts
+and completed cycles, rather than added together as counters.
+
+## Identity and merge rules
+
+- Sets and attempts have random 128-bit lowercase hex UIDs generated with
+  SQLite `randomblob(16)`. Migration backfills existing records atomically.
+- A cycle UID is `<set-uid>-<number>`. Two computers starting the same next
+  cycle share this identity and the deterministic order. Earliest start time
+  wins; latest completion time wins. A union of partial answers can complete a
+  cycle. Every attempt remains in history; cycle statistics and resume position
+  count each puzzle once, choosing the first attempt by `(created_at, uid)`.
+- Set metadata fields and preferences join independently by maximum
+  `(updated_at, canonical compact JSON value)`. The value comparison breaks
+  equal-clock ties deterministically. Frozen puzzle membership, seed, creation
+  time, and cycle order must agree for a shared UID; inconsistency stops sync.
+- Attempt logs join by UID. Identical attempts deduplicate. A shared UID with
+  different payloads is an error, never a reason to drop an attempt.
+- Review entries join by puzzle ID. `set_uids` is a union; `uid` is the smallest
+  originating review UID. `added_at` is the maximum miss time, including misses
+  while already pending. `resolved_at` is the maximum retained correct-review
+  time, or null. The resolved state is derived: `resolved_at > added_at`.
+  Equal times remain queued. Correct cycle answers and unsuccessful review
+  attempts never resolve an item. A later miss requeues it. SQLite keeps a
+  membership row per originating set, with a unique composite UID; the wire
+  entry groups them into one puzzle identity.
+
+The join is commutative, associative and idempotent for valid canonical states.
+Sets and cycles are unions: deleting a local set does not delete its remote
+history, so a subsequent sync restores it. There is no distributed deletion
+operation in schema 1. Changing this behavior requires a versioned tombstone
+format. Unknown preference/set fields, malformed records, and inconsistent
+identities stop sync. A newer `schema_version` always stops sync before import,
+working-tree writes or push; automatic retries pause until a manual retry or
+configuration change. Upgrade the app to understand a newer schema.
+
+## Git adapter and local durability
+
+`$DATA/sync/` is an independent Git repository. The URL, opt-in flag, last sync,
+status, last error, and acknowledged local generation live only in the local
+SQLite `sync_config` setting; origin also lives in this sync repository's
+`.git/config`. The source checkout is never used as a data directory.
+
+The adapter fetches branches and reads remote files with `git show`. It prefers
+`main`, accepts `master` or a sole other branch, and uses `main` for a new empty
+remote. It imports a semantic union inside a transaction that includes any
+training recorded during the fetch, then takes a consistent snapshot and
+local change generation. It builds a tree with `hash-object --no-filters` and
+`update-index`, and creates a commit with the remote and local heads as parents
+(without duplicate parents). It never checks out remote content, runs a Git
+text merge, or force pushes. A rejected push triggers another fetch/join/push,
+at most three times within the operation's deadline. Unrelated remote files,
+such as an initial README, remain in the remote tree.
+
+Commits always use the sync-only identity `woodpeck <woodpeck@localhost>` through
+Git `-c` options. Global configuration is untouched. Commit/push signing and
+hooks are disabled for this generated repository; credential helpers and SSH
+configuration remain available. Embedded HTTP credentials, passwords and URL
+query/fragment parameters are rejected. Child stdin is closed,
+`GIT_TERMINAL_PROMPT=0` and noninteractive credential flags are set. Output is
+drained concurrently, and raw stderr (which may contain sensitive URLs) is not
+stored. Operations have a 45-second total deadline, including at most three
+push attempts. A local lease serializes sync operations, expiring after two
+minutes following a crash.
+
+The worker has its own SQLite connection and channels; network work holds no
+application service lock. It pulls on enabled startup and syncs after 10 seconds
+without local changes, including session/cycle completion and settings changes.
+SQLite change generations persist with the progress transaction, so a crash
+cannot hide unsynced progress. Failures preserve pending state and retry with
+5-second exponential backoff capped at 5 minutes, and again on next startup.
+Shutdown requests one best-effort sync, waits outside the native event loop for
+at most 3 seconds, then exits. Pending work survives if that budget expires.
+Disabling prevents future automatic sync; an operation already running may
+finish. Disabling does not delete local progress, the local Git history, or the
+private remote repository.
