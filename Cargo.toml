@@ -1,0 +1,45 @@
+[package]
+name = "woodpeck"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "A local Woodpecker Method chess puzzle trainer"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+shakmaty = "0.30.2"
+pgn-reader = "0.29.1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+thiserror = "2"
+directories = "6"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+csv = "1"
+zstd = "0.13"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Public domain methods document their contract in prose rather than repetitive sections.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Qualified module paths already convey the context of these domain types.
+module_name_repetitions = "allow"
+# Constructors and pure calculation methods are intentionally usable without attributes.
+must_use_candidate = "allow"
+# Millisecond totals are well below f64 integer precision in realistic training histories.
+cast_precision_loss = "allow"
+# Settings switches and timer pause gates are independent booleans, not mutually exclusive states.
+struct_excessive_bools = "allow"
+
+[profile.dev]
+debug = 1
