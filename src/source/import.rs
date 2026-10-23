@@ -222,6 +222,27 @@ mod tests {
         ));
     }
     #[test]
+    fn import_skips_lines_without_a_player_move_before_saving() {
+        let p = crate::puzzle::fixture();
+        let input = format!(
+            "PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes\nempty,{},,1000,75,100,1000,fork\nsetup,{},b7f7,1000,75,100,1000,fork\nplayable,{},b7f7 h5g3,1000,75,100,1000,fork\n",
+            p.fen, p.fen, p.fen
+        );
+        let mut store = Store::memory().unwrap();
+        let progress =
+            import_reader(&mut store, input.as_bytes(), &CancelFlag::default(), |_| {}).unwrap();
+        assert_eq!(progress.scanned, 3);
+        assert_eq!(progress.accepted, 1);
+        assert_eq!(progress.rejected, 2);
+        assert_eq!(store.puzzle_count().unwrap(), 1);
+        assert!(store.puzzle("empty").unwrap().is_none());
+        assert!(store.puzzle("setup").unwrap().is_none());
+        assert_eq!(
+            store.puzzle("playable").unwrap().unwrap().moves,
+            "b7f7 h5g3"
+        );
+    }
+    #[test]
     fn starter_is_versioned_idempotent_and_reimportable() {
         let mut s = Store::memory().unwrap();
         let c = CancelFlag::default();

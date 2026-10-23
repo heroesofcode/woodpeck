@@ -161,4 +161,14 @@ mod tests {
         assert!(parse_batch(&value.to_string()).is_err());
         assert!(parse_batch("{}").is_err());
     }
+    #[test]
+    fn rejects_api_solutions_with_no_player_moves() {
+        for solution in [vec![], vec![""], vec![" \t "]] {
+            let json = serde_json::json!({"game": {"pgn": "1. e4"}, "puzzle": {
+                "id": "setup", "rating": 1000, "plays": 1000, "themes": [],
+                "initialPly": 0, "solution": solution
+            }});
+            assert!(parse_puzzle(&json.to_string()).is_err());
+        }
+    }
 }

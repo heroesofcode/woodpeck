@@ -141,6 +141,7 @@ impl Engine {
                 .line
                 .as_ref()
                 .is_some_and(|l| self.index == l.moves.len())
+                && !self.moves_played.is_empty()
             {
                 State::Complete
             } else {
@@ -267,6 +268,46 @@ mod tests {
         assert_eq!(e.state(), State::Invalid);
         assert_eq!(e.orientation(), None);
         assert_eq!(e.outcome(), Some(Outcome::Invalid));
+    }
+    #[test]
+    fn setup_only_line_is_invalid_and_never_completes() {
+        let mut p = fixture();
+        p.moves = "b7f7".into();
+        for allow_any_final_checkmate in [false, true] {
+            let mut e = Engine::new(&p, at(0), allow_any_final_checkmate);
+            for ms in [0, 80, 220, 1000] {
+                e.update(at(ms));
+                assert_eq!(e.state(), State::Invalid);
+                assert_eq!(e.outcome(), Some(Outcome::Invalid));
+                assert_eq!(e.error(), Some(ValidationError::EmptySolution));
+                assert_eq!(e.moves_played(), &[] as &[String]);
+                assert_eq!(e.play("h5g3", at(ms)), Err(InputError::NotInteractive));
+            }
+        }
+    }
+    #[test]
+    fn opponent_completion_requires_a_player_move_even_if_validation_is_bypassed() {
+        let mut e = Engine::new(&fixture(), at(0), false);
+        e.line.as_mut().unwrap().moves.truncate(1);
+        e.line.as_mut().unwrap().positions.truncate(2);
+        e.update(at(1000));
+        assert_ne!(e.state(), State::Complete);
+        assert_eq!(e.outcome(), None);
+        assert_eq!(e.moves_played(), &[] as &[String]);
+    }
+    #[test]
+    fn line_ending_with_opponent_move_completes_after_correct_player_input() {
+        let mut p = fixture();
+        p.moves = "b7f7 h5g3 h1g2".into();
+        let mut e = Engine::new(&p, at(0), false);
+        e.update(at(220));
+        assert_eq!(e.state(), State::PlayerTurn);
+        assert_eq!(e.outcome(), None);
+        e.play("h5g3", at(300)).unwrap();
+        e.update(at(520));
+        assert_eq!(e.state(), State::Complete);
+        assert_eq!(e.outcome(), Some(Outcome::Correct));
+        assert_eq!(e.moves_played(), &["h5g3"]);
     }
     #[test]
     fn promotion_matches_piece() {
