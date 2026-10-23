@@ -808,6 +808,40 @@ fn portable_sync_roundtrip_merges_divergence_and_retains_local_ids() {
     );
 }
 #[test]
+fn multi_theme_sets_roundtrip_through_sync_files_to_another_store() {
+    use crate::sync::format::State;
+    let mut a = Store::memory().unwrap();
+    let mut rows = pool();
+    for p in &mut rows {
+        p.themes = vec!["fork".into(), "pin".into()];
+    }
+    let params = BuilderParams {
+        name: "Forks and pins".into(),
+        size: 20,
+        include_themes: vec!["fork".into(), "pin".into()],
+        exclude_themes: vec!["mate".into(), "sacrifice".into()],
+        theme_match: ThemeMatch::All,
+        preset_id: None,
+        ..BuilderParams::default()
+    };
+    a.create_set(&params, &rows, 5, 1, 1200).unwrap();
+    let files = a.export_sync().unwrap().files().unwrap();
+    let set_file = files
+        .iter()
+        .find(|(path, _)| path.starts_with("sets/"))
+        .unwrap()
+        .1;
+    for key in ["include_themes", "exclude_themes", "theme_match"] {
+        assert!(set_file.contains(key), "{key}");
+    }
+    assert!(!set_file.contains("focus_theme"));
+    assert!(files["manifest.json"].contains("\"schema_version\": 2"));
+    let mut b = Store::memory().unwrap();
+    b.import_sync(&State::from_files(&files).unwrap()).unwrap();
+    assert_eq!(b.sets().unwrap()[0].params, params);
+    assert_eq!(b.export_sync().unwrap().files().unwrap(), files);
+}
+#[test]
 fn sync_import_rejects_bad_state_atomically_and_preserves_new_training() {
     let mut s = Store::memory().unwrap();
     let id = setup(&mut s);

@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SCHEMA_VERSION: u32 = 1;
+/// 2: set `focus_theme` became `include_themes`, `exclude_themes` and `theme_match`.
+pub const SCHEMA_VERSION: u32 = 2;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     pub app: String,
@@ -92,6 +93,27 @@ pub fn valid_uid(uid: &str) -> bool {
         && uid
             .bytes()
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+/// Rewrites a schema 1 set's single focus theme into the schema 2 theme fields.
+/// The legacy clock is reused so an upgraded copy joins cleanly with migrated local data.
+fn upgrade_v1_set(set: &mut Set) {
+    let legacy = set.fields.remove("focus_theme");
+    let updated_at = legacy
+        .as_ref()
+        .map_or(set.created_at.saturating_mul(1000), |f| f.updated_at);
+    let include = match legacy.map(|f| f.value) {
+        Some(Value::String(theme)) if !theme.is_empty() => vec![Value::String(theme)],
+        _ => Vec::new(),
+    };
+    for (key, value) in [
+        ("include_themes", Value::Array(include)),
+        ("exclude_themes", Value::Array(Vec::new())),
+        ("theme_match", Value::String("any".into())),
+    ] {
+        set.fields
+            .entry(key.into())
+            .or_insert(Field { value, updated_at });
+    }
 }
 impl State {
     pub fn validate(&self) -> Result<()> {
@@ -210,9 +232,13 @@ impl State {
                 .get(path)
                 .ok_or_else(|| SyncError::Invalid(format!("Missing {path}.")))
         };
-        let manifest: Manifest = serde_json::from_str(get("manifest.json")?)?;
+        let mut manifest: Manifest = serde_json::from_str(get("manifest.json")?)?;
         if manifest.schema_version > SCHEMA_VERSION {
             return Err(SyncError::NewerSchema(manifest.schema_version));
+        }
+        let legacy = manifest.schema_version == 1;
+        if legacy {
+            manifest.schema_version = SCHEMA_VERSION;
         }
         let mut state = Self {
             manifest,
@@ -225,9 +251,11 @@ impl State {
                 .strip_prefix("sets/")
                 .and_then(|p| p.strip_suffix(".json"))
             {
-                state
-                    .sets
-                    .insert(uid.into(), serde_json::from_str(contents)?);
+                let mut set: Set = serde_json::from_str(contents)?;
+                if legacy {
+                    upgrade_v1_set(&mut set);
+                }
+                state.sets.insert(uid.into(), set);
             } else if let Some(uid) = path
                 .strip_prefix("attempts/")
                 .and_then(|p| p.strip_suffix(".json"))
@@ -270,5 +298,90 @@ mod tests {
             assert!(!valid_uid(bad));
         }
         assert!(valid_uid("0123456789abcdef0123456789abcdef"));
+    }
+    #[test]
+    fn upgrades_schema_one_focus_theme_and_rejects_unknown_fields() {
+        let uid = "b".repeat(32);
+        let puzzles: Vec<Puzzle> = (0..20)
+            .map(|i| {
+                let mut p = crate::puzzle::fixture();
+                p.id = format!("p{i:02}");
+                p
+            })
+            .collect();
+        let mut fields: BTreeMap<String, Field> =
+            serde_json::from_value::<BTreeMap<String, Value>>(
+                serde_json::to_value(crate::sets::BuilderParams {
+                    size: 20,
+                    ..Default::default()
+                })
+                .unwrap(),
+            )
+            .unwrap()
+            .into_iter()
+            .filter(|(k, _)| {
+                !["include_themes", "exclude_themes", "theme_match"].contains(&k.as_str())
+            })
+            .map(|(k, value)| {
+                (
+                    k,
+                    Field {
+                        value,
+                        updated_at: 5,
+                    },
+                )
+            })
+            .collect();
+        fields.insert(
+            "focus_theme".into(),
+            Field {
+                value: Value::String("fork".into()),
+                updated_at: 9,
+            },
+        );
+        let set = Set {
+            uid: uid.clone(),
+            fields,
+            created_at: 1,
+            seed: 7,
+            puzzles,
+            cycles: BTreeMap::new(),
+        };
+        let mut files = State::default().files().unwrap();
+        files.insert(
+            "manifest.json".into(),
+            "{\"app\":\"woodpeck\",\"schema_version\":1}".into(),
+        );
+        files.insert(format!("sets/{uid}.json"), pretty(&set).unwrap());
+        let state = State::from_files(&files).unwrap();
+        assert_eq!(state.manifest, Manifest::default());
+        let upgraded = &state.sets[&uid].fields;
+        assert!(!upgraded.contains_key("focus_theme"));
+        assert_eq!(
+            upgraded["include_themes"].value,
+            serde_json::json!(["fork"])
+        );
+        assert_eq!(upgraded["include_themes"].updated_at, 9);
+        assert_eq!(upgraded["exclude_themes"].value, serde_json::json!([]));
+        assert_eq!(upgraded["theme_match"].value, serde_json::json!("any"));
+        // The upgraded snapshot is written back as schema 2 and round-trips unchanged.
+        let rewritten = state.files().unwrap();
+        assert!(rewritten["manifest.json"].contains("\"schema_version\": 2"));
+        assert_eq!(
+            State::from_files(&rewritten).unwrap().files().unwrap(),
+            rewritten
+        );
+        // A schema 2 file must not carry the legacy field.
+        let mut legacy_files = rewritten.clone();
+        legacy_files.insert(format!("sets/{uid}.json"), pretty(&set).unwrap());
+        assert!(State::from_files(&legacy_files).is_err());
+        // A null legacy focus upgrades to an empty include list.
+        let mut null_focus = set.clone();
+        null_focus.fields.get_mut("focus_theme").unwrap().value = Value::Null;
+        upgrade_v1_set(&mut null_focus);
+        assert_eq!(
+            null_focus.fields["include_themes"].value,
+            serde_json::json!([])
+        );
     }
 }
