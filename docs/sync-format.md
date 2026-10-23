@@ -1,4 +1,4 @@
-# Portable progress format (schema version 1)
+# Portable progress format (schema version 2)
 
 The wire model lives in `src/sync/format.rs`. Git and SQLite are adapters around
 these serde types; a future server can exchange the same snapshot and use the
@@ -13,7 +13,7 @@ configuration in the snapshot. Times are Unix seconds except `updated_at`
 
 | File | Contents |
 | --- | --- |
-| `manifest.json` | `{ "app": "woodpeck", "schema_version": 1 }` |
+| `manifest.json` | `{ "app": "woodpeck", "schema_version": 2 }` |
 | `settings.json` | Preference name to `{ "value": ..., "updated_at": ... }` |
 | `sets/<uid>.json` | Set identity, timestamped metadata fields, creation time, seed, ordered full puzzle snapshots, and cycles keyed by UID |
 | `attempts/<set-uid>.json` | Immutable attempts sorted by `(created_at, uid)` |
@@ -27,6 +27,38 @@ excluded; each set includes its own complete puzzle data (`id`, `fen`, `moves`,
 `rating`, `rd`, `popularity`, `nb_plays`, `themes`). A second computer can train
 imported sets with an empty library. XP and streaks are rebuilt from attempts
 and completed cycles, rather than added together as counters.
+
+## Set theme fields
+
+Since schema 2, a set's metadata carries three theme fields instead of the
+single schema 1 `focus_theme`:
+
+| Field | Value |
+| --- | --- |
+| `include_themes` | Sorted, distinct Lichess theme keys; empty means any theme |
+| `exclude_themes` | Sorted, distinct Lichess theme keys a puzzle must not have |
+| `theme_match` | `"any"` (at least one included theme) or `"all"` (every included theme) |
+
+Exclusions always win, and a key may not be in both lists. Like the other
+set parameters, these fields are fixed when the set is created and merge field
+by field with the rules below.
+
+### Schema history and compatibility
+
+| Version | Change |
+| --- | --- |
+| 1 | Initial format; sets had an optional `focus_theme` string |
+| 2 | `focus_theme` became `include_themes`, `exclude_themes` and `theme_match` |
+
+Readers upgrade older snapshots in memory before validating them. A schema 1
+set with `focus_theme: "fork"` becomes `include_themes: ["fork"]`,
+`exclude_themes: []`, `theme_match: "any"`; a null focus becomes an empty
+include list. All three fields keep the legacy field's `updated_at` (or the
+set's creation time if it had none), matching what the SQLite migration
+records locally, so an upgraded remote and a migrated local copy join without
+spurious changes. The next push writes schema 2. A schema 2 snapshot that still
+contains `focus_theme` is rejected as an unknown field. Apps that only know
+schema 1 stop syncing when they see schema 2 (see below) until upgraded.
 
 ## Identity and merge rules
 
@@ -55,7 +87,7 @@ and completed cycles, rather than added together as counters.
 The join is commutative, associative and idempotent for valid canonical states.
 Sets and cycles are unions: deleting a local set does not delete its remote
 history, so a subsequent sync restores it. There is no distributed deletion
-operation in schema 1. Changing this behavior requires a versioned tombstone
+operation in schema 2. Changing this behavior requires a versioned tombstone
 format. Unknown preference/set fields, malformed records, and inconsistent
 identities stop sync. A newer `schema_version` always stops sync before import,
 working-tree writes or push; automatic retries pause until a manual retry or
