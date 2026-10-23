@@ -30,6 +30,8 @@ pub enum ServiceError {
     Generation(#[from] GenerationError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Sync(#[from] crate::sync::SyncError),
     #[error("Background worker is unavailable.")]
     WorkerUnavailable,
 }
@@ -141,10 +143,14 @@ pub struct AppService {
     events: mpsc::Receiver<Event>,
     pending: BTreeMap<u64, CancelFlag>,
     next_id: u64,
+    sync: Option<crate::sync::worker::Worker>,
 }
 impl AppService {
     pub fn open(path: &Path) -> Result<Self> {
-        Self::new(Store::open(path)?)
+        let mut service = Self::new(Store::open(path)?)?;
+        let config = crate::sync::config(&*lock(&service.store)?)?;
+        service.sync = Some(crate::sync::worker::Worker::start(path, config)?);
+        Ok(service)
     }
     /// Starts the worker and queues the versioned, idempotent first-run starter import.
     pub fn new(store: Store) -> Result<Self> {
@@ -166,9 +172,39 @@ impl AppService {
             events,
             pending: BTreeMap::new(),
             next_id: 0,
+            sync: None,
         };
         service.submit(Job::ImportStarter { force: false })?;
         Ok(service)
+    }
+    pub fn sync_status(&self) -> crate::sync::Config {
+        self.sync
+            .as_ref()
+            .map_or_else(crate::sync::Config::default, |worker| {
+                worker.status().clone()
+            })
+    }
+    pub fn configure_sync(&mut self, remote: &str, enabled: bool) -> Result<()> {
+        let config = crate::sync::configure(&*lock(&self.store)?, remote, enabled)?;
+        if let Some(worker) = &mut self.sync {
+            worker.update(config);
+        }
+        Ok(())
+    }
+    pub fn sync_now(&self) {
+        if let Some(worker) = &self.sync {
+            worker.request();
+        }
+    }
+    pub fn poll_sync(&mut self) -> bool {
+        self.sync
+            .as_mut()
+            .is_some_and(crate::sync::worker::Worker::poll)
+    }
+    pub fn sync_shutdown(&self) -> Option<crate::sync::worker::Shutdown> {
+        self.sync
+            .as_ref()
+            .map(crate::sync::worker::Worker::shutdown_handle)
     }
     pub fn submit(&mut self, job: Job) -> Result<JobHandle> {
         self.next_id += 1;

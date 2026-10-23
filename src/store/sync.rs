@@ -18,10 +18,14 @@ impl Store {
     }
     /// A consistent snapshot. Local configuration and the puzzle library are excluded.
     pub fn export_sync(&self) -> Result<State> {
+        self.export_sync_snapshot().map(|(state, _)| state)
+    }
+    pub fn export_sync_snapshot(&self) -> Result<(State, i64)> {
         let tx = self.connection.unchecked_transaction()?;
         let state = self.export_sync_rows()?;
+        let generation = self.sync_generation()?;
         tx.commit()?;
-        Ok(state)
+        Ok((state, generation))
     }
     fn export_sync_rows(&self) -> Result<State> {
         let mut state = State::default();
@@ -118,6 +122,10 @@ impl Store {
             );
             ids.insert(stored.id, uid);
         }
+        self.export_review(&mut state, &ids)?;
+        Ok(state)
+    }
+    fn export_review(&self, state: &mut State, ids: &BTreeMap<i64, String>) -> Result<()> {
         let mut stmt = self.connection.prepare(
             "SELECT puzzle_id,set_id,substr(uid,1,32),last_missed_at,resolved_at FROM review_items",
         )?;
@@ -144,7 +152,7 @@ impl Store {
                 .and_modify(|old| *old = merge::review(old, &item))
                 .or_insert(item);
         }
-        Ok(state)
+        Ok(())
     }
     /// Re-merge inside the write transaction so training performed during fetch is retained.
     pub fn import_sync(&mut self, remote: &State) -> crate::sync::Result<State> {
