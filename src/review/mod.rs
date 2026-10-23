@@ -200,6 +200,15 @@ mod tests {
         );
     }
     #[test]
+    fn backdated_miss_does_not_move_a_pending_item_back_in_time() {
+        let mut q = ReviewQueue::default();
+        q.record(&attempt(AttemptKind::Cycle, Outcome::Incorrect, 10));
+        q.record(&attempt(AttemptKind::Cycle, Outcome::Skipped, 5));
+        let item = q.get(1, "p").unwrap();
+        assert_eq!((item.added_at, item.last_missed_at), (10, 10));
+        assert_eq!(q.pending_count(), 1);
+    }
+    #[test]
     fn key_is_puzzle_plus_set_and_demo_invalid_do_not_enqueue() {
         let mut q = ReviewQueue::default();
         q.record(&attempt(AttemptKind::Demo, Outcome::Skipped, 1));
