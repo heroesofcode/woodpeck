@@ -1,0 +1,414 @@
+//! Application operations and a serial background worker, with no GUI dependencies.
+#[cfg(test)]
+mod tests;
+mod worker;
+
+use crate::{
+    motivation::Motivation,
+    puzzle::{Outcome, Puzzle},
+    review::{ReviewCard, ReviewSort},
+    sets::{BuilderParams, GenerationError, generate},
+    settings::Settings,
+    source::{CancelFlag, ImportProgress, LichessClient, PuzzleFetcher, SourceError},
+    stats::{Attempt, AttemptKind, CycleStats, CycleSummary, ProgressReport, progress},
+    store::{CycleRecord, RecordedAttempt, Store, StoreError, StoredSet},
+};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard, mpsc},
+};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ServiceError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error(transparent)]
+    Source(#[from] SourceError),
+    #[error(transparent)]
+    Generation(#[from] GenerationError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("Background worker is unavailable.")]
+    WorkerUnavailable,
+}
+pub type Result<T> = std::result::Result<T, ServiceError>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetCreation {
+    pub set_id: Option<i64>,
+    pub available: usize,
+    pub requested: u32,
+    pub original_band: (u16, u16),
+    pub used_band: (u16, u16),
+    pub widening_steps: u16,
+}
+impl SetCreation {
+    pub fn shortfall(&self) -> usize {
+        (self.requested as usize).saturating_sub(self.available)
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetSummary {
+    pub set: StoredSet,
+    pub latest_cycle: Option<CycleRecord>,
+    pub stats: CycleStats,
+    pub review_pending: u32,
+    pub completed: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrainingPosition {
+    pub cycle: CycleRecord,
+    /// Zero-based index of the next position; equals set size after completion.
+    pub position: usize,
+    /// None indicates a completed cycle.
+    pub puzzle: Option<Puzzle>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetProgress {
+    pub cycles: Vec<CycleSummary>,
+    pub report: ProgressReport,
+}
+#[derive(Clone, Debug)]
+pub enum Job {
+    ImportStarter {
+        force: bool,
+    },
+    ImportFull {
+        location: String,
+    },
+    Fetch {
+        theme: Option<String>,
+        target: u16,
+        count: u32,
+    },
+    FetchDaily,
+    FetchById {
+        id: String,
+    },
+    /// Explicitly enqueue this after showing the local shortfall to the user.
+    CreateSetWithFallback {
+        params: BuilderParams,
+        seed: u64,
+        now: i64,
+    },
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JobOutput {
+    Imported(ImportProgress),
+    Fetched { inserted: usize },
+    Daily(Puzzle),
+    Puzzle(Puzzle),
+    SetCreated(SetCreation),
+}
+#[derive(Debug)]
+pub enum Event {
+    Started {
+        id: u64,
+    },
+    ImportProgress {
+        id: u64,
+        progress: ImportProgress,
+    },
+    FetchProgress {
+        id: u64,
+        batches: u32,
+        inserted: usize,
+    },
+    Finished {
+        id: u64,
+        result: Result<JobOutput>,
+    },
+}
+#[derive(Clone, Debug)]
+pub struct JobHandle {
+    pub id: u64,
+    pub cancel: CancelFlag,
+}
+struct Command {
+    handle: JobHandle,
+    job: Job,
+}
+type SharedStore = Arc<Mutex<Store>>;
+fn lock(store: &SharedStore) -> Result<MutexGuard<'_, Store>> {
+    store.lock().map_err(|_| ServiceError::WorkerUnavailable)
+}
+
+pub struct AppService {
+    store: SharedStore,
+    commands: mpsc::Sender<Command>,
+    events: mpsc::Receiver<Event>,
+    pending: BTreeMap<u64, CancelFlag>,
+    next_id: u64,
+}
+impl AppService {
+    pub fn open(path: &Path) -> Result<Self> {
+        Self::new(Store::open(path)?)
+    }
+    /// Starts the worker and queues the versioned, idempotent first-run starter import.
+    pub fn new(store: Store) -> Result<Self> {
+        Self::with_fetcher(store, Box::<LichessClient>::default())
+    }
+    pub fn with_fetcher(store: Store, fetcher: Box<dyn PuzzleFetcher>) -> Result<Self> {
+        let store = Arc::new(Mutex::new(store));
+        let (commands, receiver) = mpsc::channel();
+        let (sender, events) = mpsc::channel();
+        let shared = store.clone();
+        std::thread::Builder::new()
+            .name("woodpeck-source".into())
+            .spawn(move || {
+                worker::run(&shared, receiver, &sender, fetcher);
+            })?;
+        let mut service = Self {
+            store,
+            commands,
+            events,
+            pending: BTreeMap::new(),
+            next_id: 0,
+        };
+        service.submit(Job::ImportStarter { force: false })?;
+        Ok(service)
+    }
+    pub fn submit(&mut self, job: Job) -> Result<JobHandle> {
+        self.next_id += 1;
+        let handle = JobHandle {
+            id: self.next_id,
+            cancel: CancelFlag::default(),
+        };
+        self.commands
+            .send(Command {
+                handle: handle.clone(),
+                job,
+            })
+            .map_err(|_| ServiceError::WorkerUnavailable)?;
+        self.pending.insert(handle.id, handle.cancel.clone());
+        Ok(handle)
+    }
+    /// Also allows cancelling the automatic startup import by its event ID.
+    pub fn cancel_job(&self, id: u64) -> bool {
+        if let Some(flag) = self.pending.get(&id) {
+            flag.cancel();
+            true
+        } else {
+            false
+        }
+    }
+    pub fn is_busy(&self) -> bool {
+        !self.pending.is_empty()
+    }
+    /// Nonblocking channel poll for the UI's frame loop. Completed jobs already committed.
+    pub fn poll_events(&mut self) -> Vec<Event> {
+        let events: Vec<_> = self.events.try_iter().collect();
+        for event in &events {
+            if let Event::Finished { id, .. } = event {
+                self.pending.remove(id);
+            }
+        }
+        events
+    }
+    pub fn puzzle_count(&self) -> Result<u64> {
+        Ok(lock(&self.store)?.puzzle_count()?)
+    }
+    pub fn list_sets(&self) -> Result<Vec<SetSummary>> {
+        let store = lock(&self.store)?;
+        let reviews = store.review_cards(None, ReviewSort::MostRecent)?;
+        store
+            .sets()?
+            .into_iter()
+            .map(|set| {
+                let latest_cycle = store.cycles(set.id)?.pop();
+                let stats = latest_cycle
+                    .as_ref()
+                    .map(|c| store.cycle_stats(c.id))
+                    .transpose()?
+                    .unwrap_or_default();
+                let completed = latest_cycle.as_ref().is_some_and(|c| {
+                    c.completed_at.is_some() && c.number >= set.params.target_cycles
+                });
+                let review_pending =
+                    u32::try_from(reviews.iter().filter(|r| r.item.set_id == set.id).count())
+                        .unwrap_or(u32::MAX);
+                Ok(SetSummary {
+                    set,
+                    latest_cycle,
+                    stats,
+                    review_pending,
+                    completed,
+                })
+            })
+            .collect()
+    }
+    /// Generates locally; a shortfall never persists a partial set. Online fallback is a job.
+    pub fn create_set(&self, params: &BuilderParams, seed: u64, now: i64) -> Result<SetCreation> {
+        create_set(&mut *lock(&self.store)?, params, seed, now)
+    }
+    pub fn start_or_resume_cycle(&self, set_id: i64, now: i64) -> Result<TrainingPosition> {
+        let mut store = lock(&self.store)?;
+        let cycle = store.start_cycle(set_id, now)?;
+        training_position(&store, cycle)
+    }
+    pub fn current_puzzle(&self, cycle_id: i64) -> Result<TrainingPosition> {
+        let store = lock(&self.store)?;
+        let cycle = store.cycle(cycle_id)?.ok_or(StoreError::NotFound)?;
+        training_position(&store, cycle)
+    }
+    pub fn next_cycle(&self, set_id: i64, now: i64) -> Result<TrainingPosition> {
+        let store = lock(&self.store)?;
+        if store
+            .cycles(set_id)?
+            .last()
+            .is_some_and(|c| c.completed_at.is_none())
+        {
+            return Err(crate::stats::CycleError::Incomplete.into());
+        }
+        drop(store);
+        self.start_or_resume_cycle(set_id, now)
+    }
+    pub fn extend_cycle(&self, set_id: i64, now: i64) -> Result<TrainingPosition> {
+        let mut store = lock(&self.store)?;
+        store.extend_set(set_id)?;
+        let cycle = store.start_cycle(set_id, now)?;
+        training_position(&store, cycle)
+    }
+    pub fn record_attempt(&self, attempt: &Attempt) -> Result<RecordedAttempt> {
+        let mut store = lock(&self.store)?;
+        let sounds = store.settings()?.completion_sound;
+        let recorded = store.record_attempt(attempt)?;
+        drop(store);
+        if sounds && attempt.outcome == Outcome::Correct {
+            crate::sound::play_completion();
+        }
+        Ok(recorded)
+    }
+    pub fn record_review_attempt(&self, attempt: &Attempt) -> Result<RecordedAttempt> {
+        if attempt.kind != AttemptKind::Review {
+            return Err(StoreError::InvalidData("Expected a review attempt.".into()).into());
+        }
+        self.record_attempt(attempt)
+    }
+    pub fn review_queue(&self, theme: Option<&str>, sort: ReviewSort) -> Result<Vec<ReviewCard>> {
+        Ok(lock(&self.store)?.review_cards(theme, sort)?)
+    }
+    pub fn review_count(&self) -> Result<u32> {
+        Ok(lock(&self.store)?.pending_review_count()?)
+    }
+    pub fn progress(&self, set_id: i64) -> Result<SetProgress> {
+        let store = lock(&self.store)?;
+        store.set(set_id)?.ok_or(StoreError::NotFound)?;
+        let cycles = store
+            .cycles(set_id)?
+            .into_iter()
+            .map(|c| {
+                Ok(CycleSummary {
+                    number: c.number,
+                    stats: store.cycle_stats(c.id)?,
+                    complete: c.completed_at.is_some(),
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, StoreError>>()?;
+        let report = progress(
+            &store.set_puzzles(set_id)?,
+            &store.attempts(set_id)?,
+            &cycles,
+        );
+        Ok(SetProgress { cycles, report })
+    }
+    pub fn settings(&self) -> Result<Settings> {
+        Ok(lock(&self.store)?.settings()?)
+    }
+    pub fn set_settings(&self, settings: &Settings) -> Result<()> {
+        Ok(lock(&self.store)?.save_settings(settings)?)
+    }
+    pub fn motivation(&self) -> Result<Motivation> {
+        let value = lock(&self.store)?.setting("motivation")?;
+        Ok(value
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(StoreError::from)?
+            .unwrap_or_default())
+    }
+    pub fn export_pgn(&self, set_id: i64, path: &Path) -> Result<()> {
+        let store = lock(&self.store)?;
+        let set = store.set(set_id)?.ok_or(StoreError::NotFound)?;
+        let pgn = crate::source::export_pgn(&set.params.name, &store.set_puzzles(set_id)?)?;
+        drop(store);
+        std::fs::write(path, pgn)?;
+        Ok(())
+    }
+    pub fn delete_set(&self, set_id: i64) -> Result<()> {
+        Ok(lock(&self.store)?.delete_set(set_id)?)
+    }
+    pub fn default_database_path() -> Option<PathBuf> {
+        crate::store::database_path()
+    }
+}
+impl Drop for AppService {
+    fn drop(&mut self) {
+        for flag in self.pending.values() {
+            flag.cancel();
+        }
+    }
+}
+fn training_position(store: &Store, cycle: CycleRecord) -> Result<TrainingPosition> {
+    let progress = store.cycle_progress(cycle.id)?;
+    let position = store.cycle_stats(cycle.id)?.attempted() as usize;
+    let puzzle = progress
+        .next_puzzle()
+        .map(|id| {
+            store
+                .set_puzzles(cycle.set_id)?
+                .into_iter()
+                .find(|p| p.id == id)
+                .ok_or(StoreError::NotFound)
+        })
+        .transpose()?;
+    Ok(TrainingPosition {
+        cycle,
+        position,
+        puzzle,
+    })
+}
+fn create_set(
+    store: &mut Store,
+    params: &BuilderParams,
+    seed: u64,
+    now: i64,
+) -> Result<SetCreation> {
+    let rating = store.settings()?.user_rating;
+    match generate(store, params, rating, seed) {
+        Ok(generated) => {
+            let id = store.create_set(params, &generated.puzzles, now, seed, rating)?;
+            Ok(SetCreation {
+                set_id: Some(id),
+                available: generated.puzzles.len(),
+                requested: params.size,
+                original_band: generated.original_band,
+                used_band: generated.used_band,
+                widening_steps: generated.widening_steps,
+            })
+        }
+        Err(GenerationError::Insufficient {
+            available,
+            requested,
+        }) => Ok(SetCreation {
+            set_id: None,
+            available,
+            requested,
+            original_band: params.band(),
+            used_band: (400, 3000),
+            widening_steps: (params
+                .band()
+                .0
+                .saturating_sub(400)
+                .max(3000_u16.saturating_sub(params.band().1)))
+            .div_ceil(50),
+        }),
+        Err(error) => Err(error.into()),
+    }
+}
+impl From<crate::stats::CycleError> for ServiceError {
+    fn from(error: crate::stats::CycleError) -> Self {
+        Self::Store(error.into())
+    }
+}

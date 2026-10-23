@@ -1,0 +1,497 @@
+use super::*;
+use crate::{puzzle::fixture, source::STARTER_VERSION};
+use std::{
+    sync::atomic::{AtomicU32, Ordering},
+    time::{Duration, Instant},
+};
+
+#[derive(Default)]
+struct MockFetcher {
+    batches: Vec<Vec<Puzzle>>,
+    calls: Arc<AtomicU32>,
+    cancel_batch: bool,
+}
+impl PuzzleFetcher for MockFetcher {
+    fn batch(
+        &mut self,
+        theme: Option<&str>,
+        target: u16,
+        count: u32,
+        cancel: &CancelFlag,
+    ) -> std::result::Result<Vec<Puzzle>, SourceError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(theme, Some("fork"));
+        assert_eq!(target, 1000);
+        assert_eq!(count, 20);
+        if self.cancel_batch {
+            cancel.cancel();
+        }
+        cancel.check()?;
+        Ok(if self.batches.is_empty() {
+            vec![]
+        } else {
+            self.batches.remove(0)
+        })
+    }
+    fn daily(&mut self, cancel: &CancelFlag) -> std::result::Result<Puzzle, SourceError> {
+        cancel.check()?;
+        Ok(fixture())
+    }
+    fn by_id(&mut self, id: &str, cancel: &CancelFlag) -> std::result::Result<Puzzle, SourceError> {
+        let mut p = self.daily(cancel)?;
+        p.id = id.into();
+        Ok(p)
+    }
+}
+fn pool(n: u32) -> Vec<Puzzle> {
+    (0..n)
+        .map(|i| {
+            let mut p = fixture();
+            p.id = format!("test{i}");
+            p.rating = 1000;
+            p.themes = vec!["fork".into()];
+            p
+        })
+        .collect()
+}
+fn params() -> BuilderParams {
+    BuilderParams {
+        size: 20,
+        focus_theme: Some("fork".into()),
+        target_cycles: 1,
+        ..Default::default()
+    }
+}
+fn service(store: Store, mock: MockFetcher) -> AppService {
+    // Isolate each test's source pool while still exercising normal automatic startup.
+    store
+        .set_setting("starter_version", STARTER_VERSION)
+        .unwrap();
+    let mut service = AppService::with_fetcher(store, Box::new(mock)).unwrap();
+    finish(&mut service, 1).unwrap();
+    let settings = Settings {
+        completion_sound: false,
+        ..Default::default()
+    };
+    service.set_settings(&settings).unwrap();
+    service
+}
+fn finish(service: &mut AppService, job_id: u64) -> Result<JobOutput> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        for event in service.poll_events() {
+            if let Event::Finished { id, result } = event {
+                if id == job_id {
+                    return result;
+                }
+                result.unwrap();
+            }
+        }
+        assert!(Instant::now() < deadline, "worker timed out");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+fn attempt(position: &TrainingPosition, outcome: Outcome, day: i64) -> Attempt {
+    Attempt {
+        puzzle_id: position.puzzle.as_ref().unwrap().id.clone(),
+        set_id: position.cycle.set_id,
+        cycle_id: Some(position.cycle.id),
+        kind: AttemptKind::Cycle,
+        outcome,
+        time_ms: 1000,
+        moves_played: vec![],
+        created_at: day * 86400 + 43200,
+    }
+}
+#[test]
+fn play_review_progress_next_cycle_export_delete_and_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    store.upsert_puzzles(&pool(20)).unwrap();
+    let service = service(store, MockFetcher::default());
+    let made = service.create_set(&params(), 42, 1).unwrap();
+    assert_eq!(made.shortfall(), 0);
+    let set_id = made.set_id.unwrap();
+    let mut pos = service.start_or_resume_cycle(set_id, 2).unwrap();
+    let order = pos.cycle.order.clone();
+    assert!(service.next_cycle(set_id, 3).is_err());
+    assert!(service.extend_cycle(set_id, 3).is_err());
+    for i in 0..20 {
+        assert_eq!(pos.position, i);
+        let outcome = match i {
+            0 => Outcome::Incorrect,
+            1 => Outcome::Skipped,
+            _ => Outcome::Correct,
+        };
+        let recorded = service.record_attempt(&attempt(&pos, outcome, 10)).unwrap();
+        assert_eq!(recorded.cycle_completed, i == 19);
+        if i < 2 {
+            assert_eq!(
+                service.review_count().unwrap(),
+                u32::try_from(i + 1).unwrap()
+            );
+        }
+        pos = service.current_puzzle(pos.cycle.id).unwrap();
+    }
+    assert!(pos.puzzle.is_none());
+    assert!(service.list_sets().unwrap()[0].completed);
+    let report = service.progress(set_id).unwrap();
+    assert_eq!(report.report.puzzles_attempted, 20);
+    assert_eq!(report.report.accuracy.percent(), 90.0);
+    assert_eq!(report.report.most_missed.len(), 2);
+    assert_eq!(service.motivation().unwrap().xp, 230);
+    assert_eq!(
+        service
+            .review_queue(Some("pin"), ReviewSort::MostRecent)
+            .unwrap()
+            .len(),
+        0
+    );
+    let cards = service
+        .review_queue(Some("fork"), ReviewSort::LowestAccuracy)
+        .unwrap();
+    assert_eq!(cards.len(), 2);
+    clear_reviews(&service, set_id, cards);
+    assert_eq!(service.review_count().unwrap(), 0);
+    assert_eq!(service.progress(set_id).unwrap(), report);
+    let motivation = service.motivation().unwrap();
+    assert_eq!(
+        (
+            motivation.xp,
+            motivation.current_streak,
+            motivation.best_streak
+        ),
+        (250, 2, 2)
+    );
+    let exported = dir.path().join("set.pgn");
+    service.export_pgn(set_id, &exported).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(exported)
+            .unwrap()
+            .matches("[PuzzleId ")
+            .count(),
+        20
+    );
+    assert!(service.next_cycle(set_id, 12).is_err());
+    let second = service.extend_cycle(set_id, 12).unwrap();
+    assert_eq!(second.cycle.order, order);
+    assert_eq!(second.cycle.number, 2);
+    service
+        .record_attempt(&attempt(&second, Outcome::Skipped, 14))
+        .unwrap();
+    assert_eq!(service.review_count().unwrap(), 1);
+    drop(service);
+    let reopened = AppService::open(&path).unwrap();
+    let resumed = reopened.start_or_resume_cycle(set_id, 15).unwrap();
+    assert_eq!(resumed.position, 1);
+    assert_eq!(resumed.cycle.id, second.cycle.id);
+    assert_eq!(reopened.review_count().unwrap(), 1);
+    assert_eq!(reopened.motivation().unwrap().current_streak, 1);
+    assert!(!reopened.settings().unwrap().completion_sound);
+    reopened.delete_set(set_id).unwrap();
+    assert_eq!(reopened.list_sets().unwrap(), []);
+    assert_eq!(reopened.review_count().unwrap(), 0);
+    assert!(reopened.delete_set(set_id).is_err());
+    assert!(reopened.progress(set_id).is_err());
+    // Puzzle source data and earned XP survive set deletion.
+    assert_eq!(reopened.puzzle_count().unwrap(), 20);
+    assert_eq!(reopened.motivation().unwrap().xp, 250);
+}
+#[test]
+fn local_creation_reports_shortfall_and_widening_without_partial_sets() {
+    let mut store = Store::memory().unwrap();
+    let mut puzzles = pool(20);
+    for p in &mut puzzles {
+        p.rating = 1150;
+    }
+    store.upsert_puzzles(&puzzles[..19]).unwrap();
+    let service = service(store, MockFetcher::default());
+    let short = service.create_set(&params(), 1, 1).unwrap();
+    assert_eq!(short.shortfall(), 1);
+    assert_eq!(short.set_id, None);
+    assert_eq!(service.list_sets().unwrap(), []);
+    lock(&service.store)
+        .unwrap()
+        .upsert_puzzles(&puzzles)
+        .unwrap();
+    let made = service.create_set(&params(), 1, 1).unwrap();
+    assert_eq!(made.widening_steps, 1);
+    assert_eq!(made.used_band, (850, 1150));
+}
+#[test]
+fn mocked_fallback_filters_band_theme_and_invalid_rows_and_regenerates() {
+    let mut noise = pool(3);
+    noise[0].rating = 2000;
+    noise[1].themes = vec!["pin".into()];
+    noise[2].fen.clear();
+    let good = pool(20);
+    let mock = MockFetcher {
+        batches: vec![noise, good.clone()],
+        ..Default::default()
+    };
+    let calls = mock.calls.clone();
+    let mut service = service(Store::memory().unwrap(), mock);
+    let job = service
+        .submit(Job::CreateSetWithFallback {
+            params: params(),
+            seed: 1,
+            now: 1,
+        })
+        .unwrap();
+    let JobOutput::SetCreated(created) = finish(&mut service, job.id).unwrap() else {
+        panic!()
+    };
+    assert_eq!(created.shortfall(), 0);
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    assert_eq!(service.puzzle_count().unwrap(), 20);
+    let puzzles = lock(&service.store)
+        .unwrap()
+        .set_puzzles(created.set_id.unwrap())
+        .unwrap();
+    assert_eq!(puzzles.len(), 20);
+    assert!(puzzles.iter().all(|p| good.contains(p)));
+    let next = service
+        .submit(Job::CreateSetWithFallback {
+            params: params(),
+            seed: 2,
+            now: 2,
+        })
+        .unwrap();
+    finish(&mut service, next.id).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+}
+#[test]
+fn fallback_is_bounded_cancellable_and_never_saves_a_partial_set() {
+    let mock = MockFetcher::default();
+    let calls = mock.calls.clone();
+    let mut service = service(Store::memory().unwrap(), mock);
+    let job = service
+        .submit(Job::CreateSetWithFallback {
+            params: params(),
+            seed: 1,
+            now: 1,
+        })
+        .unwrap();
+    let JobOutput::SetCreated(short) = finish(&mut service, job.id).unwrap() else {
+        panic!()
+    };
+    assert_eq!(short.shortfall(), 20);
+    assert_eq!(calls.load(Ordering::Relaxed), 5);
+    assert_eq!(service.list_sets().unwrap(), []);
+    let mut service = super::tests::service(
+        Store::memory().unwrap(),
+        MockFetcher {
+            cancel_batch: true,
+            ..Default::default()
+        },
+    );
+    let job = service
+        .submit(Job::CreateSetWithFallback {
+            params: params(),
+            seed: 1,
+            now: 1,
+        })
+        .unwrap();
+    assert!(matches!(
+        finish(&mut service, job.id),
+        Err(ServiceError::Source(SourceError::Cancelled))
+    ));
+    assert_eq!(service.list_sets().unwrap(), []);
+}
+#[test]
+fn worker_startup_import_daily_by_id_fetch_and_errors() {
+    let mut service =
+        AppService::with_fetcher(Store::memory().unwrap(), Box::<MockFetcher>::default()).unwrap();
+    let JobOutput::Imported(p) = finish(&mut service, 1).unwrap() else {
+        panic!()
+    };
+    assert_eq!(p.accepted, 8540);
+    let job = service.submit(Job::ImportStarter { force: false }).unwrap();
+    assert_eq!(
+        finish(&mut service, job.id).unwrap(),
+        JobOutput::Imported(ImportProgress::default())
+    );
+    let job = service.submit(Job::ImportStarter { force: true }).unwrap();
+    let JobOutput::Imported(p) = finish(&mut service, job.id).unwrap() else {
+        panic!()
+    };
+    assert_eq!(p.accepted, 8540);
+    for (job, expected) in [
+        (Job::FetchDaily, JobOutput::Daily(fixture())),
+        (
+            Job::FetchById {
+                id: "specific".into(),
+            },
+            {
+                let mut p = fixture();
+                p.id = "specific".into();
+                JobOutput::Puzzle(p)
+            },
+        ),
+    ] {
+        let handle = service.submit(job).unwrap();
+        assert_eq!(finish(&mut service, handle.id).unwrap(), expected);
+    }
+    let handle = service
+        .submit(Job::Fetch {
+            theme: Some("fork".into()),
+            target: 1000,
+            count: 20,
+        })
+        .unwrap();
+    assert_eq!(
+        finish(&mut service, handle.id).unwrap(),
+        JobOutput::Fetched { inserted: 0 }
+    );
+    let handle = service
+        .submit(Job::ImportFull {
+            location: "/does/not/exist".into(),
+        })
+        .unwrap();
+    assert!(finish(&mut service, handle.id).is_err());
+    let handle = service.submit(Job::FetchDaily).unwrap();
+    assert!(
+        finish(&mut service, handle.id).is_ok(),
+        "worker survives failed jobs"
+    );
+}
+#[test]
+fn worker_import_progress_and_queued_cancel() {
+    let mut service = service(Store::memory().unwrap(), MockFetcher::default());
+    let handle = service
+        .submit(Job::ImportFull {
+            location: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/lichess.csv").into(),
+        })
+        .unwrap();
+    let JobOutput::Imported(p) = finish(&mut service, handle.id).unwrap() else {
+        panic!()
+    };
+    assert_eq!(p.scanned, 12);
+    assert!(p.bytes > 0);
+    assert_eq!(service.puzzle_count().unwrap(), p.accepted);
+    let handle = service.submit(Job::ImportStarter { force: true }).unwrap();
+    assert!(service.is_busy());
+    assert!(service.cancel_job(handle.id));
+    assert!(matches!(
+        finish(&mut service, handle.id),
+        Err(ServiceError::Source(SourceError::Cancelled))
+    ));
+    assert!(!service.is_busy());
+    assert!(!service.cancel_job(handle.id));
+}
+#[test]
+fn rejected_attempt_is_atomic_for_motivation_and_invalid_review_kind_is_rejected() {
+    let mut store = Store::memory().unwrap();
+    store.upsert_puzzles(&pool(20)).unwrap();
+    let service = service(store, MockFetcher::default());
+    let set = service.create_set(&params(), 1, 1).unwrap().set_id.unwrap();
+    let position = service.start_or_resume_cycle(set, 1).unwrap();
+    let attempt = attempt(&position, Outcome::Correct, 10);
+    assert!(service.record_review_attempt(&attempt).is_err());
+    service.record_attempt(&attempt).unwrap();
+    let activity = service.motivation().unwrap();
+    assert!(service.record_attempt(&attempt).is_err());
+    assert_eq!(service.motivation().unwrap(), activity);
+    let invalid = Settings {
+        user_rating: 1,
+        ..Default::default()
+    };
+    assert!(service.set_settings(&invalid).is_err());
+}
+
+fn clear_reviews(service: &AppService, set_id: i64, cards: Vec<ReviewCard>) {
+    for card in cards {
+        let mut review = Attempt {
+            puzzle_id: card.puzzle.id,
+            set_id,
+            cycle_id: None,
+            kind: AttemptKind::Review,
+            outcome: Outcome::Incorrect,
+            time_ms: 0,
+            moves_played: vec![],
+            created_at: 11 * 86400 + 43200,
+        };
+        service.record_review_attempt(&review).unwrap();
+        assert!(service.review_count().unwrap() > 0);
+        review.outcome = Outcome::Correct;
+        service.record_review_attempt(&review).unwrap();
+    }
+}
+
+#[test]
+fn blocked_network_does_not_hold_store_lock_and_jobs_report_events_in_sequence() {
+    struct BlockingFetcher {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+    impl PuzzleFetcher for BlockingFetcher {
+        fn batch(
+            &mut self,
+            _: Option<&str>,
+            _: u16,
+            _: u32,
+            cancel: &CancelFlag,
+        ) -> std::result::Result<Vec<Puzzle>, SourceError> {
+            self.entered.send(()).unwrap();
+            self.release.recv_timeout(Duration::from_secs(5)).unwrap();
+            cancel.check()?;
+            Ok(vec![])
+        }
+        fn daily(&mut self, _: &CancelFlag) -> std::result::Result<Puzzle, SourceError> {
+            Ok(fixture())
+        }
+        fn by_id(
+            &mut self,
+            _: &str,
+            cancel: &CancelFlag,
+        ) -> std::result::Result<Puzzle, SourceError> {
+            self.daily(cancel)
+        }
+    }
+    let store = Store::memory().unwrap();
+    store
+        .set_setting("starter_version", STARTER_VERSION)
+        .unwrap();
+    let (entered, wait_entered) = mpsc::channel();
+    let (release, wait_release) = mpsc::channel();
+    let mut service = AppService::with_fetcher(
+        store,
+        Box::new(BlockingFetcher {
+            entered,
+            release: wait_release,
+        }),
+    )
+    .unwrap();
+    finish(&mut service, 1).unwrap();
+    let job = service
+        .submit(Job::Fetch {
+            theme: None,
+            target: 1000,
+            count: 20,
+        })
+        .unwrap();
+    wait_entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(service.store.try_lock().is_ok());
+    assert_eq!(service.settings().unwrap().user_rating, 1200);
+    let queued = service.submit(Job::FetchDaily).unwrap();
+    let events = service.poll_events();
+    assert!(matches!(events.as_slice(), [Event::Started { id }] if *id == job.id));
+    release.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut events = vec![];
+    loop {
+        events.extend(service.poll_events());
+        if events
+            .iter()
+            .any(|e| matches!(e, Event::Finished { id, .. } if *id == queued.id))
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        matches!(events.as_slice(), [Event::FetchProgress { id, batches: 1, inserted: 0 }, Event::Finished { result: Ok(_), .. }, Event::Started { .. }, Event::Finished { result: Ok(_), .. }] if *id == job.id)
+    );
+}
