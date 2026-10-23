@@ -29,6 +29,7 @@ impl Woodpeck {
                 });
                 ui.add_space(34.0);
                 self.side_navigation_entries(ui, expanded);
+                self.sync_indicator(ui);
                 ui.add_space(
                     (ui.available_height() - if expanded { 218.0 } else { 50.0 }).max(10.0),
                 );
@@ -86,6 +87,29 @@ impl Woodpeck {
         self.delete_dialog(ui, window);
         self.capture(ui);
     }
+    pub(super) fn sync_indicator(&self, ui: &mut Ui) {
+        use crate::sync::Status;
+        let config = self.service.sync_status();
+        let colors = self.palette.semantic();
+        let color = match config.status {
+            Status::Disabled => colors.muted,
+            Status::Synced => colors.correct,
+            Status::Pending | Status::Offline => colors.warning,
+            Status::Syncing | Status::Merged => colors.accent,
+            Status::Error => colors.incorrect,
+        };
+        let label = if self.collapsed || ui.available_width() < 110.0 {
+            "•".to_owned()
+        } else {
+            format!("Sync · {}", config.status.label())
+        };
+        ui.colored_label(style::color(color), label).on_hover_text(
+            config
+                .last_error
+                .as_deref()
+                .unwrap_or(config.status.label()),
+        );
+    }
     fn top_navigation(&mut self, ui: &mut Ui) {
         let accent = style::color(self.palette.semantic().accent);
         egui::Panel::top("navigation")
@@ -100,6 +124,7 @@ impl Woodpeck {
                     ui.label(RichText::new("woodpeck").strong().size(18.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         widgets::chip(ui, format!("{} Review", self.pending), accent);
+                        self.sync_indicator(ui);
                     });
                 });
                 ui.horizontal(|ui| {

@@ -103,6 +103,7 @@ pub struct Woodpeck {
     delete: Option<i64>,
     collapsed: bool,
     export_path: String,
+    sync_remote: String,
     data_path: PathBuf,
     theme: style::ThemeWatcher,
     palette: Palette,
@@ -120,6 +121,7 @@ impl Woodpeck {
         screenshot: Option<Screenshot>,
     ) -> Self {
         let settings = service.settings().unwrap_or_default();
+        let sync_remote = service.sync_status().remote;
         let origin = Instant::now();
         let theme = style::ThemeWatcher::new(settings.color_theme);
         let palette = crate::theme::select(settings.color_theme, None);
@@ -156,6 +158,7 @@ impl Woodpeck {
                 .join("woodpeck-set.pgn")
                 .display()
                 .to_string(),
+            sync_remote,
             data_path,
             theme,
             palette,
@@ -380,6 +383,31 @@ impl Woodpeck {
         }
     }
     fn poll(&mut self) {
+        if self.service.poll_sync() {
+            self.refresh();
+            if let Some(session) = &self.session
+                && !session.recorded
+            {
+                if let Some(cycle) = session.cycle_id {
+                    if let Ok(position) = self.service.current_puzzle(cycle)
+                        && position.puzzle.as_ref().map(|p| &p.id) != Some(&session.puzzle.id)
+                    {
+                        self.load_training(position);
+                    }
+                } else if !self.reviews.iter().any(|card| {
+                    card.puzzle.id == session.puzzle.id && card.item.set_id == session.set_id
+                }) {
+                    self.select_first_review();
+                }
+            }
+            if let Ok(settings) = self.service.settings()
+                && settings != self.settings
+            {
+                self.theme = style::ThemeWatcher::new(settings.color_theme);
+                self.settings = settings;
+            }
+        }
+
         for event in self.service.poll_events() {
             match event {
                 Event::Started { .. } => self.status = "Working in the background…".into(),
@@ -544,6 +572,7 @@ pub fn run(screenshot: Option<Screenshot>) -> Result<(), Box<dyn std::error::Err
     } else {
         AppService::open(&path)?
     };
+    let sync_shutdown = service.sync_shutdown();
     let capture = screenshot.is_some();
     let (sender, receiver) = std::sync::mpsc::channel();
     let size = screenshot.as_ref().map_or([1280.0, 820.0], |s| s.size);
@@ -555,7 +584,7 @@ pub fn run(screenshot: Option<Screenshot>) -> Result<(), Box<dyn std::error::Err
             .with_min_inner_size([340.0, 480.0]),
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         "woodpeck",
         options,
         Box::new(move |cc| {
@@ -563,7 +592,11 @@ pub fn run(screenshot: Option<Screenshot>) -> Result<(), Box<dyn std::error::Err
             app.capture_result = Some(sender);
             Ok(Box::new(app))
         }),
-    )?;
+    );
+    if let Some(shutdown) = sync_shutdown {
+        shutdown.finish();
+    }
+    result?;
     if capture {
         receiver
             .try_recv()
