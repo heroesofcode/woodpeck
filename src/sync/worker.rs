@@ -148,7 +148,11 @@ fn run(path: &Path, commands: &mpsc::Receiver<Message>, events: &mpsc::Sender<Co
             let _ = events.send(cfg.clone());
             previous = cfg.clone();
         }
-        if cfg.enabled && (close.is_some() || next.is_some_and(|at| at <= Instant::now())) {
+        let due = close.map_or_else(
+            || next.is_some_and(|at| at <= Instant::now()),
+            |deadline| cfg.pending && Instant::now() < deadline,
+        );
+        if cfg.enabled && due {
             let _ = events.send(Config {
                 status: Status::Syncing,
                 ..cfg
@@ -182,5 +186,69 @@ fn run(path: &Path, commands: &mpsc::Receiver<Message>, events: &mpsc::Sender<Co
         if close.is_some() {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_queued_during_sync_does_not_repeat_successful_work() {
+        for remaining in [Duration::ZERO, Duration::from_secs(20)] {
+            let temp = tempfile::tempdir().unwrap();
+            let remote = temp.path().join("remote.git");
+            assert!(
+                std::process::Command::new("git")
+                    .args(["init", "--bare", "--initial-branch=main"])
+                    .arg(&remote)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+            let db = temp.path().join("machine/woodpeck.db");
+            let store = Store::open(&db).unwrap();
+            super::super::configure(&store, remote.to_str().unwrap(), true).unwrap();
+            let (commands, receiver) = mpsc::channel();
+            let (sender, events) = mpsc::channel();
+            commands.send(Message::Now).unwrap();
+            let thread = std::thread::spawn(move || run(&db, &receiver, &sender));
+            loop {
+                let cfg = events.recv_timeout(Duration::from_secs(20)).unwrap();
+                if cfg.status == Status::Syncing {
+                    commands
+                        .send(Message::Close(Instant::now() + remaining))
+                        .unwrap();
+                    break;
+                }
+            }
+            thread.join().unwrap();
+            assert!(events.try_iter().all(|cfg| cfg.status != Status::Syncing));
+            let cfg = config(&store).unwrap();
+            assert_eq!(cfg.status, Status::Synced);
+            assert!(!cfg.pending);
+            let persisted: Config =
+                serde_json::from_str(&store.setting("sync_config").unwrap().unwrap()).unwrap();
+            assert!(!persisted.pending);
+            assert!(cfg.last_error.is_none());
+        }
+    }
+
+    #[test]
+    fn expired_close_keeps_unsynced_changes_pending_without_starting_work() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("woodpeck.db");
+        let store = Store::open(&db).unwrap();
+        super::super::configure(&store, "/unused/remote.git", true).unwrap();
+        let (commands, receiver) = mpsc::channel();
+        let (sender, events) = mpsc::channel();
+        commands.send(Message::Close(Instant::now())).unwrap();
+        run(&db, &receiver, &sender);
+        assert!(events.try_iter().all(|cfg| cfg.status != Status::Syncing));
+        let cfg = config(&store).unwrap();
+        assert!(cfg.pending);
+        assert_eq!(cfg.status, Status::Pending);
+        assert!(cfg.last_error.is_none());
     }
 }

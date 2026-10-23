@@ -147,16 +147,22 @@ impl Drop for Lease {
 }
 /// Blocking API for CLI/tests and the background worker; never call from the UI thread.
 pub fn synchronize(store: &mut Store, data: &Path, budget: Duration) -> Result<Config> {
+    let deadline = Instant::now() + budget;
     let mut cfg = config(store)?;
     if !cfg.enabled {
         return Err(SyncError::Invalid(
             "Sync is disabled. Use sync init or enable it in Settings.".into(),
         ));
     }
-    cfg.pending = true;
+    // A close request can expire while waiting for an in-flight sync. There is
+    // nothing to attempt in that case, and no failure to record.
+    if Instant::now() >= deadline {
+        return Ok(cfg);
+    }
+    cfg.pending = store.sync_generation()? != cfg.synced_generation;
     cfg.status = Status::Syncing;
     save_config(store, &cfg)?;
-    let result = synchronize_inner(store, data, &cfg.remote, Instant::now() + budget);
+    let result = synchronize_inner(store, data, &cfg.remote, deadline);
     // Preserve configuration edited while network commands were running.
     let mut latest = config(store)?;
     if latest.remote != cfg.remote || !latest.enabled {
@@ -177,7 +183,7 @@ pub fn synchronize(store: &mut Store, data: &Path, budget: Duration) -> Result<C
             latest.last_error = None;
         }
         Err(error) => {
-            latest.pending = true;
+            latest.pending = store.sync_generation()? != latest.synced_generation;
             latest.status = if matches!(error, SyncError::Offline) {
                 Status::Offline
             } else {
