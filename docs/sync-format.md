@@ -1,4 +1,4 @@
-# Portable progress format (schema version 2)
+# Portable progress format (schema version 3)
 
 The wire model lives in `src/sync/format.rs`. Git and SQLite are adapters around
 these serde types; a future server can exchange the same snapshot and use the
@@ -13,7 +13,7 @@ configuration in the snapshot. Times are Unix seconds except `updated_at`
 
 | File | Contents |
 | --- | --- |
-| `manifest.json` | `{ "app": "woodpeck", "schema_version": 2 }` |
+| `manifest.json` | `{ "app": "woodpeck", "schema_version": 3 }` |
 | `settings.json` | Preference name to `{ "value": ..., "updated_at": ... }` |
 | `sets/<uid>.json` | Set identity, timestamped metadata fields, creation time, seed, ordered full puzzle snapshots, and cycles keyed by UID |
 | `attempts/<set-uid>.json` | Immutable attempts sorted by `(created_at, uid)` |
@@ -43,12 +43,27 @@ Exclusions always win, and a key may not be in both lists. Like the other
 set parameters, these fields are fixed when the set is created and merge field
 by field with the rules below.
 
+## Set rating range
+
+Since schema 3, a set's difficulty is an explicit, inclusive rating range
+instead of schema 1–2's `target_rating`, `variance` and
+`restrict_recommended`:
+
+| Field | Value |
+| --- | --- |
+| `rating_min` | Lowest puzzle rating in the set, inclusive, 400–3200 |
+| `rating_max` | Highest puzzle rating in the set, inclusive, 400–3200, at least `rating_min + 100` |
+
+A range is never widened during generation. If too few puzzles match, the set is
+not created.
+
 ### Schema history and compatibility
 
 | Version | Change |
 | --- | --- |
 | 1 | Initial format; sets had an optional `focus_theme` string |
 | 2 | `focus_theme` became `include_themes`, `exclude_themes` and `theme_match` |
+| 3 | `target_rating`, `variance` and `restrict_recommended` became `rating_min` and `rating_max` |
 
 Readers upgrade older snapshots in memory before validating them. A schema 1
 set with `focus_theme: "fork"` becomes `include_themes: ["fork"]`,
@@ -56,9 +71,22 @@ set with `focus_theme: "fork"` becomes `include_themes: ["fork"]`,
 include list. All three fields keep the legacy field's `updated_at` (or the
 set's creation time if it had none), matching what the SQLite migration
 records locally, so an upgraded remote and a migrated local copy join without
-spurious changes. The next push writes schema 2. A schema 2 snapshot that still
-contains `focus_theme` is rejected as an unknown field. Apps that only know
-schema 1 stop syncing when they see schema 2 (see below) until upgraded.
+spurious changes.
+
+A schema 1 or 2 set's `target_rating ± variance` becomes the range
+`rating_min = clamp(target − variance, 400, 3100)` and
+`rating_max = max(min(target + variance, 3000), rating_min + 100)`. This is the
+band that older releases searched first. The extra rule only applies at the old
+edges, where it widens a too-narrow band upward to the minimum width. Both range
+fields take the later `updated_at` of `target_rating` and `variance` (or the
+set's creation time). `restrict_recommended` is dropped because a range is
+always explicit. The SQLite migration applies the same rule and clocks. A
+schema 1 snapshot is upgraded through schema 2 first.
+
+The next push writes schema 3. A current snapshot that still contains a legacy
+field (`focus_theme`, `target_rating`, `variance`, `restrict_recommended`) is
+rejected as an unknown field. Apps that only know older schemas stop syncing
+when they see a newer one (see below) until upgraded.
 
 ## Identity and merge rules
 
@@ -87,7 +115,7 @@ schema 1 stop syncing when they see schema 2 (see below) until upgraded.
 The join is commutative, associative and idempotent for valid canonical states.
 Sets and cycles are unions: deleting a local set does not delete its remote
 history, so a subsequent sync restores it. There is no distributed deletion
-operation in schema 2. Changing this behavior requires a versioned tombstone
+operation in schema 3. Changing this behavior requires a versioned tombstone
 format. Unknown preference/set fields, malformed records, and inconsistent
 identities stop sync. A newer `schema_version` always stops sync before import,
 working-tree writes or push; automatic retries pause until a manual retry or
