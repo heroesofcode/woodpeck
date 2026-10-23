@@ -2,7 +2,7 @@
 mod generation;
 mod presets;
 pub use generation::{GeneratedSet, GenerationError, PuzzleQuery, QueryError, generate};
-pub use presets::{PRESETS, Preset, PresetKind, THEME_FOCUS, theme_label};
+pub use presets::{PRESETS, Preset, PresetKind, THEMES, theme_label, theme_name};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
@@ -19,7 +19,14 @@ pub struct BuilderParams {
     pub variance: u16,
     pub size: u32,
     pub target_cycles: u8,
-    pub focus_theme: Option<String>,
+    /// Lichess theme keys a puzzle must carry (any or all of them, per `theme_match`).
+    #[serde(default)]
+    pub include_themes: Vec<String>,
+    /// Lichess theme keys a puzzle must not carry.
+    #[serde(default)]
+    pub exclude_themes: Vec<String>,
+    #[serde(default)]
+    pub theme_match: ThemeMatch,
     pub restrict_recommended: bool,
     pub preset_id: Option<String>,
     pub shuffle_each_cycle: bool,
@@ -32,16 +39,50 @@ impl Default for BuilderParams {
             variance: 100,
             size: 100,
             target_cycles: 5,
-            focus_theme: None,
+            include_themes: Vec::new(),
+            exclude_themes: Vec::new(),
+            theme_match: ThemeMatch::Any,
             restrict_recommended: true,
             preset_id: Some("general".into()),
             shuffle_each_cycle: false,
         }
     }
 }
+/// How the included themes combine. Excluded themes always reject a puzzle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMatch {
+    #[default]
+    Any,
+    All,
+}
+/// Borrowed theme constraints shared by local generation, `SQLite` queries and API fallback.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ThemeFilter<'a> {
+    pub include: &'a [String],
+    pub exclude: &'a [String],
+    pub mode: ThemeMatch,
+}
+impl ThemeFilter<'_> {
+    /// Exclusions win over inclusions; an empty include list accepts every theme.
+    pub fn matches(&self, themes: &[String]) -> bool {
+        let has = |t: &String| themes.contains(t);
+        if self.exclude.iter().any(has) {
+            return false;
+        }
+        match self.mode {
+            _ if self.include.is_empty() => true,
+            ThemeMatch::Any => self.include.iter().any(has),
+            ThemeMatch::All => self.include.iter().all(has),
+        }
+    }
+    pub fn is_unconstrained(&self) -> bool {
+        self.include.is_empty() && self.exclude.is_empty()
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 #[error(
-    "Choose a name, 20–500 puzzles, 1–10 cycles, a valid target rating and variance ±50–200 in steps of 25."
+    "Choose a name, 20–500 puzzles, 1–10 cycles, a valid target rating, variance ±50–200 in steps of 25, and known themes that are not both included and excluded."
 )]
 pub struct InvalidParams;
 impl BuilderParams {
@@ -53,10 +94,12 @@ impl BuilderParams {
             || !(50..=200).contains(&self.variance)
             || !self.variance.is_multiple_of(25)
             || !(low..=high).contains(&self.target_rating)
+            || !valid_theme_list(&self.include_themes)
+            || !valid_theme_list(&self.exclude_themes)
             || self
-                .focus_theme
-                .as_ref()
-                .is_some_and(|t| !THEME_FOCUS[1..].iter().any(|(key, _)| key == t))
+                .include_themes
+                .iter()
+                .any(|t| self.exclude_themes.contains(t))
         {
             return Err(InvalidParams);
         }
@@ -79,9 +122,63 @@ impl BuilderParams {
         let n = u64::from(self.size) * u64::from(self.target_cycles);
         (Duration::from_secs(n * 29), Duration::from_secs(n * 90))
     }
+    /// General sets cap each theme's share; a chosen include focus intentionally skips the cap.
     pub fn is_general(&self) -> bool {
-        self.preset_id.as_deref() == Some("general") && self.focus_theme.is_none()
+        self.preset_id.as_deref() == Some("general") && self.include_themes.is_empty()
     }
+    pub fn theme_filter(&self) -> ThemeFilter<'_> {
+        ThemeFilter {
+            include: &self.include_themes,
+            exclude: &self.exclude_themes,
+            mode: self.theme_match,
+        }
+    }
+    /// Toggle a theme through none → include → exclude → none, keeping lists sorted.
+    pub fn cycle_theme(&mut self, key: &str) {
+        if let Some(i) = self.include_themes.iter().position(|t| t == key) {
+            self.include_themes.remove(i);
+            insert_sorted(&mut self.exclude_themes, key);
+        } else if let Some(i) = self.exclude_themes.iter().position(|t| t == key) {
+            self.exclude_themes.remove(i);
+        } else {
+            insert_sorted(&mut self.include_themes, key);
+        }
+    }
+    /// Short human summary used by set cards, e.g. "Forks or Pins · not Mates".
+    pub fn theme_summary(&self) -> Option<String> {
+        let joiner = match self.theme_match {
+            ThemeMatch::Any => " or ",
+            ThemeMatch::All => " + ",
+        };
+        let include = self
+            .include_themes
+            .iter()
+            .map(|t| theme_name(t))
+            .collect::<Vec<_>>()
+            .join(joiner);
+        let exclude = self
+            .exclude_themes
+            .iter()
+            .map(|t| theme_name(t))
+            .collect::<Vec<_>>()
+            .join(", ");
+        match (include.is_empty(), exclude.is_empty()) {
+            (true, true) => None,
+            (false, true) => Some(include),
+            (true, false) => Some(format!("Not {exclude}")),
+            (false, false) => Some(format!("{include} · not {exclude}")),
+        }
+    }
+}
+fn insert_sorted(list: &mut Vec<String>, key: &str) {
+    if let Err(i) = list.binary_search_by(|t| t.as_str().cmp(key)) {
+        list.insert(i, key.into());
+    }
+}
+/// Known keys only, sorted and without duplicates, so stored and synced params are canonical.
+fn valid_theme_list(list: &[String]) -> bool {
+    list.iter().all(|t| THEMES.iter().any(|(key, _)| key == t))
+        && list.windows(2).all(|w| w[0] < w[1])
 }
 /// A rating below 700 still has a usable single-value recommended slider at 800.
 pub fn recommended_range(rating: u16) -> (u16, u16) {
@@ -113,7 +210,8 @@ mod tests {
             b.validate(1200).unwrap();
             match p.kind {
                 PresetKind::Theme(theme) => {
-                    assert_eq!(b.focus_theme.as_deref(), Some(theme));
+                    assert_eq!(b.include_themes, vec![theme.to_string()]);
+                    assert_eq!(b.exclude_themes, Vec::<String>::new());
                     assert_eq!(b.target_rating, 1000);
                     assert!(b.restrict_recommended);
                 }
@@ -177,7 +275,24 @@ mod tests {
                 ..b.clone()
             },
             BuilderParams {
-                focus_theme: Some("unknown".into()),
+                include_themes: vec!["unknown".into()],
+                ..b.clone()
+            },
+            BuilderParams {
+                exclude_themes: vec!["unknown".into()],
+                ..b.clone()
+            },
+            BuilderParams {
+                include_themes: vec!["pin".into(), "fork".into()],
+                ..b.clone()
+            },
+            BuilderParams {
+                include_themes: vec!["fork".into(), "fork".into()],
+                ..b.clone()
+            },
+            BuilderParams {
+                include_themes: vec!["fork".into()],
+                exclude_themes: vec!["fork".into()],
                 ..b.clone()
             },
         ] {
@@ -186,8 +301,93 @@ mod tests {
     }
     #[test]
     fn focus_labels_and_cycle_cards() {
-        assert_eq!(THEME_FOCUS.len(), 16);
+        assert!(THEMES.len() >= 15);
+        assert!(THEMES.windows(2).all(|w| w[0].0 != w[1].0));
+        assert!(THEMES.iter().all(|(key, _)| !key.is_empty()));
         assert_eq!(theme_label("backRankMate"), "Back Rank Mate");
+        assert_eq!(theme_name("fork"), "Forks");
+        assert_eq!(theme_name("someNewTheme"), "Some New Theme");
         assert_eq!(CYCLE_CARDS[1], (5, "Recommended"));
+    }
+    fn themes(list: &[&str]) -> Vec<String> {
+        list.iter().map(|t| (*t).to_string()).collect()
+    }
+    #[test]
+    fn theme_filter_any_all_exclude_overlap_and_empty() {
+        let fork_pin = themes(&["fork", "pin"]);
+        let fork = themes(&["fork"]);
+        let mate = themes(&["mate", "short"]);
+        let none: Vec<String> = Vec::new();
+        let include = themes(&["fork", "pin"]);
+        let exclude = themes(&["mate"]);
+        let any = ThemeFilter {
+            include: &include,
+            exclude: &[],
+            mode: ThemeMatch::Any,
+        };
+        assert!(any.matches(&fork) && any.matches(&fork_pin));
+        assert!(!any.matches(&mate) && !any.matches(&none));
+        let all = ThemeFilter {
+            mode: ThemeMatch::All,
+            ..any
+        };
+        assert!(all.matches(&fork_pin));
+        assert!(!all.matches(&fork) && !all.matches(&none));
+        let excluding = ThemeFilter {
+            include: &[],
+            exclude: &exclude,
+            mode: ThemeMatch::All,
+        };
+        assert!(excluding.matches(&fork) && excluding.matches(&none));
+        assert!(!excluding.matches(&mate));
+        // Overlap: exclusion wins, even in match-any mode.
+        let overlap = ThemeFilter {
+            include: &fork,
+            exclude: &fork,
+            mode: ThemeMatch::Any,
+        };
+        assert!(!overlap.matches(&fork_pin));
+        let empty = ThemeFilter::default();
+        assert!(empty.is_unconstrained());
+        assert!(empty.matches(&none) && empty.matches(&mate));
+    }
+    #[test]
+    fn cycling_themes_keeps_canonical_lists_and_summary() {
+        let mut b = BuilderParams::default();
+        assert_eq!(b.theme_summary(), None);
+        b.cycle_theme("pin");
+        b.cycle_theme("fork");
+        assert_eq!(b.include_themes, themes(&["fork", "pin"]));
+        b.validate(1200).unwrap();
+        assert_eq!(b.theme_summary().unwrap(), "Forks or Pins");
+        b.theme_match = ThemeMatch::All;
+        assert_eq!(b.theme_summary().unwrap(), "Forks + Pins");
+        b.cycle_theme("pin");
+        assert_eq!(b.include_themes, themes(&["fork"]));
+        assert_eq!(b.exclude_themes, themes(&["pin"]));
+        assert_eq!(b.theme_summary().unwrap(), "Forks · not Pins");
+        b.cycle_theme("pin");
+        b.cycle_theme("fork");
+        b.cycle_theme("mate");
+        b.cycle_theme("mate");
+        assert_eq!(b.include_themes, Vec::<String>::new());
+        assert_eq!(b.exclude_themes, themes(&["fork", "mate"]));
+        assert_eq!(b.theme_summary().unwrap(), "Not Forks, Mates");
+        b.validate(1200).unwrap();
+        assert!(!b.is_general() || b.include_themes.is_empty());
+    }
+    #[test]
+    fn legacy_params_without_theme_lists_deserialize() {
+        let mut value = serde_json::to_value(BuilderParams::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        for key in ["include_themes", "exclude_themes", "theme_match"] {
+            object.remove(key);
+        }
+        let params: BuilderParams = serde_json::from_value(value).unwrap();
+        assert_eq!(params, BuilderParams::default());
+        assert_eq!(
+            serde_json::to_value(ThemeMatch::All).unwrap(),
+            serde_json::json!("all")
+        );
     }
 }

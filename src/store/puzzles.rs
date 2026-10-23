@@ -1,7 +1,7 @@
 use super::{Result, Store, StoreError};
 use crate::{
     puzzle::Puzzle,
-    sets::{PuzzleQuery, QueryError},
+    sets::{PuzzleQuery, QueryError, ThemeFilter, ThemeMatch},
 };
 use rusqlite::{OptionalExtension, params};
 impl Store {
@@ -38,13 +38,61 @@ impl Store {
         &self,
         minimum: u16,
         maximum: u16,
-        theme: Option<&str>,
+        themes: ThemeFilter<'_>,
     ) -> Result<Vec<Puzzle>> {
-        let mut stmt=self.connection.prepare("SELECT id,fen,moves,rating,rd,popularity,nb_plays,themes_json FROM puzzles p WHERE rating BETWEEN ?1 AND ?2 AND (?3 IS NULL OR EXISTS(SELECT 1 FROM puzzle_themes t WHERE t.puzzle_id=p.id AND t.theme=?3)) ORDER BY rating,id")?;
+        let (sql, values) = theme_query(minimum, maximum, themes);
+        let mut stmt = self.connection.prepare(&sql)?;
         Ok(stmt
-            .query_map(params![minimum, maximum, theme], read_puzzle)?
+            .query_map(rusqlite::params_from_iter(values), read_puzzle)?
             .collect::<std::result::Result<_, _>>()?)
     }
+}
+/// Builds a parameterized query; theme keys are always bound, never interpolated.
+fn theme_query(
+    minimum: u16,
+    maximum: u16,
+    themes: ThemeFilter<'_>,
+) -> (String, Vec<rusqlite::types::Value>) {
+    use rusqlite::types::Value;
+    const HAS: &str = "EXISTS(SELECT 1 FROM puzzle_themes t WHERE t.puzzle_id=p.id AND t.theme";
+    let placeholders = |n: usize| vec!["?"; n].join(",");
+    let mut sql = String::from(
+        "SELECT id,fen,moves,rating,rd,popularity,nb_plays,themes_json FROM puzzles p WHERE rating BETWEEN ? AND ?",
+    );
+    let mut values = vec![
+        Value::from(i64::from(minimum)),
+        Value::from(i64::from(maximum)),
+    ];
+    if !themes.include.is_empty() {
+        let clause = match themes.mode {
+            ThemeMatch::Any => [
+                " AND ",
+                HAS,
+                " IN (",
+                &placeholders(themes.include.len()),
+                "))",
+            ]
+            .concat(),
+            ThemeMatch::All => [" AND ", HAS, "=?)"].concat().repeat(themes.include.len()),
+        };
+        sql.push_str(&clause);
+        values.extend(themes.include.iter().cloned().map(Value::from));
+    }
+    if !themes.exclude.is_empty() {
+        sql.push_str(
+            &[
+                " AND NOT ",
+                HAS,
+                " IN (",
+                &placeholders(themes.exclude.len()),
+                "))",
+            ]
+            .concat(),
+        );
+        values.extend(themes.exclude.iter().cloned().map(Value::from));
+    }
+    sql.push_str(" ORDER BY rating,id");
+    (sql, values)
 }
 fn read_puzzle(row: &rusqlite::Row<'_>) -> rusqlite::Result<Puzzle> {
     let themes: String = row.get(7)?;
@@ -66,9 +114,9 @@ impl PuzzleQuery for Store {
         &self,
         minimum: u16,
         maximum: u16,
-        theme: Option<&str>,
+        themes: ThemeFilter<'_>,
     ) -> std::result::Result<Vec<Puzzle>, QueryError> {
-        self.query_puzzles(minimum, maximum, theme)
+        self.query_puzzles(minimum, maximum, themes)
             .map_err(|e| QueryError(e.to_string()))
     }
 }

@@ -1,7 +1,7 @@
 use super::{Result, Store, StoreError};
 use crate::{
     puzzle::Puzzle,
-    sets::BuilderParams,
+    sets::{BuilderParams, ThemeMatch},
     stats::{AttemptKind, CycleError, CycleProgress, cycle_order},
 };
 use rusqlite::{OptionalExtension, params};
@@ -42,7 +42,7 @@ impl Store {
             ));
         }
         let tx = self.connection.transaction()?;
-        tx.execute("INSERT INTO sets(name,focus_theme,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![params.name,params.focus_theme,params.target_rating,params.variance,params.size,params.target_cycles,created_at,params.preset_id,if params.shuffle_each_cycle {"shuffle"} else {"fixed"},params.restrict_recommended,seed.to_string()])?;
+        tx.execute("INSERT INTO sets(name,include_themes,exclude_themes,theme_match,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![params.name,serde_json::to_string(&params.include_themes)?,serde_json::to_string(&params.exclude_themes)?,theme_match_name(params.theme_match),params.target_rating,params.variance,params.size,params.target_cycles,created_at,params.preset_id,if params.shuffle_each_cycle {"shuffle"} else {"fixed"},params.restrict_recommended,seed.to_string()])?;
         let id = tx.last_insert_rowid();
         for (i, p) in puzzles.iter().enumerate() {
             tx.execute("INSERT INTO set_puzzles(set_id,position,puzzle_id,puzzle_json) VALUES(?1,?2,?3,?4)",params![id,i64::try_from(i+1).map_err(|_|StoreError::InvalidData("Set is too large.".into()))?,p.id,serde_json::to_string(p)?])?;
@@ -51,10 +51,10 @@ impl Store {
         Ok(id)
     }
     pub fn set(&self, id: i64) -> Result<Option<StoredSet>> {
-        Ok(self.connection.query_row("SELECT id,name,focus_theme,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed FROM sets WHERE id=?1",[id],read_set).optional()?)
+        Ok(self.connection.query_row("SELECT id,name,include_themes,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed,exclude_themes,theme_match FROM sets WHERE id=?1",[id],read_set).optional()?)
     }
     pub fn sets(&self) -> Result<Vec<StoredSet>> {
-        let mut stmt=self.connection.prepare("SELECT id,name,focus_theme,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed FROM sets ORDER BY created_at,id")?;
+        let mut stmt=self.connection.prepare("SELECT id,name,include_themes,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed,exclude_themes,theme_match FROM sets ORDER BY created_at,id")?;
         Ok(stmt
             .query_map([], read_set)?
             .collect::<std::result::Result<_, _>>()?)
@@ -181,14 +181,31 @@ fn conversion_error(
 ) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, Box::new(error))
 }
+pub(super) fn theme_match_name(mode: ThemeMatch) -> &'static str {
+    match mode {
+        ThemeMatch::Any => "any",
+        ThemeMatch::All => "all",
+    }
+}
 fn read_set(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSet> {
     let seed: String = r.get(11)?;
     let mode: String = r.get(9)?;
+    let themes = |column: usize| -> rusqlite::Result<Vec<String>> {
+        let json: String = r.get(column)?;
+        serde_json::from_str(&json).map_err(|e| conversion_error(column, e))
+    };
+    let theme_match: String = r.get(13)?;
     Ok(StoredSet {
         id: r.get(0)?,
         params: BuilderParams {
             name: r.get(1)?,
-            focus_theme: r.get(2)?,
+            include_themes: themes(2)?,
+            exclude_themes: themes(12)?,
+            theme_match: if theme_match == "all" {
+                ThemeMatch::All
+            } else {
+                ThemeMatch::Any
+            },
             target_rating: r.get(3)?,
             variance: r.get(4)?,
             size: r.get(5)?,
