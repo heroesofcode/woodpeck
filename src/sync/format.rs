@@ -101,6 +101,14 @@ impl State {
         if self.manifest != Manifest::default() {
             return Err(SyncError::Invalid("Unsupported manifest.".into()));
         }
+        let known_settings = serde_json::to_value(crate::settings::Settings::default())?;
+        if self
+            .settings
+            .keys()
+            .any(|key| known_settings.get(key).is_none())
+        {
+            return Err(SyncError::Invalid("Unknown preference field.".into()));
+        }
         for (uid, set) in &self.sets {
             if !valid_uid(uid) || uid != &set.uid {
                 return Err(SyncError::Invalid("Invalid set identity.".into()));
@@ -111,6 +119,10 @@ impl State {
                     .map(|(k, v)| (k.clone(), v.value.clone()))
                     .collect(),
             ))?;
+            let known_fields = serde_json::to_value(&params)?;
+            if set.fields.keys().any(|key| known_fields.get(key).is_none()) {
+                return Err(SyncError::Invalid("Unknown set field.".into()));
+            }
             // Recommendation bounds are machine preferences; validate absolute bounds instead.
             let mut absolute = params.clone();
             absolute.restrict_recommended = false;

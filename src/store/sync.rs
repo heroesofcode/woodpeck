@@ -28,22 +28,10 @@ impl Store {
         Ok((state, generation))
     }
     fn export_sync_rows(&self) -> Result<State> {
-        let mut state = State::default();
-        if let Some(json) = self.setting("preferences")? {
-            let values: BTreeMap<String, Value> = serde_json::from_str(&json)?;
-            for (key, value) in values {
-                let updated_at = self
-                    .connection
-                    .query_row(
-                        "SELECT updated_at FROM sync_fields WHERE key=?1",
-                        [&key],
-                        |r| r.get(0),
-                    )
-                    .optional()?
-                    .unwrap_or(0);
-                state.settings.insert(key, Field { value, updated_at });
-            }
-        }
+        let mut state = State {
+            settings: self.export_preferences()?,
+            ..State::default()
+        };
         let mut ids = BTreeMap::new();
         for stored in self.sets()? {
             let (uid, name_at, target_at): (String, i64, i64) = self.connection.query_row(
@@ -55,15 +43,23 @@ impl Store {
                 serde_json::from_value(serde_json::to_value(&stored.params)?)?;
             let fields = values
                 .into_iter()
-                .map(|(key, value)| {
+                .map(|(key, value)| -> Result<_> {
                     let updated_at = match key.as_str() {
                         "name" => name_at,
                         "target_cycles" => target_at,
-                        _ => stored.created_at.saturating_mul(1000),
+                        _ => self
+                            .connection
+                            .query_row(
+                                "SELECT updated_at FROM sync_fields WHERE key=?1",
+                                [format!("set/{uid}/{key}")],
+                                |r| r.get(0),
+                            )
+                            .optional()?
+                            .unwrap_or(stored.created_at.saturating_mul(1000)),
                     };
-                    (key, Field { value, updated_at })
+                    Ok((key, Field { value, updated_at }))
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             let mut cycles = BTreeMap::new();
             let mut cycle_ids = BTreeMap::new();
             for cycle in self.cycles(stored.id)? {
@@ -125,6 +121,25 @@ impl Store {
         self.export_review(&mut state, &ids)?;
         Ok(state)
     }
+    fn export_preferences(&self) -> Result<BTreeMap<String, Field>> {
+        let mut settings = BTreeMap::new();
+        if let Some(json) = self.setting("preferences")? {
+            let values: BTreeMap<String, Value> = serde_json::from_str(&json)?;
+            for (key, value) in values {
+                let updated_at = self
+                    .connection
+                    .query_row(
+                        "SELECT updated_at FROM sync_fields WHERE key=?1",
+                        [&key],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or(0);
+                settings.insert(key, Field { value, updated_at });
+            }
+        }
+        Ok(settings)
+    }
     fn export_review(&self, state: &mut State, ids: &BTreeMap<i64, String>) -> Result<()> {
         let mut stmt = self.connection.prepare(
             "SELECT puzzle_id,set_id,substr(uid,1,32),last_missed_at,resolved_at FROM review_items",
@@ -176,7 +191,7 @@ impl Store {
                     .map(|(k, v)| (k.clone(), v.value.clone()))
                     .collect(),
             ))?;
-            self.connection.execute("INSERT INTO sets(uid,name,focus_theme,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(uid) DO UPDATE SET name=excluded.name,target_cycles=excluded.target_cycles",params![uid,p.name,p.focus_theme,p.target_rating,p.variance,p.size,p.target_cycles,set.created_at,p.preset_id,if p.shuffle_each_cycle {"shuffle"} else {"fixed"},p.restrict_recommended,set.seed.to_string()])?;
+            self.connection.execute("INSERT INTO sets(uid,name,focus_theme,target_rating,variance,size,target_cycles,created_at,preset_id,order_mode,restrict_recommended,seed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(uid) DO UPDATE SET name=excluded.name,focus_theme=excluded.focus_theme,target_rating=excluded.target_rating,variance=excluded.variance,size=excluded.size,target_cycles=excluded.target_cycles,preset_id=excluded.preset_id,order_mode=excluded.order_mode,restrict_recommended=excluded.restrict_recommended",params![uid,p.name,p.focus_theme,p.target_rating,p.variance,p.size,p.target_cycles,set.created_at,p.preset_id,if p.shuffle_each_cycle {"shuffle"} else {"fixed"},p.restrict_recommended,set.seed.to_string()])?;
             let id: i64 =
                 self.connection
                     .query_row("SELECT id FROM sets WHERE uid=?1", [uid], |r| r.get(0))?;
@@ -190,6 +205,9 @@ impl Store {
             )?;
             for (index, puzzle) in set.puzzles.iter().enumerate() {
                 self.connection.execute("INSERT INTO set_puzzles(set_id,position,puzzle_id,puzzle_json) VALUES(?1,?2,?3,?4) ON CONFLICT(set_id,position) DO NOTHING",params![id,i64::try_from(index+1).map_err(|_|StoreError::InvalidData("Set too large.".into()))?,puzzle.id,serde_json::to_string(puzzle)?])?;
+            }
+            for (key, field) in &set.fields {
+                self.connection.execute("INSERT INTO sync_fields(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",params![format!("set/{uid}/{key}"),field.value.to_string(),field.updated_at])?;
             }
             // Completed cycles first, preserving the one-active-cycle constraint.
             let mut cycles: Vec<_> = set.cycles.values().collect();

@@ -528,3 +528,35 @@ fn blocked_network_does_not_hold_store_lock_and_jobs_report_events_in_sequence()
         matches!(events.as_slice(), [Event::FetchProgress { id, batches: 1, inserted: 0 }, Event::Finished { result: Ok(_), .. }, Event::Started { .. }, Event::Finished { result: Ok(_), .. }] if *id == job.id)
     );
 }
+
+#[test]
+fn concurrent_synced_answers_fill_only_one_cycle_segment() {
+    let mut store = Store::memory().unwrap();
+    let puzzles = pool(20);
+    let set = store.create_set(&params(), &puzzles, 1, 42, 1200).unwrap();
+    let cycle = store.start_cycle(set, 1).unwrap();
+    let mut snapshot = store.export_sync().unwrap();
+    let uid = snapshot.sets.keys().next().unwrap().clone();
+    let attempt = crate::sync::format::Attempt {
+        uid: "a".repeat(32),
+        puzzle_id: puzzles[0].id.clone(),
+        cycle_uid: Some(format!("{uid}-1")),
+        kind: AttemptKind::Cycle,
+        outcome: Outcome::Incorrect,
+        time_ms: 1000,
+        moves_played: vec![],
+        created_at: 2,
+        local_day: None,
+    };
+    let mut second = attempt.clone();
+    second.uid = "b".repeat(32);
+    second.outcome = Outcome::Correct;
+    snapshot.attempts.insert(uid, vec![attempt, second]);
+    store.import_sync(&snapshot).unwrap();
+    let service = service(store, MockFetcher::default());
+    assert_eq!(
+        service.cycle_outcomes(cycle.id).unwrap(),
+        vec![Outcome::Incorrect]
+    );
+    assert_eq!(service.current_puzzle(cycle.id).unwrap().position, 1);
+}

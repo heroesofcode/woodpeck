@@ -294,13 +294,21 @@ impl AppService {
     pub fn cycle_outcomes(&self, cycle_id: i64) -> Result<Vec<Outcome>> {
         let store = lock(&self.store)?;
         let cycle = store.cycle(cycle_id)?.ok_or(StoreError::NotFound)?;
-        Ok(store
+        let mut outcomes = BTreeMap::new();
+        for attempt in store
             .attempts(cycle.set_id)?
             .into_iter()
             .filter(|a| a.cycle_id == Some(cycle_id))
-            .map(|a| a.outcome)
+        {
+            outcomes.entry(attempt.puzzle_id).or_insert(attempt.outcome);
+        }
+        Ok(cycle
+            .order
+            .iter()
+            .filter_map(|id| outcomes.get(id).copied())
             .collect())
     }
+
     pub fn current_puzzle(&self, cycle_id: i64) -> Result<TrainingPosition> {
         let store = lock(&self.store)?;
         let cycle = store.cycle(cycle_id)?.ok_or(StoreError::NotFound)?;

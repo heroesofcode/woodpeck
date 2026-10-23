@@ -46,6 +46,8 @@ impl Repository {
             "-c",
             "commit.gpgsign=false",
             "-c",
+            "push.gpgSign=false",
+            "-c",
             "core.hooksPath=/dev/null",
             "-c",
             "protocol.ext.allow=never",
@@ -259,4 +261,30 @@ pub fn create_remote(data: &Path) -> Result<String> {
         ));
     }
     inspect()?.ok_or_else(|| SyncError::Git("Could not read the created repository URL.".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn never_accept_embedded_tokens_or_command_options() {
+        for remote in [
+            "",
+            "-u",
+            "https://fake:secret@example.invalid/data.git",
+            "https://example.invalid/data.git?token=fake",
+            "ssh://fake:secret@example.invalid/data.git",
+            "a\nb",
+        ] {
+            assert!(validate_remote(remote).is_err());
+        }
+        for remote in [
+            "https://github.com/<user>/woodpeck-data.git",
+            "git@github.com:<user>/woodpeck-data.git",
+            "ssh://git@example.invalid/data.git",
+            "/tmp/example.git",
+        ] {
+            assert!(validate_remote(remote).is_ok());
+        }
+    }
 }
