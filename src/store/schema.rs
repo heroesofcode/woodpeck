@@ -1,7 +1,11 @@
 use super::{Result, StoreError};
 use rusqlite::Connection;
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub fn migrate(connection: &mut Connection) -> Result<()> {
+    migrate_until(connection, VERSION)
+}
+/// Apply migrations up to `target`, letting tests stage data at an older schema.
+pub(super) fn migrate_until(connection: &mut Connection, target: u32) -> Result<()> {
     connection.pragma_update(None, "foreign_keys", true)?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -9,7 +13,7 @@ pub fn migrate(connection: &mut Connection) -> Result<()> {
         return Err(StoreError::NewerSchema(version));
     }
     let tx = connection.transaction()?;
-    if version < 1 {
+    if version < 1 && target >= 1 {
         tx.execute_batch("CREATE TABLE puzzles (
             id TEXT PRIMARY KEY, fen TEXT NOT NULL, moves TEXT NOT NULL, rating INTEGER NOT NULL,
             rd INTEGER NOT NULL, popularity INTEGER NOT NULL, nb_plays INTEGER NOT NULL, themes_json TEXT NOT NULL
@@ -47,7 +51,7 @@ pub fn migrate(connection: &mut Connection) -> Result<()> {
         );
         CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);")?;
     }
-    if version < 2 {
+    if version < 2 && target >= 2 {
         tx.execute_batch(
             "CREATE INDEX puzzles_rating ON puzzles(rating);
         CREATE INDEX puzzle_themes_theme_rating ON puzzle_themes(theme,rating);
@@ -57,10 +61,13 @@ pub fn migrate(connection: &mut Connection) -> Result<()> {
         CREATE INDEX review_pending_recent ON review_items(status,last_missed_at DESC);",
         )?;
     }
-    if version < 3 {
+    if version < 3 && target >= 3 {
         migrate_sync(&tx)?;
     }
-    tx.pragma_update(None, "user_version", VERSION)?;
+    if version < 4 && target >= 4 {
+        migrate_theme_filters(&tx)?;
+    }
+    tx.pragma_update(None, "user_version", target.max(version))?;
     tx.commit()?;
     Ok(())
 }
@@ -123,4 +130,21 @@ fn migrate_sync(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
     }
 
     Ok(())
+}
+
+/// Replace the single focus theme with include/exclude lists; a focus becomes `include=[focus]`.
+/// Sync clocks move with the field so a migrated set never looks newer than its remote copy.
+fn migrate_theme_filters(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "ALTER TABLE sets ADD COLUMN include_themes TEXT NOT NULL DEFAULT '[]';
+         ALTER TABLE sets ADD COLUMN exclude_themes TEXT NOT NULL DEFAULT '[]';
+         ALTER TABLE sets ADD COLUMN theme_match TEXT NOT NULL DEFAULT 'any' CHECK(theme_match IN ('any','all'));
+         UPDATE sets SET include_themes=json_array(focus_theme) WHERE focus_theme IS NOT NULL AND focus_theme!='';
+         INSERT OR IGNORE INTO sync_fields(key,value,updated_at)
+            SELECT 'set/'||s.uid||'/'||k.name,CASE k.name WHEN 'include_themes' THEN s.include_themes WHEN 'exclude_themes' THEN '[]' ELSE json_quote('any') END,f.updated_at
+            FROM sync_fields f JOIN sets s ON f.key='set/'||s.uid||'/focus_theme'
+            CROSS JOIN (SELECT 'include_themes' AS name UNION ALL SELECT 'exclude_themes' UNION ALL SELECT 'theme_match') k;
+         DELETE FROM sync_fields WHERE key LIKE 'set/%/focus_theme';
+         ALTER TABLE sets DROP COLUMN focus_theme;",
+    )
 }

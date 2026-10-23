@@ -147,7 +147,7 @@ fn fallback(
             Err(error) => return Err(error.into()),
         }
         let puzzles = fetcher.batch(
-            params.focus_theme.as_deref(),
+            params.include_themes.first().map(String::as_str),
             params.target_rating,
             params.size.min(100),
             cancel,
@@ -158,10 +158,7 @@ fn fallback(
             .into_iter()
             .filter(|p| {
                 (band.0..=band.1).contains(&p.rating)
-                    && params
-                        .focus_theme
-                        .as_ref()
-                        .is_none_or(|t| p.themes.contains(t))
+                    && params.theme_filter().matches(&p.themes)
                     && p.validate().is_ok()
             })
             .collect();

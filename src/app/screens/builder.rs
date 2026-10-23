@@ -1,7 +1,7 @@
 use super::super::{Woodpeck, style, widgets};
 use crate::{
     service::Job,
-    sets::{CYCLE_CARDS, PRESETS, PresetKind, THEME_FOCUS, difficulty_caption},
+    sets::{CYCLE_CARDS, PRESETS, PresetKind, THEMES, difficulty_caption},
 };
 use eframe::egui::{self, RichText, Ui};
 impl Woodpeck {
@@ -105,17 +105,14 @@ impl Woodpeck {
             .width((ui.available_width() - 12.0).min(400.0))
             .selected_text(
                 self.builder
-                    .focus_theme
-                    .as_deref()
-                    .map_or_else(|| "Any theme".into(), crate::sets::theme_label),
+                    .include_themes
+                    .first()
+                    .map_or_else(|| "Any theme".into(), |t| crate::sets::theme_name(t)),
             )
             .show_ui(ui, |ui| {
-                for (key, label) in THEME_FOCUS {
-                    ui.selectable_value(
-                        &mut self.builder.focus_theme,
-                        (!key.is_empty()).then(|| key.into()),
-                        label,
-                    );
+                ui.selectable_value(&mut self.builder.include_themes, Vec::new(), "Any theme");
+                for (key, label) in THEMES {
+                    ui.selectable_value(&mut self.builder.include_themes, vec![key.into()], label);
                 }
             });
     }

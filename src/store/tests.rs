@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     puzzle::{Outcome, Puzzle},
     review::{ReviewSort, ReviewStatus},
-    sets::BuilderParams,
+    sets::{BuilderParams, ThemeFilter, ThemeMatch},
     settings::{BoardTheme, ColorTheme, Settings},
     stats::{Accuracy, Attempt, AttemptKind, CycleError},
 };
@@ -75,7 +75,7 @@ fn finish(store: &mut Store, cycle_id: i64, at: i64) {
 #[test]
 fn migrations_idempotent_and_reject_future_schema() {
     let store = Store::memory().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 3);
+    assert_eq!(store.schema_version().unwrap(), 4);
     let mut conn = store.connection;
     schema::migrate(&mut conn).unwrap();
     conn.pragma_update(None, "user_version", 99).unwrap();
@@ -84,8 +84,7 @@ fn migrations_idempotent_and_reject_future_schema() {
         Err(StoreError::NewerSchema(99))
     ));
 }
-#[test]
-fn migrates_existing_version_one_and_retains_data() {
+fn version_one_connection() -> Connection {
     let schema = include_str!("schema.rs");
     let sql = schema
         .split("tx.execute_batch(\"CREATE TABLE puzzles (")
@@ -98,6 +97,65 @@ fn migrates_existing_version_one_and_retains_data() {
     old.execute_batch(&format!("CREATE TABLE puzzles ({sql}"))
         .unwrap();
     old.pragma_update(None, "user_version", 1).unwrap();
+    old
+}
+#[test]
+fn migrates_focus_theme_to_include_list_with_its_sync_clock() {
+    let mut old = version_one_connection();
+    old.execute_batch(
+        "INSERT INTO sets VALUES(1,'Forks','fork',1000,100,20,2,1,'theme-forks','fixed',1,'42');
+         INSERT INTO sets VALUES(2,'Mixed',NULL,1000,100,20,2,1,'general','fixed',1,'43');",
+    )
+    .unwrap();
+    super::schema::migrate_until(&mut old, 3).unwrap();
+    old.execute(
+        "INSERT INTO sync_fields(key,value,updated_at) SELECT 'set/'||uid||'/focus_theme','\"fork\"',777 FROM sets WHERE id=1",
+        [],
+    )
+    .unwrap();
+    let s = Store::from_connection(old).unwrap();
+    assert_eq!(s.schema_version().unwrap(), 4);
+    let sets = s.sets().unwrap();
+    assert_eq!(sets[0].params.include_themes, vec!["fork".to_string()]);
+    assert_eq!(sets[0].params.exclude_themes, Vec::<String>::new());
+    assert_eq!(sets[0].params.theme_match, ThemeMatch::Any);
+    assert_eq!(sets[1].params.include_themes, Vec::<String>::new());
+    let mut clocks: Vec<(String, String, i64)> = s
+        .connection
+        .prepare("SELECT substr(key,38),value,updated_at FROM sync_fields ORDER BY key")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    clocks.sort();
+    assert_eq!(
+        clocks,
+        vec![
+            ("exclude_themes".into(), "[]".into(), 777),
+            ("include_themes".into(), "[\"fork\"]".into(), 777),
+            ("theme_match".into(), "\"any\"".into(), 777),
+        ]
+    );
+    // Theme lists round-trip through the new columns.
+    let mut s = s;
+    let mut rows = pool();
+    for p in &mut rows {
+        p.themes = vec!["fork".into(), "pin".into()];
+    }
+    let params = BuilderParams {
+        size: 20,
+        include_themes: vec!["fork".into(), "pin".into()],
+        exclude_themes: vec!["mate".into()],
+        theme_match: ThemeMatch::All,
+        ..BuilderParams::default()
+    };
+    let id = s.create_set(&params, &rows, 5, 1, 1200).unwrap();
+    assert_eq!(s.set(id).unwrap().unwrap().params, params);
+}
+#[test]
+fn migrates_existing_version_one_and_retains_data() {
+    let old = version_one_connection();
     old.execute_batch(
         "INSERT INTO sets VALUES(1,'Old',NULL,1000,100,20,2,1,NULL,'fixed',1,'42');
         INSERT INTO set_puzzles VALUES(1,1,'p00','{}');
@@ -107,7 +165,7 @@ fn migrates_existing_version_one_and_retains_data() {
     )
     .unwrap();
     let s = Store::from_connection(old).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 3);
+    assert_eq!(s.schema_version().unwrap(), 4);
     for table in ["sets", "cycles", "attempts", "review_items"] {
         let uid: String = s
             .connection
@@ -133,17 +191,72 @@ fn migrates_existing_version_one_and_retains_data() {
 fn puzzles_roundtrip_query_and_upsert_theme_index() {
     let mut s = Store::memory().unwrap();
     let mut rows = pool();
+    let (fork, mate) = (vec!["fork".to_string()], vec!["mate".to_string()]);
     s.upsert_puzzles(&rows).unwrap();
     assert_eq!(s.puzzle_count().unwrap(), 20);
     assert_eq!(s.puzzle("p00").unwrap(), Some(rows[0].clone()));
     assert_eq!(s.puzzle("missing").unwrap(), None);
-    assert_eq!(s.query_puzzles(1000, 1100, Some("fork")).unwrap().len(), 10);
-    assert_eq!(s.query_puzzles(500, 900, None).unwrap(), Vec::new());
+    assert_eq!(s.query_puzzles(1000, 1100, only(&fork)).unwrap().len(), 10);
+    assert_eq!(
+        s.query_puzzles(500, 900, ThemeFilter::default()).unwrap(),
+        Vec::new()
+    );
     rows[0].themes = vec!["mate".into()];
     rows[0].rating = 800;
     s.upsert_puzzles(&rows[..1]).unwrap();
-    assert_eq!(s.query_puzzles(1000, 1100, Some("fork")).unwrap().len(), 9);
-    assert_eq!(s.query_puzzles(800, 800, Some("mate")).unwrap().len(), 1);
+    assert_eq!(s.query_puzzles(1000, 1100, only(&fork)).unwrap().len(), 9);
+    assert_eq!(s.query_puzzles(800, 800, only(&mate)).unwrap().len(), 1);
+}
+fn only(include: &[String]) -> ThemeFilter<'_> {
+    ThemeFilter {
+        include,
+        ..ThemeFilter::default()
+    }
+}
+#[test]
+fn sqlite_theme_query_matches_local_filter() {
+    let mut s = Store::memory().unwrap();
+    let mut rows = pool();
+    // p00..p04 fork+pin, then alternating fork / pin, p19 also mate.
+    for p in &mut rows[..5] {
+        p.themes = vec!["fork".into(), "pin".into()];
+    }
+    rows[19].themes.push("mate".into());
+    s.upsert_puzzles(&rows).unwrap();
+    let strings = |l: &[&str]| l.iter().map(|t| (*t).to_string()).collect::<Vec<_>>();
+    let (fork_pin, pin, mate) = (
+        strings(&["fork", "pin"]),
+        strings(&["pin"]),
+        strings(&["mate"]),
+    );
+    let none: &[String] = &[];
+    for (include, exclude, mode, expected) in [
+        (&fork_pin[..], none, ThemeMatch::Any, 20),
+        (&fork_pin[..], none, ThemeMatch::All, 5),
+        (none, &pin[..], ThemeMatch::Any, 7),
+        (&pin[..], &mate[..], ThemeMatch::Any, 12),
+        (&fork_pin[..], &fork_pin[..], ThemeMatch::Any, 0),
+        (none, none, ThemeMatch::All, 20),
+    ] {
+        let filter = ThemeFilter {
+            include,
+            exclude,
+            mode,
+        };
+        let found = s.query_puzzles(400, 3000, filter).unwrap();
+        assert_eq!(found.len(), expected, "{filter:?}");
+        assert!(found.iter().all(|p| filter.matches(&p.themes)));
+        assert_eq!(
+            rows.iter().filter(|p| filter.matches(&p.themes)).count(),
+            expected
+        );
+    }
+    // Theme keys are bound parameters, so quoting cannot alter the query.
+    let hostile = strings(&["fork') OR 1=1 --"]);
+    assert_eq!(
+        s.query_puzzles(400, 3000, only(&hostile)).unwrap(),
+        Vec::new()
+    );
 }
 #[test]
 fn puzzle_import_is_atomic_on_overflow() {

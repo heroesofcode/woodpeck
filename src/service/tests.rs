@@ -57,7 +57,7 @@ fn pool(n: u32) -> Vec<Puzzle> {
 fn params() -> BuilderParams {
     BuilderParams {
         size: 20,
-        focus_theme: Some("fork".into()),
+        include_themes: vec!["fork".into()],
         target_cycles: 1,
         ..Default::default()
     }

@@ -1,4 +1,4 @@
-use super::{BuilderParams, InvalidParams};
+use super::{BuilderParams, InvalidParams, ThemeFilter};
 use crate::{puzzle::Puzzle, stats::cycle_order};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -10,7 +10,7 @@ pub trait PuzzleQuery {
         &self,
         minimum: u16,
         maximum: u16,
-        theme: Option<&str>,
+        themes: ThemeFilter<'_>,
     ) -> Result<Vec<Puzzle>, QueryError>;
 }
 #[derive(Debug, Error)]
@@ -56,14 +56,11 @@ pub fn generate(
     loop {
         let mut distinct_ids = BTreeSet::new();
         let mut candidates: Vec<_> = query
-            .query(used_band.0, used_band.1, params.focus_theme.as_deref())?
+            .query(used_band.0, used_band.1, params.theme_filter())?
             .into_iter()
             .filter(|p| {
                 (used_band.0..=used_band.1).contains(&p.rating)
-                    && params
-                        .focus_theme
-                        .as_ref()
-                        .is_none_or(|t| p.themes.contains(t))
+                    && params.theme_filter().matches(&p.themes)
                     && distinct_ids.insert(p.id.clone())
                     && p.validate().is_ok()
             })
@@ -153,7 +150,7 @@ mod tests {
     use super::*;
     struct Query(Vec<Puzzle>);
     impl PuzzleQuery for Query {
-        fn query(&self, _: u16, _: u16, _: Option<&str>) -> Result<Vec<Puzzle>, QueryError> {
+        fn query(&self, _: u16, _: u16, _: ThemeFilter<'_>) -> Result<Vec<Puzzle>, QueryError> {
             Ok(self.0.clone())
         }
     }
@@ -212,7 +209,7 @@ mod tests {
         }
         q.0.extend(q.0.clone());
         let p = BuilderParams {
-            focus_theme: Some("fork".into()),
+            include_themes: vec!["fork".into()],
             ..params()
         };
         let g = generate(&q, &p, 1200, 1).unwrap();
@@ -245,11 +242,128 @@ mod tests {
             }
         ));
     }
+    fn tagged(themes: &[&[&str]]) -> Query {
+        Query(
+            (0..120)
+                .map(|i| {
+                    let mut p = crate::puzzle::fixture();
+                    p.id = format!("{i:03}");
+                    p.rating = 950 + (i % 3) * 50;
+                    p.themes = themes[i as usize % themes.len()]
+                        .iter()
+                        .map(|t| (*t).to_string())
+                        .collect();
+                    p
+                })
+                .collect(),
+        )
+    }
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|t| (*t).to_string()).collect()
+    }
+    #[test]
+    fn multi_theme_any_all_and_exclude_filters() {
+        // 30 each: fork, pin, fork+pin, mate.
+        let q = tagged(&[&["fork"], &["pin"], &["fork", "pin"], &["mate"]]);
+        let with = |include: &[&str], exclude: &[&str], mode, size| BuilderParams {
+            include_themes: strings(include),
+            exclude_themes: strings(exclude),
+            theme_match: mode,
+            size,
+            preset_id: None,
+            ..params()
+        };
+        let any = generate(
+            &q,
+            &with(&["fork", "pin"], &[], super::super::ThemeMatch::Any, 90),
+            1200,
+            3,
+        )
+        .unwrap();
+        assert!(
+            any.puzzles
+                .iter()
+                .all(|p| p.themes.iter().any(|t| t == "fork" || t == "pin"))
+        );
+        let all = generate(
+            &q,
+            &with(&["fork", "pin"], &[], super::super::ThemeMatch::All, 30),
+            1200,
+            3,
+        )
+        .unwrap();
+        assert!(
+            all.puzzles
+                .iter()
+                .all(|p| p.themes == strings(&["fork", "pin"]))
+        );
+        assert!(matches!(
+            generate(
+                &q,
+                &with(&["fork", "pin"], &[], super::super::ThemeMatch::All, 31),
+                1200,
+                3
+            ),
+            Err(GenerationError::Insufficient {
+                available: 30,
+                requested: 31
+            })
+        ));
+        let excluded = generate(
+            &q,
+            &with(&[], &["pin"], super::super::ThemeMatch::Any, 60),
+            1200,
+            3,
+        )
+        .unwrap();
+        assert!(
+            excluded
+                .puzzles
+                .iter()
+                .all(|p| !p.themes.contains(&"pin".into()))
+        );
+        let both = generate(
+            &q,
+            &with(&["fork"], &["pin"], super::super::ThemeMatch::Any, 30),
+            1200,
+            3,
+        )
+        .unwrap();
+        assert!(both.puzzles.iter().all(|p| p.themes == strings(&["fork"])));
+        // Never a partial set: excluding everything reports the shortfall.
+        assert!(matches!(
+            generate(
+                &q,
+                &with(
+                    &[],
+                    &["fork", "mate", "pin"],
+                    super::super::ThemeMatch::Any,
+                    20
+                ),
+                1200,
+                3
+            ),
+            Err(GenerationError::Insufficient {
+                available: 0,
+                requested: 20
+            })
+        ));
+        // Overlapping include/exclude is rejected up front rather than silently emptied.
+        assert!(matches!(
+            generate(
+                &q,
+                &with(&["fork"], &["fork"], super::super::ThemeMatch::Any, 20),
+                1200,
+                3
+            ),
+            Err(GenerationError::InvalidParams(_))
+        ));
+    }
     #[test]
     fn propagates_query_error() {
         struct Bad;
         impl PuzzleQuery for Bad {
-            fn query(&self, _: u16, _: u16, _: Option<&str>) -> Result<Vec<Puzzle>, QueryError> {
+            fn query(&self, _: u16, _: u16, _: ThemeFilter<'_>) -> Result<Vec<Puzzle>, QueryError> {
                 Err(QueryError("offline".into()))
             }
         }
@@ -276,7 +390,7 @@ mod snapshot_tests {
     use super::*;
     struct Local(Vec<Puzzle>);
     impl PuzzleQuery for Local {
-        fn query(&self, _: u16, _: u16, _: Option<&str>) -> Result<Vec<Puzzle>, QueryError> {
+        fn query(&self, _: u16, _: u16, _: ThemeFilter<'_>) -> Result<Vec<Puzzle>, QueryError> {
             Ok(self.0.clone())
         }
     }
@@ -294,7 +408,7 @@ mod snapshot_tests {
         );
         let params = BuilderParams {
             size: 20,
-            focus_theme: Some("fork".into()),
+            include_themes: vec!["fork".into()],
             ..Default::default()
         };
         let generated = generate(&source, &params, 1200, 1).unwrap();

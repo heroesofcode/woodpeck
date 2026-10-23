@@ -114,7 +114,7 @@ impl Preset {
             PresetKind::General => return None,
             PresetKind::Theme(theme) => {
                 p.target_rating = user_rating.saturating_sub(200).max(800);
-                p.focus_theme = Some(theme.into());
+                p.include_themes = vec![theme.into()];
             }
             PresetKind::Level(low, high) => {
                 p.target_rating = u16::midpoint(low, high);
@@ -130,24 +130,73 @@ impl Preset {
         })
     }
 }
-pub const THEME_FOCUS: [(&str, &str); 16] = [
-    ("", "Any theme"),
+/// Lichess puzzle theme keys offered by the set builder, with display labels.
+pub const THEMES: [(&str, &str); 57] = [
     ("mate", "Mates"),
     ("mateIn1", "Mate in 1"),
     ("mateIn2", "Mate in 2"),
     ("mateIn3", "Mate in 3"),
+    ("mateIn4", "Mate in 4"),
+    ("backRankMate", "Back Rank Mate"),
+    ("smotheredMate", "Smothered Mate"),
+    ("anastasiaMate", "Anastasia's Mate"),
+    ("arabianMate", "Arabian Mate"),
+    ("hookMate", "Hook Mate"),
+    ("bodenMate", "Boden's Mate"),
+    ("doubleBishopMate", "Double Bishop Mate"),
+    ("dovetailMate", "Dovetail Mate"),
     ("fork", "Forks"),
     ("pin", "Pins"),
     ("skewer", "Skewers"),
     ("discoveredAttack", "Discovered Attacks"),
     ("doubleCheck", "Double Checks"),
-    ("backRankMate", "Back Rank Mate"),
+    ("xRayAttack", "X-Ray Attacks"),
     ("attraction", "Attraction"),
     ("deflection", "Deflection"),
+    ("decoy", "Decoy"),
+    ("clearance", "Clearance"),
+    ("interference", "Interference"),
+    ("intermezzo", "Intermezzo"),
+    ("capturingDefender", "Capturing the Defender"),
     ("sacrifice", "Sacrifices"),
     ("hangingPiece", "Hanging Pieces"),
     ("trappedPiece", "Trapped Pieces"),
+    ("exposedKing", "Exposed King"),
+    ("kingsideAttack", "Kingside Attack"),
+    ("queensideAttack", "Queenside Attack"),
+    ("attackingF2F7", "Attacking f2/f7"),
+    ("quietMove", "Quiet Moves"),
+    ("defensiveMove", "Defensive Moves"),
+    ("zugzwang", "Zugzwang"),
+    ("advancedPawn", "Advanced Pawns"),
+    ("promotion", "Promotion"),
+    ("underPromotion", "Underpromotion"),
+    ("enPassant", "En Passant"),
+    ("castling", "Castling"),
+    ("opening", "Opening"),
+    ("middlegame", "Middlegame"),
+    ("endgame", "Endgame"),
+    ("rookEndgame", "Rook Endgames"),
+    ("bishopEndgame", "Bishop Endgames"),
+    ("knightEndgame", "Knight Endgames"),
+    ("pawnEndgame", "Pawn Endgames"),
+    ("queenEndgame", "Queen Endgames"),
+    ("queenRookEndgame", "Queen & Rook Endgames"),
+    ("crushing", "Crushing"),
+    ("advantage", "Advantage"),
+    ("equality", "Equality"),
+    ("oneMove", "One Move"),
+    ("short", "Short"),
+    ("long", "Long"),
+    ("veryLong", "Very Long"),
 ];
+/// Curated builder label when known, otherwise the title-cased Lichess key.
+pub fn theme_name(key: &str) -> String {
+    THEMES
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map_or_else(|| theme_label(key), |(_, label)| (*label).into())
+}
 pub fn theme_label(key: &str) -> String {
     let mut result = String::new();
     for (i, c) in key.chars().enumerate() {
