@@ -5,7 +5,7 @@ A native **Woodpecker Method chess puzzle trainer**, inspired by [Peck Chess](ht
 ## Features
 
 - **A review queue that catches every miss.** Wrong answers and skips enter Review immediately, with a pending badge in navigation and a dashboard callout. Filter by theme or sort by recency and accuracy. Only a correct solve in Review clears an item; review attempts update lifetime accuracy without changing cycle results. The puzzle stays in its set for future cycles.
-- **Sets and presets.** General, tactical weakness, and rating presets; 20–500 positions; adjustable rating bands and 1–10 cycles. Fixed snapshots preserve your positions when the puzzle library changes. Optional seeded shuffling changes the order each cycle.
+- **Sets and presets.** General, tactical weakness, and rating presets; multi-theme filters that include and exclude Lichess themes; 20–500 positions; adjustable rating bands and 1–10 cycles. Fixed snapshots preserve your positions when the puzzle library changes. Optional seeded shuffling changes the order each cycle.
 - **Cycles and a count-up timer.** Resume across restarts, compare cycles, and step through the solution after a mistake. The timer pauses during animations, feedback, walkthroughs, promotion, and loss of focus. Optional completion sound and auto-advance.
 - **Progress.** Time and accuracy charts, comparisons with cycle one, performance by theme, and most-missed positions. Small local streak, XP, and rank widgets.
 - **Omarchy theme sync with live reload.** Desktop colors and fontconfig fonts, with two-second theme polling that follows directory and symlink swaps. Built-in dark and light themes and eight board palettes.
@@ -69,7 +69,17 @@ The default `sound` feature uses ALSA on Linux; playback happens in the backgrou
 
 ## Usage
 
-Start with **New set**, choose a preset or a tactical focus, then create a set. **Continue** resumes its current cycle. After a wrong move, walk through the missed line or advance; the item is already in **Review**. Use Review regularly and solve each queued puzzle correctly to clear it. **Progress** compares completed cycles. **Settings** controls themes, auto-advance, sound, tactical labels, imports, and PGN export.
+Start with **New set**, choose a preset, optionally adjust the themes, then create a set. **Continue** resumes its current cycle. After a wrong move, walk through the missed line or advance; the item is already in **Review**. Use Review regularly and solve each queued puzzle correctly to clear it. **Progress** compares completed cycles. **Settings** controls themes, auto-advance, sound, tactical labels, imports, and PGN export.
+
+### Choosing themes
+
+The builder's **Themes** picker lists Lichess puzzle themes; type in the search box to narrow it. Click a theme once to **include** it (green), again to **exclude** it (red, struck through), and a third time to clear it. Selected themes appear as chips above the search box; click a chip to remove it, or **Clear all**.
+
+- No included themes: any theme qualifies.
+- With two or more included themes, choose **Match any** (a puzzle needs at least one) or **Match all** (it needs every one).
+- Excluded themes always win: a puzzle with any excluded theme is never picked.
+
+Weakness presets start with their theme included, and you can add more from there. If the local library and the Lichess fallback can't fill the set, woodpeck creates nothing and tells you how many matching puzzles it found. It never saves a partial set. The fallback asks Lichess for one included theme at a time, rotating through them, and applies the full filter locally. Dashboard cards show each set's themes.
 
 | Key | Action |
 | --- | --- |
@@ -171,7 +181,7 @@ when a correct review solve is later than their latest miss. Keep system clocks
 accurate. Equal-time review conflicts remain pending. Git text conflicts need
 no manual editing. Sets are merged as a union: deleting a local set can restore
 it from remote history on the next sync. A newer remote format stops sync until
-you upgrade. Disabling leaves local progress and existing private Git history
+you upgrade; for example, multi-theme sets use format 2, which older releases refuse rather than misread. Current releases upgrade format 1 data automatically. Disabling leaves local progress and existing private Git history
 in place; it does not delete the remote repository.
 
 Local sync files live in `$XDG_DATA_HOME/woodpeck/sync/` (or the platform data
