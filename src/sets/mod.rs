@@ -15,8 +15,10 @@ pub const CYCLE_CARDS: [(u8, &str); 3] = [
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuilderParams {
     pub name: String,
-    pub target_rating: u16,
-    pub variance: u16,
+    /// Inclusive lower bound of puzzle ratings in the set.
+    pub rating_min: u16,
+    /// Inclusive upper bound of puzzle ratings in the set.
+    pub rating_max: u16,
     pub size: u32,
     pub target_cycles: u8,
     /// Lichess theme keys a puzzle must carry (any or all of them, per `theme_match`).
@@ -27,7 +29,6 @@ pub struct BuilderParams {
     pub exclude_themes: Vec<String>,
     #[serde(default)]
     pub theme_match: ThemeMatch,
-    pub restrict_recommended: bool,
     pub preset_id: Option<String>,
     pub shuffle_each_cycle: bool,
 }
@@ -35,14 +36,13 @@ impl Default for BuilderParams {
     fn default() -> Self {
         Self {
             name: "Starter Set".into(),
-            target_rating: 1000,
-            variance: 100,
+            rating_min: 900,
+            rating_max: 1100,
             size: 100,
             target_cycles: 5,
             include_themes: Vec::new(),
             exclude_themes: Vec::new(),
             theme_match: ThemeMatch::Any,
-            restrict_recommended: true,
             preset_id: Some("general".into()),
             shuffle_each_cycle: false,
         }
@@ -100,20 +100,93 @@ impl ThemeFilter<'_> {
         self.include.is_empty() && self.exclude.is_empty()
     }
 }
+/// Puzzle ratings a set range may span (the Lichess puzzle database's practical bounds).
+pub const RATING_BOUNDS: (u16, u16) = (400, 3200);
+/// Narrowest allowed range, so a set always has room for a spread of puzzles.
+pub const MIN_RANGE_WIDTH: u16 = 100;
+/// Builder slider and quick-range granularity.
+pub const RANGE_STEP: u16 = 25;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 #[error(
-    "Choose a name, 20–500 puzzles, 1–10 cycles, a valid target rating, variance ±50–200 in steps of 25, and known themes that are not both included and excluded."
+    "Choose a name, 20–500 puzzles, 1–10 cycles, a rating range within 400–3200 that is at least 100 points wide, and known themes that are not both included and excluded."
 )]
 pub struct InvalidParams;
+/// Whether `(min, max)` is an allowed inclusive rating range.
+pub fn valid_range(min: u16, max: u16) -> bool {
+    RATING_BOUNDS.0 <= min && max <= RATING_BOUNDS.1 && max >= min.saturating_add(MIN_RANGE_WIDTH)
+}
+/// Round to the builder step, clamp into bounds and widen to the minimum width, keeping it valid.
+pub fn normalize_range(min: u16, max: u16) -> (u16, u16) {
+    let round = |v: u16| {
+        (v.saturating_add(RANGE_STEP / 2) / RANGE_STEP * RANGE_STEP)
+            .clamp(RATING_BOUNDS.0, RATING_BOUNDS.1)
+    };
+    let (mut min, mut max) = (round(min.min(max)), round(min.max(max)));
+    if max < min + MIN_RANGE_WIDTH {
+        max = (min + MIN_RANGE_WIDTH).min(RATING_BOUNDS.1);
+        min = max - MIN_RANGE_WIDTH;
+    }
+    (min, max)
+}
+/// One end of a rating range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RangeHandle {
+    Min,
+    Max,
+}
+/// Move one end of a valid range to `value`, clamped to the bounds. If that would make the range
+/// narrower than the minimum width, the other end is pushed along so the result stays valid.
+pub fn drag_range((min, max): (u16, u16), handle: RangeHandle, value: u16) -> (u16, u16) {
+    let (low, high) = RATING_BOUNDS;
+    match handle {
+        RangeHandle::Min => {
+            let min = value.clamp(low, high - MIN_RANGE_WIDTH);
+            (min, max.clamp(min + MIN_RANGE_WIDTH, high))
+        }
+        RangeHandle::Max => {
+            let max = value.clamp(low + MIN_RANGE_WIDTH, high);
+            (min.clamp(low, max - MIN_RANGE_WIDTH), max)
+        }
+    }
+}
+/// Exact range for a pre-range set (`target ± variance`, clamped to the old 400–3000 limits).
+/// Bands narrower than the minimum width, possible only at the old edges, grow upward.
+/// The `SQLite` migration and the sync upgrade must both use this rule.
+pub fn legacy_range(target: u16, variance: u16) -> (u16, u16) {
+    let min = target
+        .saturating_sub(variance)
+        .clamp(RATING_BOUNDS.0, RATING_BOUNDS.1 - MIN_RANGE_WIDTH);
+    let max = target.saturating_add(variance).min(3000);
+    (min, max.max(min + MIN_RANGE_WIDTH))
+}
+/// One-click ranges relative to the player's puzzle rating, shown beside the range slider.
+pub fn quick_ranges(user_rating: u16) -> [(&'static str, (u16, u16)); 4] {
+    let r = user_rating;
+    [
+        (
+            "Easy",
+            normalize_range(r.saturating_sub(500), r.saturating_sub(200)),
+        ),
+        (
+            "My rating ±150",
+            normalize_range(r.saturating_sub(150), r.saturating_add(150)),
+        ),
+        (
+            "Hard",
+            normalize_range(r.saturating_add(100), r.saturating_add(400)),
+        ),
+        ("Recommended", {
+            let (low, high) = recommended_range(r);
+            normalize_range(low, high)
+        }),
+    ]
+}
 impl BuilderParams {
-    pub fn validate(&self, user_rating: u16) -> Result<(), InvalidParams> {
-        let (low, high) = self.target_limits(user_rating);
+    pub fn validate(&self) -> Result<(), InvalidParams> {
         if self.name.trim().is_empty()
             || !(20..=500).contains(&self.size)
             || !(1..=10).contains(&self.target_cycles)
-            || !(50..=200).contains(&self.variance)
-            || !self.variance.is_multiple_of(25)
-            || !(low..=high).contains(&self.target_rating)
+            || !valid_range(self.rating_min, self.rating_max)
             || !valid_theme_list(&self.include_themes)
             || !valid_theme_list(&self.exclude_themes)
             || self
@@ -125,18 +198,16 @@ impl BuilderParams {
         }
         Ok(())
     }
-    pub fn target_limits(&self, user_rating: u16) -> (u16, u16) {
-        if self.restrict_recommended {
-            recommended_range(user_rating)
-        } else {
-            (400, 3000)
-        }
+    /// The inclusive `(min, max)` rating range.
+    pub fn range(&self) -> (u16, u16) {
+        (self.rating_min, self.rating_max)
     }
-    pub fn band(&self) -> (u16, u16) {
-        (
-            self.target_rating.saturating_sub(self.variance).max(400),
-            self.target_rating.saturating_add(self.variance).min(3000),
-        )
+    pub fn set_range(&mut self, (min, max): (u16, u16)) {
+        (self.rating_min, self.rating_max) = (min, max);
+    }
+    /// Inclusive on both ends.
+    pub fn rating_in_range(&self, rating: u16) -> bool {
+        (self.rating_min..=self.rating_max).contains(&rating)
     }
     pub fn estimated_time(&self) -> (Duration, Duration) {
         let n = u64::from(self.size) * u64::from(self.target_cycles);
@@ -219,8 +290,9 @@ pub fn recommended_range(rating: u16) -> (u16, u16) {
     let low = rating.saturating_sub(400).clamp(800, 3000);
     (low, rating.saturating_add(100).clamp(low, 3000))
 }
-/// Inferred thresholds: at least 200 below your rating is comfortable; above it challenging.
-pub fn difficulty_caption(target: u16, rating: u16) -> &'static str {
+/// Inferred thresholds from the range midpoint: at least 200 below your rating is comfortable.
+pub fn difficulty_caption((min, max): (u16, u16), rating: u16) -> &'static str {
+    let target = u16::midpoint(min, max);
     if target <= rating.saturating_sub(200) {
         "Comfortable"
     } else if target <= rating {
@@ -240,28 +312,23 @@ mod tests {
             let b = p.builder(1200);
             assert_eq!(b.size, 100);
             assert_eq!(b.target_cycles, 5);
-            assert_eq!(b.variance, 100);
-            b.validate(1200).unwrap();
+            b.validate().unwrap();
             match p.kind {
                 PresetKind::Theme(theme) => {
                     assert_eq!(b.include_themes, vec![theme.to_string()]);
                     assert_eq!(b.exclude_themes, Vec::<String>::new());
-                    assert_eq!(b.target_rating, 1000);
-                    assert!(b.restrict_recommended);
+                    assert_eq!(b.range(), (900, 1100));
                 }
-                PresetKind::Level(a, z) => {
-                    assert_eq!(b.target_rating, u16::midpoint(a, z));
-                    assert!(!b.restrict_recommended);
+                PresetKind::Level(a, z) => assert_eq!(b.range(), (a, z)),
+                PresetKind::General => {
+                    assert!(b.is_general());
+                    assert_eq!(b.range(), (900, 1100));
                 }
-                PresetKind::General => assert!(b.is_general()),
             }
         }
         assert_eq!(
-            Preset::find("theme-forks")
-                .unwrap()
-                .builder(800)
-                .target_rating,
-            800
+            Preset::find("theme-forks").unwrap().builder(800).range(),
+            (700, 900)
         );
         assert!(Preset::find("unknown").is_none());
     }
@@ -270,15 +337,67 @@ mod tests {
         assert_eq!(recommended_range(1200), (800, 1300));
         assert_eq!(recommended_range(1800), (1400, 1900));
         assert_eq!(recommended_range(400), (800, 800));
-        assert_eq!(difficulty_caption(1000, 1200), "Comfortable");
-        assert_eq!(difficulty_caption(1100, 1200), "Moderate");
-        assert_eq!(difficulty_caption(1300, 1200), "Challenging");
+        assert_eq!(difficulty_caption((900, 1100), 1200), "Comfortable");
+        assert_eq!(difficulty_caption((1000, 1200), 1200), "Moderate");
+        assert_eq!(difficulty_caption((1200, 1400), 1200), "Challenging");
         let p = BuilderParams::default();
-        assert_eq!(p.band(), (900, 1100));
+        assert_eq!(p.range(), (900, 1100));
         assert_eq!(
             p.estimated_time(),
             (Duration::from_secs(14500), Duration::from_mins(750))
         );
+    }
+    #[test]
+    fn range_validation_normalization_and_legacy_mapping() {
+        assert!(valid_range(400, 500));
+        assert!(valid_range(3100, 3200));
+        assert!(valid_range(1000, 1100));
+        assert!(!valid_range(1000, 1099), "narrower than the minimum width");
+        assert!(!valid_range(1200, 1200), "min == max is too narrow");
+        assert!(!valid_range(1300, 1200), "min above max");
+        assert!(!valid_range(399, 600));
+        assert!(!valid_range(3000, 3201));
+        assert_eq!(normalize_range(1012, 1138), (1000, 1150));
+        assert_eq!(normalize_range(1200, 1200), (1200, 1300));
+        assert_eq!(normalize_range(1300, 1200), (1200, 1300));
+        assert_eq!(normalize_range(3190, 3300), (3100, 3200));
+        assert_eq!(normalize_range(0, 10), (400, 500));
+        for (min, max) in [(0, 0), (1200, 1200), (3300, 3300), (1013, 1037)] {
+            let (a, b) = normalize_range(min, max);
+            assert!(valid_range(a, b), "{min}-{max} -> {a}-{b}");
+        }
+        assert_eq!(legacy_range(1000, 100), (900, 1100));
+        assert_eq!(legacy_range(1137, 75), (1062, 1212));
+        assert_eq!(legacy_range(420, 50), (400, 500));
+        assert_eq!(legacy_range(2990, 200), (2790, 3000));
+        assert_eq!(legacy_range(3000, 50), (2950, 3050));
+        for (label, (a, b)) in quick_ranges(1200) {
+            assert!(valid_range(a, b), "{label}");
+            assert_eq!(a % RANGE_STEP, 0);
+        }
+        assert_eq!(quick_ranges(1200)[1], ("My rating ±150", (1050, 1350)));
+        // Dragging keeps min <= max - 100, pushing the other handle at the limit.
+        assert_eq!(drag_range((900, 1100), RangeHandle::Min, 950), (950, 1100));
+        assert_eq!(
+            drag_range((900, 1100), RangeHandle::Min, 1050),
+            (1050, 1150)
+        );
+        assert_eq!(
+            drag_range((900, 1100), RangeHandle::Min, 3200),
+            (3100, 3200)
+        );
+        assert_eq!(drag_range((900, 1100), RangeHandle::Min, 0), (400, 1100));
+        assert_eq!(drag_range((900, 1100), RangeHandle::Max, 950), (850, 950));
+        assert_eq!(drag_range((900, 1100), RangeHandle::Max, 400), (400, 500));
+        assert_eq!(drag_range((900, 1100), RangeHandle::Max, 9999), (900, 3200));
+        for value in (0..3500).step_by(37) {
+            for handle in [RangeHandle::Min, RangeHandle::Max] {
+                let (a, b) = drag_range((1000, 1100), handle, value);
+                assert!(valid_range(a, b));
+            }
+        }
+        assert_eq!(quick_ranges(400)[0].1, (400, 500));
+        assert_eq!(quick_ranges(3000)[2].1, (3100, 3200));
     }
     #[test]
     fn rejects_invalid_builder_values() {
@@ -293,7 +412,21 @@ mod tests {
                 ..b.clone()
             },
             BuilderParams {
-                variance: 60,
+                rating_min: 1100,
+                rating_max: 1100,
+                ..b.clone()
+            },
+            BuilderParams {
+                rating_min: 1200,
+                rating_max: 1100,
+                ..b.clone()
+            },
+            BuilderParams {
+                rating_min: 300,
+                ..b.clone()
+            },
+            BuilderParams {
+                rating_max: 3250,
                 ..b.clone()
             },
             BuilderParams {
@@ -302,10 +435,6 @@ mod tests {
             },
             BuilderParams {
                 name: " ".into(),
-                ..b.clone()
-            },
-            BuilderParams {
-                target_rating: 1500,
                 ..b.clone()
             },
             BuilderParams {
@@ -330,7 +459,7 @@ mod tests {
                 ..b.clone()
             },
         ] {
-            assert!(bad.validate(1200).is_err());
+            assert!(bad.validate().is_err());
         }
     }
     #[test]
@@ -392,7 +521,7 @@ mod tests {
         b.cycle_theme("pin");
         b.cycle_theme("fork");
         assert_eq!(b.include_themes, themes(&["fork", "pin"]));
-        b.validate(1200).unwrap();
+        b.validate().unwrap();
         assert_eq!(b.theme_summary().unwrap(), "Forks or Pins");
         b.theme_match = ThemeMatch::All;
         assert_eq!(b.theme_summary().unwrap(), "Forks + Pins");
@@ -407,7 +536,7 @@ mod tests {
         assert_eq!(b.include_themes, Vec::<String>::new());
         assert_eq!(b.exclude_themes, themes(&["fork", "mate"]));
         assert_eq!(b.theme_summary().unwrap(), "Not Forks, Mates");
-        b.validate(1200).unwrap();
+        b.validate().unwrap();
         assert!(!b.is_general() || b.include_themes.is_empty());
     }
     #[test]
