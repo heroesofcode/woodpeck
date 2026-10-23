@@ -16,6 +16,21 @@ pub struct RecordedAttempt {
 impl Store {
     /// Attempt insertion, review upsert, and cycle completion commit together or all roll back.
     pub fn record_attempt(&mut self, attempt: &Attempt) -> Result<RecordedAttempt> {
+        use chrono::{Datelike, TimeZone};
+        let day = chrono::Local
+            .timestamp_opt(attempt.created_at, 0)
+            .single()
+            .ok_or_else(|| StoreError::InvalidData("Attempt timestamp is out of range.".into()))?
+            .date_naive()
+            .num_days_from_ce();
+        self.record_attempt_on_day(attempt, i64::from(day))
+    }
+    /// Explicit local calendar day supports deterministic clocks and streak tests.
+    pub fn record_attempt_on_day(
+        &mut self,
+        attempt: &Attempt,
+        day: i64,
+    ) -> Result<RecordedAttempt> {
         let time_ms = i64::try_from(attempt.time_ms.max(1)).map_err(|_| {
             StoreError::InvalidData("Recorded time exceeds SQLite integer range.".into())
         })?;
@@ -64,6 +79,21 @@ impl Store {
                 )?;
                 cycle_completed = true;
             }
+        }
+        if attempt.kind != AttemptKind::Demo {
+            let json: Option<String> = tx
+                .query_row(
+                    "SELECT value FROM settings WHERE key='motivation'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let mut activity: crate::motivation::Motivation = json
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?
+                .unwrap_or_default();
+            activity.record(day, attempt.outcome, cycle_completed);
+            tx.execute("INSERT INTO settings(key,value) VALUES('motivation',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [serde_json::to_string(&activity)?])?;
         }
         tx.commit()?;
         Ok(RecordedAttempt {
