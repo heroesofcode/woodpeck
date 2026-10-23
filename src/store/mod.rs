@@ -68,6 +68,12 @@ impl Store {
         self.connection.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[key,value])?;
         Ok(())
     }
+    pub(crate) fn immediate_transaction(&self) -> Result<rusqlite::Transaction<'_>> {
+        Ok(rusqlite::Transaction::new_unchecked(
+            &self.connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?)
+    }
     pub fn settings(&self) -> Result<crate::settings::Settings> {
         self.setting("preferences")?.map_or_else(
             || Ok(crate::settings::Settings::default()),

@@ -83,29 +83,50 @@ pub fn config(store: &Store) -> Result<Config> {
     }
     Ok(config)
 }
-fn save_config(store: &Store, config: &Config) -> Result<()> {
-    Ok(store.set_setting("sync_config", &serde_json::to_string(config)?)?)
+/// Hold the write lock from the read through the update, including across connections.
+fn update_config(store: &Store, update: impl FnOnce(&mut Config) -> Result<()>) -> Result<Config> {
+    let transaction = store.immediate_transaction()?;
+    let mut cfg = config(store)?;
+    update(&mut cfg)?;
+    store.set_setting("sync_config", &serde_json::to_string(&cfg)?)?;
+    transaction
+        .commit()
+        .map_err(crate::store::StoreError::from)?;
+    Ok(cfg)
+}
+/// Worker snapshots own runtime fields only; discard results for obsolete settings.
+fn save_runtime(store: &Store, runtime: &Config) -> Result<Config> {
+    update_config(store, |latest| {
+        if latest.enabled && latest.remote == runtime.remote {
+            latest.pending = runtime.pending;
+            latest.status = runtime.status;
+            latest.last_error.clone_from(&runtime.last_error);
+            latest.last_sync = runtime.last_sync;
+            latest.synced_generation = runtime.synced_generation;
+        }
+        Ok(())
+    })
 }
 pub fn configure(store: &Store, remote: &str, enabled: bool) -> Result<Config> {
     if enabled || !remote.is_empty() {
         git::validate_remote(remote)?;
     }
-    let mut cfg = config(store)?;
-    if cfg.remote != remote {
-        cfg.synced_generation = -1;
-        cfg.last_sync = None;
-    }
-    cfg.remote = remote.into();
-    cfg.enabled = enabled;
-    cfg.pending = enabled;
-    cfg.last_error = None;
-    cfg.status = if enabled {
-        Status::Pending
-    } else {
-        Status::Disabled
-    };
-    save_config(store, &cfg)?;
-    Ok(cfg)
+    update_config(store, |cfg| {
+        if cfg.remote != remote {
+            cfg.synced_generation = -1;
+            cfg.last_sync = None;
+        }
+        cfg.remote = remote.into();
+        cfg.enabled = enabled;
+        cfg.pending = enabled;
+        cfg.last_error = None;
+        cfg.status = if enabled {
+            Status::Pending
+        } else {
+            Status::Disabled
+        };
+        Ok(())
+    })
 }
 pub fn init(store: &mut Store, data: &Path, remote: Option<&str>) -> Result<Config> {
     crate::store::ensure_external_data_dir(data)?;
@@ -148,20 +169,25 @@ impl Drop for Lease {
 /// Blocking API for CLI/tests and the background worker; never call from the UI thread.
 pub fn synchronize(store: &mut Store, data: &Path, budget: Duration) -> Result<Config> {
     let deadline = Instant::now() + budget;
-    let mut cfg = config(store)?;
-    if !cfg.enabled {
-        return Err(SyncError::Invalid(
-            "Sync is disabled. Use sync init or enable it in Settings.".into(),
-        ));
-    }
-    // A close request can expire while waiting for an in-flight sync. There is
-    // nothing to attempt in that case, and no failure to record.
-    if Instant::now() >= deadline {
+    let mut started = false;
+    let cfg = update_config(store, |cfg| {
+        if !cfg.enabled {
+            return Err(SyncError::Invalid(
+                "Sync is disabled. Use sync init or enable it in Settings.".into(),
+            ));
+        }
+        // A close request can expire while waiting for an in-flight sync. There
+        // is nothing to attempt in that case, and no failure to record.
+        if Instant::now() < deadline {
+            cfg.pending = store.sync_generation()? != cfg.synced_generation;
+            cfg.status = Status::Syncing;
+            started = true;
+        }
+        Ok(())
+    })?;
+    if !started {
         return Ok(cfg);
     }
-    cfg.pending = store.sync_generation()? != cfg.synced_generation;
-    cfg.status = Status::Syncing;
-    save_config(store, &cfg)?;
     let result = synchronize_inner(store, data, &cfg.remote, deadline);
     // Preserve configuration edited while network commands were running.
     let mut latest = config(store)?;
@@ -192,7 +218,7 @@ pub fn synchronize(store: &mut Store, data: &Path, budget: Duration) -> Result<C
             latest.last_error = Some(error.to_string());
         }
     }
-    save_config(store, &latest)?;
+    let latest = save_runtime(store, &latest)?;
     result.map(|_| latest)
 }
 fn synchronize_inner(
@@ -221,4 +247,41 @@ fn synchronize_inner(
         // Re-fetch and repeat the semantic union after a concurrent non-fast-forward push.
     }
     Err(SyncError::Offline)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_runtime_writes_preserve_settings_from_another_connection() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("woodpeck.db");
+        let worker = Store::open(&db).unwrap();
+        let ui = Store::open(&db).unwrap();
+        for (remote, enabled) in [
+            ("/original/remote.git", false),
+            ("/replacement/remote.git", true),
+        ] {
+            for status in [
+                Status::Syncing,
+                Status::Pending,
+                Status::Synced,
+                Status::Offline,
+            ] {
+                let mut stale = configure(&worker, "/original/remote.git", true).unwrap();
+                stale.status = status;
+                stale.pending = status != Status::Synced;
+                stale.last_error = Some("stale runtime error".into());
+                stale.last_sync = Some(123);
+                stale.synced_generation = 123;
+                let expected = configure(&ui, remote, enabled).unwrap();
+                assert_eq!(save_runtime(&worker, &stale).unwrap(), expected);
+                assert_eq!(config(&ui).unwrap(), expected);
+                let persisted: Config =
+                    serde_json::from_str(&ui.setting("sync_config").unwrap().unwrap()).unwrap();
+                assert_eq!(persisted, expected);
+            }
+        }
+    }
 }

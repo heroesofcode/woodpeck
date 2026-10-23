@@ -1,5 +1,5 @@
 //! Independent SQLite connection and serial worker; network work never holds the service lock.
-use super::{Config, Result, Status, config, save_config, synchronize};
+use super::{Config, Result, Status, config, save_runtime, synchronize};
 use crate::store::Store;
 use std::{
     path::Path,
@@ -141,7 +141,9 @@ fn run(path: &Path, commands: &mpsc::Receiver<Message>, events: &mpsc::Sender<Co
                 if !matches!(cfg.status, Status::Error | Status::Offline) {
                     cfg.status = Status::Pending;
                 }
-                let _ = save_config(&store, &cfg);
+                if let Ok(latest) = save_runtime(&store, &cfg) {
+                    cfg = latest;
+                }
             }
         }
         if cfg != previous {
