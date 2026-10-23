@@ -1,10 +1,12 @@
 //! UI-independent domain and persistence for the woodpeck chess trainer.
 pub mod app;
 pub mod layout;
+pub mod motivation;
 pub mod puzzle;
 pub mod review;
 pub mod sets;
 pub mod settings;
+pub mod sound;
 pub mod source;
 pub mod stats;
 pub mod store;
