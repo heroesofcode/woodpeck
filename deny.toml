@@ -1,9 +1,19 @@
 [advisories]
-yanked = "warn"
+yanked = "deny"
+
 [licenses]
-allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0", "MPL-2.0", "OFL-1.1", "GPL-3.0-or-later", "CC0-1.0", "NCSA", "Ubuntu-font-1.0"]
+allow = [
+    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
+    "Unicode-3.0", "MPL-2.0", "OFL-1.1", "GPL-3.0-or-later",
+    "Ubuntu-font-1.0",
+    # Mozilla's root certificate data, bundled by webpki-roots for rustls.
+    "CDLA-Permissive-2.0",
+]
+
 [bans]
+# Native window/audio backends currently require multiple platform crate versions.
 multiple-versions = "warn"
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
