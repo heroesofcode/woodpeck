@@ -3,6 +3,7 @@ use crate::source::LICHESS_DATABASE_URL;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Start,
+    Sync(SyncCommand),
     Screenshot {
         path: std::path::PathBuf,
         screen: crate::app::Screen,
@@ -12,7 +13,14 @@ pub enum Command {
     Help,
     Version,
 }
-pub const HELP: &str = "woodpeck — local Woodpecker Method puzzle training\n\nUsage: woodpeck [--help | --version]\n       woodpeck import <path-or-url>\n       woodpeck import --lichess\n\nImports plain CSV or zstd CSV into the local database.\n--lichess streams the full Lichess puzzle database.\nScreenshot: --screenshot <out.png> [--screen dashboard|training|review|progress|builder|settings] [--size WxH]\nData override: $WOODPECK_DATA_DIR\nData: $XDG_DATA_HOME/woodpeck/woodpeck.db (Linux).\nPuzzles from the Lichess puzzle database (CC0).";
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SyncCommand {
+    Init(Option<String>),
+    Now,
+    Status,
+    Disable,
+}
+pub const HELP: &str = "woodpeck — local Woodpecker Method puzzle training\n\nUsage: woodpeck [--help | --version]\n       woodpeck import <path-or-url>\n       woodpeck import --lichess\n       woodpeck sync init <remote-url> | --create\n       woodpeck sync now | status | disable\n\nOpt-in progress sync requires a PRIVATE repository and system git.\nImports plain CSV or zstd CSV into the local database.\n--lichess streams the full Lichess puzzle database.\nScreenshot: --screenshot <out.png> [--screen dashboard|training|review|progress|builder|settings] [--size WxH]\nData override: $WOODPECK_DATA_DIR\nData: $XDG_DATA_HOME/woodpeck/woodpeck.db (Linux).\nPuzzles from the Lichess puzzle database (CC0).";
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let args: Vec<_> = args.into_iter().collect();
     if args.first().is_some_and(|s| s == "--screenshot") {
@@ -25,6 +33,18 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> 
         [command, flag] if command == "import" && (flag == "--help" || flag == "-h") => {
             Ok(Command::Help)
         }
+        [command, flag] if command == "sync" && (flag == "--help" || flag == "-h") => Ok(Command::Help),
+        [command, action, remote] if command == "sync" && action == "init" => {
+            if remote == "--create" { Ok(Command::Sync(SyncCommand::Init(None))) }
+            else if remote.starts_with('-') || remote.is_empty() { Err("Expected a remote URL or --create.".into()) }
+            else { Ok(Command::Sync(SyncCommand::Init(Some(remote.clone())))) }
+        }
+        [command, action] if command == "sync" => match action.as_str() {
+            "now" => Ok(Command::Sync(SyncCommand::Now)),
+            "status" => Ok(Command::Sync(SyncCommand::Status)),
+            "disable" => Ok(Command::Sync(SyncCommand::Disable)),
+            _ => Err("Expected sync init <remote-url>, sync init --create, sync now, sync status or sync disable.".into()),
+        },
         [command, location] if command == "import" => {
             if location == "--lichess" {
                 Ok(Command::Import(LICHESS_DATABASE_URL.into()))
@@ -34,7 +54,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> 
                 Ok(Command::Import(location.clone()))
             }
         }
-        _ => Err("Expected import <path-or-url>, import --lichess, --help or --version.".into()),
+        _ => Err("Expected import, sync, --help or --version.".into()),
     }
 }
 fn screenshot(args: &[String]) -> Result<Command, String> {
@@ -79,6 +99,41 @@ mod tests {
     use super::*;
     fn args(args: &[&str]) -> Result<Command, String> {
         parse(args.iter().map(|s| (*s).into()))
+    }
+    #[test]
+    fn sync_commands_and_errors() {
+        assert_eq!(
+            args(&[
+                "sync",
+                "init",
+                "https://github.com/<user>/woodpeck-data.git"
+            ]),
+            Ok(Command::Sync(SyncCommand::Init(Some(
+                "https://github.com/<user>/woodpeck-data.git".into()
+            ))))
+        );
+        assert_eq!(
+            args(&["sync", "init", "--create"]),
+            Ok(Command::Sync(SyncCommand::Init(None)))
+        );
+        for (action, command) in [
+            ("now", SyncCommand::Now),
+            ("status", SyncCommand::Status),
+            ("disable", SyncCommand::Disable),
+        ] {
+            assert_eq!(args(&["sync", action]), Ok(Command::Sync(command)));
+        }
+        assert_eq!(args(&["sync", "--help"]), Ok(Command::Help));
+        for bad in [
+            vec!["sync"],
+            vec!["sync", "init"],
+            vec!["sync", "init", "--unknown"],
+            vec!["sync", "now", "extra"],
+            vec!["sync", "unknown"],
+            vec!["sync", "init", "a", "b"],
+        ] {
+            assert!(args(&bad).is_err());
+        }
     }
     #[test]
     fn screenshot_arguments_are_bounded_and_complete() {

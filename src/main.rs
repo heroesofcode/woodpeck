@@ -23,6 +23,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Command::Help => println!("{}", cli::HELP),
         Command::Version => println!("woodpeck {}", env!("CARGO_PKG_VERSION")),
+        Command::Sync(command) => run_sync(command)?,
         Command::Start => woodpeck::app::run(None)?,
         Command::Screenshot { path, screen, size } => {
             woodpeck::app::run(Some(woodpeck::app::Screenshot { path, screen, size }))?;
@@ -47,6 +48,37 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
+    }
+    Ok(())
+}
+
+fn run_sync(command: cli::SyncCommand) -> Result<(), Box<dyn std::error::Error>> {
+    let path = database_path().ok_or("Could not find the application data directory.")?;
+    let data = path.parent().ok_or("Invalid data directory.")?;
+    let mut store = Store::open(&path)?;
+    let config = match command {
+        cli::SyncCommand::Init(remote) => {
+            woodpeck::sync::init(&mut store, data, remote.as_deref())?
+        }
+        cli::SyncCommand::Now => {
+            woodpeck::sync::synchronize(&mut store, data, std::time::Duration::from_secs(45))?
+        }
+        cli::SyncCommand::Status => woodpeck::sync::config(&store)?,
+        cli::SyncCommand::Disable => {
+            let config = woodpeck::sync::config(&store)?;
+            woodpeck::sync::configure(&store, &config.remote, false)?
+        }
+    };
+    println!("Sync: {}", config.status.label());
+    println!("Enabled: {} · Pending: {}", config.enabled, config.pending);
+    if let Some(at) = config
+        .last_sync
+        .and_then(|at| chrono::DateTime::from_timestamp(at, 0))
+    {
+        println!("Last sync: {}", at.to_rfc3339());
+    }
+    if let Some(error) = config.last_error {
+        println!("Last error: {error}");
     }
     Ok(())
 }
