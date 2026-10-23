@@ -1,4 +1,16 @@
-//! UI-independent domain and persistence for the woodpeck chess trainer.
+//! Domain, persistence, and native interface for the woodpeck chess trainer.
+// Public domain methods describe errors in prose; callers may intentionally ignore pure results.
+#![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
+// Millisecond totals and bounded UI coordinates fit comfortably in their display precision.
+#![allow(clippy::cast_precision_loss)]
+// Independent persisted switches and timer pause gates are intentionally separate booleans.
+#![allow(clippy::struct_excessive_bools)]
+// UI geometry is bounded before pixel conversion; declarative egui trees keep each card together.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
 pub mod app;
 pub mod cli;
 pub mod layout;
