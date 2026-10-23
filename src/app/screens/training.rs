@@ -430,8 +430,10 @@ impl Woodpeck {
                     }
                 }
                 if ui.button("Create a harder set").clicked() {
-                    self.builder.target_rating = (set.set.params.target_rating + 100).min(3000);
-                    self.builder.restrict_recommended = false;
+                    self.builder.set_range(crate::sets::normalize_range(
+                        set.set.params.rating_min.saturating_add(100),
+                        set.set.params.rating_max.saturating_add(100),
+                    ));
                     self.navigate(Screen::Builder);
                 }
             });

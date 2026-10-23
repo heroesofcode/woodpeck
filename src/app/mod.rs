@@ -459,15 +459,6 @@ impl Woodpeck {
             self.selected_set = Some(id);
             self.screen = Screen::Training;
             self.resume_selected();
-            if c.widening_steps > 0 {
-                self.toast = Some((
-                    format!(
-                        "Rating band widened to {}–{} to fill your set",
-                        c.used_band.0, c.used_band.1
-                    ),
-                    Instant::now(),
-                ));
-            }
         }
         self.creation = Some(c);
     }

@@ -69,6 +69,139 @@ pub fn removable_chip(ui: &mut Ui, text: &str, color: Color32) -> egui::Response
         .wrap_mode(egui::TextWrapMode::Extend),
     )
 }
+/// A dual-handle range slider over `bounds`, snapping to `step`. Returns the handle the pointer
+/// moved and its new value; the caller applies it (see [`crate::sets::drag_range`]).
+/// `marker` draws a labelled tick, such as the player's own rating.
+pub fn range_slider(
+    ui: &mut Ui,
+    (min, max): (u16, u16),
+    bounds: (u16, u16),
+    step: u16,
+    fill: Color32,
+    marker: Option<(u16, &str)>,
+) -> Option<(crate::sets::RangeHandle, u16)> {
+    use crate::sets::RangeHandle;
+    let radius = if ui.available_width() < 400.0 {
+        7.0
+    } else {
+        9.0
+    };
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().max(120.0), 46.0),
+        egui::Sense::click_and_drag(),
+    );
+    let track = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + radius, rect.top() + 14.0),
+        egui::pos2(rect.right() - radius, rect.top() + 18.0),
+    );
+    let span = f32::from(bounds.1 - bounds.0);
+    let to_x = |v: u16| {
+        track.left() + f32::from(v.clamp(bounds.0, bounds.1) - bounds.0) / span * track.width()
+    };
+    let to_value = |x: f32| {
+        let t = ((x - track.left()) / track.width()).clamp(0.0, 1.0);
+        // Bounded by `span`, so the cast cannot truncate or go negative.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let offset = (t * span / f32::from(step)).round() as u16 * step;
+        (bounds.0 + offset).min(bounds.1)
+    };
+    let (min_x, max_x) = (to_x(min), to_x(max));
+    let nearest = |x: f32| {
+        if x < f32::midpoint(min_x, max_x) {
+            RangeHandle::Min
+        } else {
+            RangeHandle::Max
+        }
+    };
+    let press = response.interact_pointer_pos();
+    let memory = response.id.with("handle");
+    let mut moved = None;
+    let mut dragging = None;
+    if let Some(pos) = press {
+        let handle = if response.drag_started() || response.clicked() {
+            let handle = nearest(pos.x);
+            ui.data_mut(|d| d.insert_temp(memory, handle == RangeHandle::Max));
+            handle
+        } else if ui.data(|d| d.get_temp::<bool>(memory)).unwrap_or(false) {
+            RangeHandle::Max
+        } else {
+            RangeHandle::Min
+        };
+        if response.dragged() || response.clicked() {
+            moved = Some((handle, to_value(pos.x)));
+        }
+        dragging = response.dragged().then_some(handle);
+    }
+    let hover = response.hover_pos().map(|p| nearest(p.x));
+    response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    let visuals = ui.visuals();
+    let painter = ui.painter_at(rect.expand(2.0));
+    painter.rect_filled(track, 2.0, visuals.widgets.inactive.bg_fill);
+    painter.rect_filled(
+        egui::Rect::from_x_y_ranges(min_x..=max_x, track.y_range()),
+        2.0,
+        fill,
+    );
+    let weak = visuals.weak_text_color();
+    let small = egui::FontId::proportional(10.0);
+    if let Some((rating, label)) = marker {
+        paint_marker(
+            &painter,
+            to_x(rating),
+            track,
+            label,
+            visuals.text_color(),
+            weak,
+        );
+    }
+    for (handle, x) in [(RangeHandle::Min, min_x), (RangeHandle::Max, max_x)] {
+        let active = dragging.or(hover) == Some(handle);
+        let center = egui::pos2(x, track.center().y);
+        painter.circle(
+            center,
+            if active { radius + 1.5 } else { radius },
+            fill,
+            egui::Stroke::new(2.0, visuals.extreme_bg_color),
+        );
+    }
+    for (value, align) in [
+        (bounds.0, egui::Align2::LEFT_BOTTOM),
+        (bounds.1, egui::Align2::RIGHT_BOTTOM),
+    ] {
+        painter.text(
+            egui::pos2(to_x(value), rect.bottom()),
+            align,
+            value.to_string(),
+            small.clone(),
+            weak,
+        );
+    }
+    moved
+}
+/// The labelled tick drawn across a range slider's track.
+fn paint_marker(
+    painter: &egui::Painter,
+    x: f32,
+    track: egui::Rect,
+    label: &str,
+    line: Color32,
+    text: Color32,
+) {
+    painter.line_segment(
+        [
+            egui::pos2(x, track.top() - 7.0),
+            egui::pos2(x, track.bottom() + 7.0),
+        ],
+        egui::Stroke::new(1.5, line),
+    );
+    painter.text(
+        egui::pos2(x, track.top() - 8.0),
+        egui::Align2::CENTER_BOTTOM,
+        label,
+        egui::FontId::proportional(10.0),
+        text,
+    );
+}
 pub fn card(ui: &Ui) -> egui::Frame {
     egui::Frame::new()
         .fill(ui.visuals().panel_fill)
