@@ -1,5 +1,6 @@
 //! UI-independent domain and persistence for the woodpeck chess trainer.
 pub mod app;
+pub mod cli;
 pub mod layout;
 pub mod motivation;
 pub mod puzzle;
