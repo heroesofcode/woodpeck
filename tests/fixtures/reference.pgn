@@ -1,0 +1,149 @@
+[Event "Peck fork puzzles #1"]
+[Site "https://lichess.org/training/RELjg"]
+[Date "????.??.??"]
+[Round "1"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[SetUp "1"]
+[FEN "2r5/4pk2/b2pN1p1/p2P3p/3BP1P1/2P2q2/2R5/2K4R w - - 0 34"]
+[PuzzleId "RELjg"]
+[PuzzleRating "890"]
+[Annotator "Lichess puzzle database (CC0) via peckchess.com"]
+
+34.Ng5+ Ke8 35.Nxf3 *
+
+[Event "Peck fork puzzles #2"]
+[Site "https://lichess.org/training/x4HlY"]
+[Date "????.??.??"]
+[Round "2"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[SetUp "1"]
+[FEN "r5k1/6pp/P4pb1/3pp3/2r5/1q2PP2/R2Q2PP/R5K1 w - - 0 34"]
+[PuzzleId "x4HlY"]
+[PuzzleRating "956"]
+[Annotator "Lichess puzzle database (CC0) via peckchess.com"]
+
+34.Qxd5+ Kf8 35.Qxa8+ *
+
+[Event "Peck fork puzzles #3"]
+[Site "https://lichess.org/training/KEPe0"]
+[Date "????.??.??"]
+[Round "3"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[SetUp "1"]
+[FEN "5r1k/5Rb1/p2P2Pp/1p5n/2p5/P4B1P/1pP5/5R1K b - - 2 32"]
+[PuzzleId "KEPe0"]
+[PuzzleRating "1020"]
+[Annotator "Lichess puzzle database (CC0) via peckchess.com"]
+
+32...Ng3+ 33.Kg2 Nxf1 *
+
+[Event "Peck fork puzzles #4"]
+[Site "https://lichess.org/training/134eC"]
+[Date "????.??.??"]
+[Round "4"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[SetUp "1"]
+[FEN "2r1r1k1/p6p/bp4pP/3q4/P1n3N1/4N3/4QPP1/2R3K1 w - - 0 29"]
+[PuzzleId "134eC"]
+[PuzzleRating "1188"]
+[Annotator "Lichess puzzle database (CC0) via peckchess.com"]
+
+29.Nf6+ Kf7 30.Nfxd5 *
+
+[Event "Peck fork puzzles #5"]
+[Site "https://lichess.org/training/zpfTo"]
+[Date "????.??.??"]
+[Round "5"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[SetUp "1"]
+[FEN "8/2q3k1/6pp/3p4/3PnNQ1/4PNP1/r7/5K2 w - - 8 41"]
+[PuzzleId "zpfTo"]
+[PuzzleRating "1325"]
+[Annotator "Lichess puzzle database (CC0) via peckchess.com"]
+
+41.Ne6+ Kh8 42.Nxc7 *
+
+[Event "Peck fork puzzles #6"]
+[Site "https://lichess.org/training/IzEff"]
+[Date "????.??.??"]
+[Round "6"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[SetUp "1"]
+[FEN "2r3k1/5ppp/p3p3/2rpb3/5N2/1P5P/P4PP1/1RR3K1 w - - 2 22"]
+[PuzzleId "IzEff"]
+[PuzzleRating "1387"]
+[Annotator "Lichess puzzle database (CC0) via peckchess.com"]
+
+22.Rxc5 Rxc5 23.Nd3 Rc2 24.Nxe5 *
+
+[Event "Peck fork puzzles #7"]
+[Site "https://lichess.org/training/GBpSU"]
+[Date "????.??.??"]
+[Round "7"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[SetUp "1"]
+[FEN "8/5p1p/p4k2/6p1/5q2/5Q2/PrP2P2/4R2K w - - 0 32"]
+[PuzzleId "GBpSU"]
+[PuzzleRating "1518"]
+[Annotator "Lichess puzzle database (CC0) via peckchess.com"]
+
+32.Qc3+ Kg6 33.Qxb2 Qf3+ 34.Kg1 *
+
+[Event "Peck fork puzzles #8"]
+[Site "https://lichess.org/training/RNZGg"]
+[Date "????.??.??"]
+[Round "8"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[SetUp "1"]
+[FEN "r2q1rk1/1pp4p/3p2p1/p1nPp3/P1P1b1P1/2N1bN1P/1P2B1K1/R2Q1R2 w - - 0 17"]
+[PuzzleId "RNZGg"]
+[PuzzleRating "1558"]
+[Annotator "Lichess puzzle database (CC0) via peckchess.com"]
+
+17.Nxe4 Nxe4 18.Qd3 Rf4 19.Qxe3 *
+
+[Event "Peck fork puzzles #9"]
+[Site "https://lichess.org/training/noSvh"]
+[Date "????.??.??"]
+[Round "9"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[SetUp "1"]
+[FEN "4R1rk/p4Qp1/7p/7P/P2PP3/r6q/2R1KP2/8 b - - 5 35"]
+[PuzzleId "noSvh"]
+[PuzzleRating "1611"]
+[Annotator "Lichess puzzle database (CC0) via peckchess.com"]
+
+35...Qd3+ 36.Ke1 Ra1+ 37.Rc1 Rxc1# *
+
+[Event "Peck fork puzzles #10"]
+[Site "https://lichess.org/training/Ua911"]
+[Date "????.??.??"]
+[Round "10"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[SetUp "1"]
+[FEN "8/4Q3/4p3/pp1p2r1/3N2k1/P1P2p2/KP6/4q3 w - - 0 41"]
+[PuzzleId "Ua911"]
+[PuzzleRating "1636"]
+[Annotator "Lichess puzzle database (CC0) via peckchess.com"]
+
+41.Qxg5+ Kxg5 42.Nxf3+ Kg4 43.Nxe1 *
