@@ -194,6 +194,12 @@ impl AppService {
             false
         }
     }
+    /// Cancels queued and active background jobs without blocking the UI.
+    pub fn cancel_all(&self) {
+        for flag in self.pending.values() {
+            flag.cancel();
+        }
+    }
     pub fn is_busy(&self) -> bool {
         !self.pending.is_empty()
     }
@@ -247,6 +253,17 @@ impl AppService {
         let mut store = lock(&self.store)?;
         let cycle = store.start_cycle(set_id, now)?;
         training_position(&store, cycle)
+    }
+    /// Outcomes in puzzle order, used for the segmented cycle progress display.
+    pub fn cycle_outcomes(&self, cycle_id: i64) -> Result<Vec<Outcome>> {
+        let store = lock(&self.store)?;
+        let cycle = store.cycle(cycle_id)?.ok_or(StoreError::NotFound)?;
+        Ok(store
+            .attempts(cycle.set_id)?
+            .into_iter()
+            .filter(|a| a.cycle_id == Some(cycle_id))
+            .map(|a| a.outcome)
+            .collect())
     }
     pub fn current_puzzle(&self, cycle_id: i64) -> Result<TrainingPosition> {
         let store = lock(&self.store)?;

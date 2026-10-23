@@ -83,6 +83,9 @@ impl Store {
 }
 /// Platform data discovery for the application. Directory creation happens when opening the DB.
 pub fn database_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("WOODPECK_DATA_DIR") {
+        return Some(PathBuf::from(path).join("woodpeck.db"));
+    }
     directories::ProjectDirs::from("", "", "woodpeck").map(|d| d.data_dir().join("woodpeck.db"))
 }
 /// Explicit XDG/HOME variant for tests and portable installations.
