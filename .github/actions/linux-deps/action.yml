@@ -1,0 +1,13 @@
+name: Linux dependencies
+description: Install native Wayland, X11, OpenGL, font, and sound build dependencies
+runs:
+  using: composite
+  steps:
+    - name: Install system packages
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y \
+          pkg-config libxkbcommon-dev libwayland-dev libx11-dev \
+          libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
+          libegl1-mesa-dev libasound2-dev libfontconfig1-dev
