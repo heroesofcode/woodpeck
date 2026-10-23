@@ -20,6 +20,7 @@ pub mod sound;
 pub mod source;
 pub mod stats;
 pub mod store;
+pub mod sync;
 // Color conversion rounds and clamps floating-point channels to the byte range.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub mod theme;
