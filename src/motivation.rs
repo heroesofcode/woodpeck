@@ -41,6 +41,13 @@ impl Motivation {
     pub fn level(&self) -> u64 {
         (self.xp / 100).isqrt() + 1
     }
+    /// Fraction of the current level earned, including saturated lifetime XP.
+    pub fn level_progress(&self) -> f32 {
+        let level = u128::from(self.level());
+        let lower = 100 * (level - 1).pow(2);
+        let upper = 100 * level.pow(2);
+        (u128::from(self.xp) - lower) as f32 / (upper - lower) as f32
+    }
     pub fn rank(&self) -> &'static str {
         match self.level() {
             1..=4 => "Pawn",
@@ -82,5 +89,23 @@ mod tests {
             assert_eq!(m.level(), level);
             assert_eq!(m.rank(), rank);
         }
+    }
+    #[test]
+    fn level_progress_handles_thresholds_and_saturated_xp() {
+        for (xp, expected) in [(0, 0.0), (50, 0.5), (100, 0.0), (250, 0.5), (400, 0.0)] {
+            let m = Motivation {
+                xp,
+                ..Default::default()
+            };
+            assert!((m.level_progress() - expected).abs() < f32::EPSILON);
+        }
+        let mut m = Motivation {
+            xp: u64::MAX,
+            ..Default::default()
+        };
+        m.record(1, Outcome::Correct, true);
+        assert_eq!(m.xp, u64::MAX);
+        assert!(m.level_progress().is_finite());
+        assert!((0.0..=1.0).contains(&m.level_progress()));
     }
 }

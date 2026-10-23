@@ -166,14 +166,7 @@ impl Woodpeck {
                     });
                     ui.separator();
                     widgets::caption(ui, format!("LEVEL {} · {}", m.level(), m.rank()));
-                    let lower = 100 * (m.level() - 1).pow(2);
-                    let upper = 100 * m.level().pow(2);
-                    ui.add(
-                        egui::ProgressBar::new(
-                            (m.xp - lower) as f32 / (upper - lower).max(1) as f32,
-                        )
-                        .desired_height(4.0),
-                    );
+                    ui.add(egui::ProgressBar::new(m.level_progress()).desired_height(4.0));
                     ui.small(format!("{} XP · keep showing up", m.xp));
                 }
                 if ui
