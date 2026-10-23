@@ -88,8 +88,12 @@ impl LichessClient {
         // Serialize through body consumption, including across multiple client instances.
         let _guard = loop {
             cancel.check()?;
-            if let Ok(guard) = API_SERIAL.try_lock() {
-                break guard;
+            match API_SERIAL.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(SourceError::Network("API request lock is poisoned.".into()));
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {}
             }
             wait(Duration::from_millis(50), cancel)?;
         };

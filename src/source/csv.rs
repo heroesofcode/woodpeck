@@ -48,17 +48,22 @@ pub struct CsvPuzzles<R: Read> {
     rows: ::csv::StringRecordsIntoIter<R>,
     headers: ::csv::StringRecord,
     progress: ImportProgress,
+    header_error: Option<::csv::Error>,
 }
 impl<R: Read> CsvPuzzles<R> {
     pub fn new(reader: R) -> Self {
         let mut csv = ::csv::ReaderBuilder::new()
             .flexible(true)
             .from_reader(reader);
-        let headers = csv.headers().cloned().unwrap_or_default();
+        let (headers, header_error) = match csv.headers().cloned() {
+            Ok(headers) => (headers, None),
+            Err(error) => (::csv::StringRecord::new(), Some(error)),
+        };
         Self {
             rows: csv.into_records(),
             headers,
             progress: ImportProgress::default(),
+            header_error,
         }
     }
     pub fn progress(&self) -> ImportProgress {
@@ -68,6 +73,9 @@ impl<R: Read> CsvPuzzles<R> {
 impl<R: Read> CsvPuzzles<R> {
     /// Process one physical record, including rejected rows, so callers can cancel promptly.
     pub fn next_row(&mut self) -> Option<Result<Option<Puzzle>, SourceError>> {
+        if let Some(error) = self.header_error.take() {
+            return Some(Err(error.into()));
+        }
         let row = self.rows.next()?.and_then(|mut record| {
             while record.len() < self.headers.len() {
                 record.push_field("");
@@ -161,5 +169,23 @@ mod tests {
     fn invalid_chess_is_filtered() {
         let input = csv().replace(&crate::puzzle::fixture().fen, "invalid");
         assert_eq!(CsvPuzzles::new(input.as_bytes()).count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    #[test]
+    fn names_allow_reordered_columns_unknown_fields_and_missing_trailing_fields() {
+        let p = crate::puzzle::fixture();
+        let input = format!(
+            "Themes,NbPlays,Popularity,RatingDeviation,Rating,Moves,FEN,PuzzleId,DailyDate,FutureField\nfork,1000,100,75,1000,{},{},test\n",
+            p.moves, p.fen
+        );
+        let parsed = CsvPuzzles::new(input.as_bytes()).next().unwrap().unwrap();
+        assert_eq!(parsed.id, "test");
+        assert_eq!(parsed.fen, p.fen);
+        assert_eq!(parsed.moves, p.moves);
+        assert_eq!(parsed.themes, ["fork"]);
     }
 }
