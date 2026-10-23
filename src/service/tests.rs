@@ -11,18 +11,19 @@ struct MockFetcher {
     calls: Arc<AtomicU32>,
     cancel_batch: bool,
     themes: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    difficulties: Arc<std::sync::Mutex<Vec<String>>>,
 }
 impl PuzzleFetcher for MockFetcher {
     fn batch(
         &mut self,
         theme: Option<&str>,
-        target: u16,
+        difficulty: &str,
         count: u32,
         cancel: &CancelFlag,
     ) -> std::result::Result<Vec<Puzzle>, SourceError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         self.themes.lock().unwrap().push(theme.map(Into::into));
-        assert_eq!(target, 1000);
+        self.difficulties.lock().unwrap().push(difficulty.into());
         assert_eq!(count, 20);
         if self.cancel_batch {
             cancel.cancel();
@@ -200,25 +201,40 @@ fn play_review_progress_next_cycle_export_delete_and_persistence() {
     assert_eq!(reopened.motivation().unwrap().xp, 250);
 }
 #[test]
-fn local_creation_reports_shortfall_and_widening_without_partial_sets() {
+fn local_creation_never_widens_the_range_or_saves_partial_sets() {
     let mut store = Store::memory().unwrap();
-    let mut puzzles = pool(20);
-    for p in &mut puzzles {
-        p.rating = 1150;
-    }
-    store.upsert_puzzles(&puzzles[..19]).unwrap();
+    let rated = |prefix: &str, rating: u16, n: u32| -> Vec<Puzzle> {
+        pool(n)
+            .into_iter()
+            .map(|mut p| {
+                p.id = format!("{prefix}{}", p.id);
+                p.rating = rating;
+                p
+            })
+            .collect()
+    };
+    // 19 puzzles on the inclusive upper edge, plenty just outside it.
+    store.upsert_puzzles(&rated("edge", 1100, 19)).unwrap();
+    store.upsert_puzzles(&rated("out", 1101, 50)).unwrap();
+    store.upsert_puzzles(&rated("low", 899, 50)).unwrap();
     let service = service(store, MockFetcher::default());
     let short = service.create_set(&params(), 1, 1).unwrap();
     assert_eq!(short.shortfall(), 1);
+    assert_eq!(short.available, 19);
+    assert_eq!(short.range, (900, 1100));
     assert_eq!(short.set_id, None);
     assert_eq!(service.list_sets().unwrap(), []);
     lock(&service.store)
         .unwrap()
-        .upsert_puzzles(&puzzles)
+        .upsert_puzzles(&rated("floor", 900, 1))
         .unwrap();
     let made = service.create_set(&params(), 1, 1).unwrap();
-    assert_eq!(made.widening_steps, 1);
-    assert_eq!(made.used_band, (850, 1150));
+    assert_eq!(made.shortfall(), 0);
+    let puzzles = lock(&service.store)
+        .unwrap()
+        .set_puzzles(made.set_id.unwrap())
+        .unwrap();
+    assert!(puzzles.iter().all(|p| (900..=1100).contains(&p.rating)));
 }
 #[test]
 fn mocked_fallback_filters_band_theme_and_invalid_rows_and_regenerates() {
@@ -269,6 +285,73 @@ fn mocked_fallback_filters_band_theme_and_invalid_rows_and_regenerates() {
         .unwrap();
     finish(&mut service, next.id).unwrap();
     assert_eq!(calls.load(Ordering::Relaxed), 2);
+}
+#[test]
+fn fallback_maps_range_to_api_difficulties_and_filters_range_locally() {
+    let batch = |prefix: &str, theme: &str, ratings: &[(u16, u32)]| -> Vec<Puzzle> {
+        ratings
+            .iter()
+            .flat_map(|&(rating, n)| {
+                pool(n).into_iter().map(move |mut p| {
+                    p.id = format!("{prefix}{rating}{}", p.id);
+                    p.rating = rating;
+                    p.themes = vec![theme.into()];
+                    p
+                })
+            })
+            .collect()
+    };
+    let mock = MockFetcher {
+        batches: vec![
+            batch("a", "fork", &[(1300, 10), (1299, 5), (1501, 5)]),
+            batch("b", "pin", &[(1500, 5), (2000, 5)]),
+            batch("c", "fork", &[(1400, 5)]),
+        ],
+        ..Default::default()
+    };
+    let (themes, difficulties) = (mock.themes.clone(), mock.difficulties.clone());
+    let mut service = service(Store::memory().unwrap(), mock);
+    let params = BuilderParams {
+        rating_min: 1300,
+        rating_max: 1500,
+        include_themes: vec!["fork".into(), "pin".into()],
+        ..params()
+    };
+    let job = service
+        .submit(Job::CreateSetWithFallback {
+            params,
+            seed: 1,
+            now: 1,
+        })
+        .unwrap();
+    let JobOutput::SetCreated(created) = finish(&mut service, job.id).unwrap() else {
+        panic!()
+    };
+    assert_eq!(created.shortfall(), 0);
+    assert_eq!(created.range, (1300, 1500));
+    // Each included theme is asked at the best-overlapping difficulty, then the next one.
+    assert_eq!(
+        *difficulties.lock().unwrap(),
+        ["normal", "normal", "easier"]
+    );
+    assert_eq!(
+        *themes.lock().unwrap(),
+        [
+            Some("fork".into()),
+            Some("pin".into()),
+            Some("fork".to_string())
+        ]
+    );
+    // Out-of-range rows (1299, 1501, 2000) are never stored; both edges are inclusive.
+    assert_eq!(service.puzzle_count().unwrap(), 20);
+    let ratings: std::collections::BTreeSet<_> = lock(&service.store)
+        .unwrap()
+        .set_puzzles(created.set_id.unwrap())
+        .unwrap()
+        .iter()
+        .map(|p| p.rating)
+        .collect();
+    assert_eq!(ratings, [1300, 1400, 1500].into());
 }
 #[test]
 fn fallback_rotates_included_themes_and_filters_exclusions_locally() {
@@ -520,7 +603,7 @@ fn blocked_network_does_not_hold_store_lock_and_jobs_report_events_in_sequence()
         fn batch(
             &mut self,
             _: Option<&str>,
-            _: u16,
+            _: &str,
             _: u32,
             cancel: &CancelFlag,
         ) -> std::result::Result<Vec<Puzzle>, SourceError> {
@@ -591,7 +674,7 @@ fn blocked_network_does_not_hold_store_lock_and_jobs_report_events_in_sequence()
 fn concurrent_synced_answers_fill_only_one_cycle_segment() {
     let mut store = Store::memory().unwrap();
     let puzzles = pool(20);
-    let set = store.create_set(&params(), &puzzles, 1, 42, 1200).unwrap();
+    let set = store.create_set(&params(), &puzzles, 1, 42).unwrap();
     let cycle = store.start_cycle(set, 1).unwrap();
     let mut snapshot = store.export_sync().unwrap();
     let uid = snapshot.sets.keys().next().unwrap().clone();
