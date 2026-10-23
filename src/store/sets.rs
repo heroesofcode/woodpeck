@@ -59,6 +59,17 @@ impl Store {
             .query_map([], read_set)?
             .collect::<std::result::Result<_, _>>()?)
     }
+    pub fn delete_set(&mut self, id: i64) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        tx.execute("DELETE FROM attempts WHERE set_id=?1", [id])?;
+        tx.execute("DELETE FROM review_items WHERE set_id=?1", [id])?;
+        tx.execute("DELETE FROM cycles WHERE set_id=?1", [id])?;
+        if tx.execute("DELETE FROM sets WHERE id=?1", [id])? == 0 {
+            return Err(StoreError::NotFound);
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn rename_set(&self, id: i64, name: &str) -> Result<()> {
         if name.trim().is_empty() {
             return Err(StoreError::InvalidData("A set needs a name.".into()));

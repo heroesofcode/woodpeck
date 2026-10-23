@@ -4,6 +4,7 @@ pub mod layout;
 pub mod motivation;
 pub mod puzzle;
 pub mod review;
+pub mod service;
 pub mod sets;
 pub mod settings;
 pub mod sound;
