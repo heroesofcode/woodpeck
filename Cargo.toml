@@ -5,6 +5,10 @@ edition = "2024"
 rust-version = "1.97"
 description = "A local Woodpecker Method chess puzzle trainer"
 license = "GPL-3.0-or-later"
+repository = "https://github.com/heroesofcode/woodpeck"
+readme = "README.md"
+keywords = ["chess", "puzzles", "woodpecker", "training", "egui"]
+categories = ["games"]
 
 [features]
 default = ["sound"]

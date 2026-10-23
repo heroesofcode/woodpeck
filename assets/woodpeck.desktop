@@ -1,9 +1,10 @@
 [Desktop Entry]
 Type=Application
 Name=woodpeck
-Comment=Woodpecker Method chess puzzle trainer
+Comment=Local Woodpecker Method chess puzzle trainer
 Exec=woodpeck
 Icon=woodpeck
 Terminal=false
-Categories=Game;BoardGame;
 StartupWMClass=woodpeck
+Categories=Game;BoardGame;
+Keywords=Chess;Puzzles;Training;Woodpecker;

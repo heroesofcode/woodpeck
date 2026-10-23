@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>woodpeck</title>
+  <rect width="128" height="128" rx="28" fill="#1b1916"/>
+  <g fill="#6b985b">
+    <circle cx="54" cy="80" r="32"/>
+    <circle cx="66" cy="44" r="24"/>
+    <path d="m86 36 28 12-28 8Z"/>
+  </g>
+  <circle cx="70" cy="40" r="6" fill="#1b1916"/>
+</svg>
