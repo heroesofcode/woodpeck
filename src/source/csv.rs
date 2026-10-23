@@ -40,16 +40,24 @@ pub struct ImportProgress {
     pub scanned: u64,
     pub accepted: u64,
     pub rejected: u64,
+    /// Compressed bytes consumed for zstd input; raw bytes for plain CSV.
+    pub bytes: u64,
 }
 /// Lazy iterator: supports streaming uncompressed CSV or a zstd decoder without buffering the DB.
 pub struct CsvPuzzles<R: Read> {
-    rows: ::csv::DeserializeRecordsIntoIter<R, Row>,
+    rows: ::csv::StringRecordsIntoIter<R>,
+    headers: ::csv::StringRecord,
     progress: ImportProgress,
 }
 impl<R: Read> CsvPuzzles<R> {
     pub fn new(reader: R) -> Self {
+        let mut csv = ::csv::ReaderBuilder::new()
+            .flexible(true)
+            .from_reader(reader);
+        let headers = csv.headers().cloned().unwrap_or_default();
         Self {
-            rows: ::csv::Reader::from_reader(reader).into_deserialize(),
+            rows: csv.into_records(),
+            headers,
             progress: ImportProgress::default(),
         }
     }
@@ -57,22 +65,38 @@ impl<R: Read> CsvPuzzles<R> {
         self.progress
     }
 }
+impl<R: Read> CsvPuzzles<R> {
+    /// Process one physical record, including rejected rows, so callers can cancel promptly.
+    pub fn next_row(&mut self) -> Option<Result<Option<Puzzle>, SourceError>> {
+        let row = self.rows.next()?.and_then(|mut record| {
+            while record.len() < self.headers.len() {
+                record.push_field("");
+            }
+            record.deserialize::<Row>(Some(&self.headers))
+        });
+        self.progress.scanned += 1;
+        Some(row.map_err(SourceError::from).map(|row| {
+            let puzzle = Puzzle::from(row);
+            if passes_quality(&puzzle) && puzzle.validate().is_ok() {
+                self.progress.accepted += 1;
+                Some(puzzle)
+            } else {
+                self.progress.rejected += 1;
+                None
+            }
+        }))
+    }
+}
 impl<R: Read> Iterator for CsvPuzzles<R> {
     type Item = Result<Puzzle, SourceError>;
     fn next(&mut self) -> Option<Self::Item> {
-        for row in self.rows.by_ref() {
-            self.progress.scanned += 1;
-            let puzzle = match row {
-                Ok(row) => Puzzle::from(row),
-                Err(e) => return Some(Err(e.into())),
-            };
-            if passes_quality(&puzzle) && puzzle.validate().is_ok() {
-                self.progress.accepted += 1;
-                return Some(Ok(puzzle));
+        loop {
+            match self.next_row()? {
+                Ok(Some(p)) => return Some(Ok(p)),
+                Ok(None) => {}
+                Err(e) => return Some(Err(e)),
             }
-            self.progress.rejected += 1;
         }
-        None
     }
 }
 #[cfg(test)]
@@ -112,7 +136,8 @@ mod tests {
             ImportProgress {
                 scanned: 5,
                 accepted: 1,
-                rejected: 4
+                rejected: 4,
+                bytes: 0,
             }
         );
     }
