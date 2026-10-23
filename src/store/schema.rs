@@ -58,7 +58,15 @@ pub fn migrate(connection: &mut Connection) -> Result<()> {
         )?;
     }
     if version < 3 {
-        tx.execute_batch(
+        migrate_sync(&tx)?;
+    }
+    tx.pragma_update(None, "user_version", VERSION)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn migrate_sync(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
             "ALTER TABLE sets ADD COLUMN uid TEXT NOT NULL DEFAULT '';
              UPDATE sets SET uid=lower(hex(randomblob(16)));
              CREATE UNIQUE INDEX sets_uid ON sets(uid);
@@ -105,17 +113,14 @@ pub fn migrate(connection: &mut Connection) -> Result<()> {
              DROP INDEX cycle_puzzle_once;
              CREATE INDEX cycle_puzzle ON attempts(cycle_id,puzzle_id);",
         )?;
-    }
-    if version < 3 {
-        for table in ["sets", "cycles", "attempts", "review_items"] {
-            for operation in ["INSERT", "UPDATE", "DELETE"] {
-                tx.execute_batch(&format!(
+
+    for table in ["sets", "cycles", "attempts", "review_items"] {
+        for operation in ["INSERT", "UPDATE", "DELETE"] {
+            tx.execute_batch(&format!(
                     "CREATE TRIGGER {table}_sync_{operation} AFTER {operation} ON {table} BEGIN UPDATE sync_changes SET generation=generation+1; END;"
                 ))?;
-            }
         }
     }
-    tx.pragma_update(None, "user_version", VERSION)?;
-    tx.commit()?;
+
     Ok(())
 }

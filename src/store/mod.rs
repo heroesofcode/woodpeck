@@ -38,6 +38,7 @@ impl Store {
         Self::from_connection(Connection::open_in_memory()?)
     }
     pub fn open(path: &Path) -> Result<Self> {
+        ensure_external_data_dir(path)?;
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
@@ -114,4 +115,48 @@ pub fn database_path_for(home: &Path, xdg_data_home: Option<&Path>) -> PathBuf {
 fn unsigned(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     let value: i64 = row.get(index)?;
     u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
+}
+
+/// Refuse databases and sync state inside the public application's source checkout.
+pub fn ensure_external_data_dir(path: &Path) -> Result<()> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut ancestor = absolute.as_path();
+    let mut suffix = Vec::new();
+    while !ancestor.exists() {
+        if let Some(name) = ancestor.file_name() {
+            suffix.push(name.to_os_string());
+        }
+        ancestor = ancestor
+            .parent()
+            .ok_or_else(|| StoreError::InvalidData("Invalid data directory.".into()))?;
+    }
+    let mut resolved = ancestor.canonicalize()?;
+    for component in suffix.into_iter().rev() {
+        resolved.push(component);
+    }
+    let mut normalized = PathBuf::new();
+    for component in resolved.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    let resolved = normalized;
+    let source_path = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = source_path
+        .canonicalize()
+        .unwrap_or_else(|_| source_path.to_path_buf());
+    if resolved.starts_with(source) {
+        return Err(StoreError::InvalidData(
+            "The data directory must be outside the woodpeck source tree.".into(),
+        ));
+    }
+    Ok(())
 }

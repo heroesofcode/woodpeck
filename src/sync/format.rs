@@ -78,7 +78,7 @@ pub struct State {
     pub manifest: Manifest,
     pub settings: BTreeMap<String, Field>,
     pub sets: BTreeMap<String, Set>,
-    /// Set UID to immutable attempt log, sorted by (created_at, uid).
+    /// Set UID to immutable attempt log, sorted by (`created_at`, uid).
     pub attempts: BTreeMap<String, Vec<Attempt>>,
     /// Puzzle ID to queue membership, shared across its sets.
     pub review: BTreeMap<String, Review>,
