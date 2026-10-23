@@ -262,6 +262,39 @@ fn mocked_fallback_filters_band_theme_and_invalid_rows_and_regenerates() {
     assert_eq!(calls.load(Ordering::Relaxed), 2);
 }
 #[test]
+fn api_fallback_skips_lines_without_a_player_move_before_saving_or_creating_a_set() {
+    let mut short = pool(2);
+    short[0].id = "empty".into();
+    short[0].moves.clear();
+    short[1].id = "setup".into();
+    short[1].moves = "b7f7".into();
+    let good = pool(20);
+    let mock = MockFetcher {
+        batches: vec![short, good.clone()],
+        ..Default::default()
+    };
+    let calls = mock.calls.clone();
+    let mut service = service(Store::memory().unwrap(), mock);
+    let job = service
+        .submit(Job::CreateSetWithFallback {
+            params: params(),
+            seed: 1,
+            now: 1,
+        })
+        .unwrap();
+    let JobOutput::SetCreated(created) = finish(&mut service, job.id).unwrap() else {
+        panic!()
+    };
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    let store = lock(&service.store).unwrap();
+    assert_eq!(store.puzzle_count().unwrap(), 20);
+    assert!(store.puzzle("empty").unwrap().is_none());
+    assert!(store.puzzle("setup").unwrap().is_none());
+    let puzzles = store.set_puzzles(created.set_id.unwrap()).unwrap();
+    assert_eq!(puzzles.len(), 20);
+    assert!(puzzles.iter().all(|p| good.contains(p)));
+}
+#[test]
 fn fallback_is_bounded_cancellable_and_never_saves_a_partial_set() {
     let mock = MockFetcher::default();
     let calls = mock.calls.clone();

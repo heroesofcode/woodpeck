@@ -43,7 +43,8 @@ impl Puzzle {
             positions.push(current.clone());
             moves.push(uci);
         }
-        if moves.is_empty() {
+        // Lichess lines start with the opponent's setup move, before the player acts.
+        if moves.len() < 2 {
             return Err(ValidationError::EmptySolution);
         }
         Ok(ValidatedPuzzle { positions, moves })
@@ -68,7 +69,7 @@ pub(crate) fn parse_uci(token: &str) -> Result<UciMove, ()> {
 pub enum ValidationError {
     #[error("The puzzle position could not be loaded.")]
     InvalidFen,
-    #[error("The puzzle does not contain a solution line.")]
+    #[error("The puzzle does not contain a player solution.")]
     EmptySolution,
     #[error("The puzzle contains an invalid solution move.")]
     InvalidSolutionMove,
@@ -126,6 +127,18 @@ mod tests {
     #[test]
     fn validates_entire_line() {
         assert_eq!(fixture().validate().unwrap().positions.len(), 5);
+    }
+    #[test]
+    fn requires_a_player_move_after_the_opponent_setup() {
+        let mut p = fixture();
+        for moves in ["", " \t ", "b7f7", " b7f7 \t"] {
+            p.moves = moves.into();
+            let error = p.validate().unwrap_err();
+            assert_eq!(error, ValidationError::EmptySolution);
+            assert_eq!(error.code(), "empty_solution");
+        }
+        p.moves = "b7f7 h5g3".into();
+        assert_eq!(p.validate().unwrap().moves.len(), 2);
     }
     #[test]
     fn validation_codes_and_messages() {
