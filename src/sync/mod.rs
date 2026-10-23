@@ -1,5 +1,6 @@
 //! Opt-in progress synchronization. The portable format is independent of Git and SQLite.
 pub mod format;
+pub mod merge;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
