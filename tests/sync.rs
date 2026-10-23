@@ -172,6 +172,39 @@ fn two_machines_union_progress_review_and_latest_preferences() {
     assert!(!files.contains("config"));
 }
 #[test]
+fn exhausted_budget_preserves_success_and_pending_tracks_local_changes() {
+    if !git_available() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let remote = temp.path().join("remote.git");
+    bare(&remote);
+    let data = temp.path().join("machine");
+    let mut store = Store::open(&data.join("woodpeck.db")).unwrap();
+    let synced = sync::init(&mut store, &data, Some(remote.to_str().unwrap())).unwrap();
+    let persisted = store.setting("sync_config").unwrap();
+    assert_eq!(
+        sync::synchronize(&mut store, &data, Duration::ZERO).unwrap(),
+        synced
+    );
+    assert_eq!(store.setting("sync_config").unwrap(), persisted);
+
+    std::fs::remove_dir_all(&remote).unwrap();
+    assert!(sync::synchronize(&mut store, &data, Duration::from_secs(5)).is_err());
+    assert!(!sync::config(&store).unwrap().pending);
+    let mut settings = store.settings().unwrap();
+    settings.auto_advance = true;
+    store.save_settings(&settings).unwrap();
+    assert!(
+        sync::synchronize(&mut store, &data, Duration::ZERO)
+            .unwrap()
+            .pending
+    );
+    assert!(sync::synchronize(&mut store, &data, Duration::from_secs(5)).is_err());
+    assert!(sync::config(&store).unwrap().pending);
+}
+
+#[test]
 fn offline_pending_survives_restart_then_recovers() {
     if !git_available() {
         return;
