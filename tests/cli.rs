@@ -4,6 +4,7 @@ fn run(args: &[&str], data: &std::path::Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_woodpeck"))
         .args(args)
         .env("XDG_DATA_HOME", data)
+        .env_remove("WOODPECK_DATA_DIR")
         .output()
         .unwrap()
 }
@@ -43,7 +44,7 @@ fn imports_plain_and_zstd_files_and_first_run_is_idempotent() {
             .success()
     );
     assert_eq!(Store::open(&db).unwrap().puzzle_count().unwrap(), count);
-    assert!(run(&[], dir.path()).status.success());
+    startup_import(&db);
     let store = Store::open(&db).unwrap();
     assert!(store.puzzle_count().unwrap() >= 8540);
     assert_eq!(
@@ -51,7 +52,7 @@ fn imports_plain_and_zstd_files_and_first_run_is_idempotent() {
         Some(woodpeck::source::STARTER_VERSION)
     );
     let before = store.puzzle_count().unwrap();
-    assert!(run(&[], dir.path()).status.success());
+    startup_import(&db);
     assert_eq!(store.puzzle_count().unwrap(), before);
     assert_eq!(
         run(&["import", "/missing/puzzles.csv"], dir.path())
@@ -59,4 +60,32 @@ fn imports_plain_and_zstd_files_and_first_run_is_idempotent() {
             .code(),
         Some(1)
     );
+}
+
+fn startup_import(path: &std::path::Path) {
+    let mut service = woodpeck::service::AppService::open(path).unwrap();
+    let start = std::time::Instant::now();
+    while service.is_busy() {
+        for event in service.poll_events() {
+            if let woodpeck::service::Event::Finished { result, .. } = event {
+                result.unwrap();
+            }
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+#[test]
+fn data_override_is_used_by_import_without_touching_xdg_location() {
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/lichess.csv");
+    let output = Command::new(env!("CARGO_BIN_EXE_woodpeck"))
+        .args(["import", fixture])
+        .env("WOODPECK_DATA_DIR", dir.path().join("portable"))
+        .env("XDG_DATA_HOME", dir.path().join("xdg"))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(dir.path().join("portable/woodpeck.db").is_file());
+    assert!(!dir.path().join("xdg").exists());
 }

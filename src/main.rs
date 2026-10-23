@@ -1,8 +1,8 @@
-//! CLI entry point; the native application window arrives in the UI milestone.
+//! Native desktop and import/screenshot command entry point.
 use std::process::ExitCode;
 use woodpeck::{
     cli::{self, Command},
-    source::{CancelFlag, import_location, import_starter},
+    source::{CancelFlag, import_location},
     store::{Store, database_path},
 };
 fn main() -> ExitCode {
@@ -23,11 +23,15 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Command::Help => println!("{}", cli::HELP),
         Command::Version => println!("woodpeck {}", env!("CARGO_PKG_VERSION")),
-        Command::Start | Command::Import(_) => {
+        Command::Start => woodpeck::app::run(None)?,
+        Command::Screenshot { path, screen, size } => {
+            woodpeck::app::run(Some(woodpeck::app::Screenshot { path, screen, size }))?;
+        }
+        Command::Import(location) => {
             let path = database_path().ok_or("Could not find the application data directory.")?;
             let mut store = Store::open(&path)?;
             let cancel = CancelFlag::default();
-            if let Command::Import(location) = command {
+            {
                 let result = import_location(&mut store, &location, &cancel, |p| {
                     eprint!(
                         "\r{} bytes · {} rows · {} accepted · {} rejected",
@@ -39,13 +43,6 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                     "Imported {} puzzles from {} rows into {}.",
                     result.accepted,
                     result.scanned,
-                    path.display()
-                );
-            } else {
-                import_starter(&mut store, false, &cancel, |_| {})?;
-                println!(
-                    "woodpeck: {} local puzzles ready in {}. The desktop UI arrives in the next milestone.",
-                    store.puzzle_count()?,
                     path.display()
                 );
             }
