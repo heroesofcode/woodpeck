@@ -1,7 +1,10 @@
 use super::super::{Woodpeck, style, widgets};
 use crate::{
     service::Job,
-    sets::{CYCLE_CARDS, PRESETS, PresetKind, THEMES, difficulty_caption},
+    sets::{
+        CYCLE_CARDS, PRESETS, PresetKind, ThemeMatch, ThemeSelection, difficulty_caption,
+        search_themes, theme_name,
+    },
 };
 use eframe::egui::{self, RichText, Ui};
 impl Woodpeck {
@@ -94,26 +97,152 @@ impl Woodpeck {
     }
     fn builder_basics(&mut self, ui: &mut Ui) {
         ui.heading("Basic info");
-        ui.label("Name your set and choose an optional tactical focus.");
+        ui.label("Name your set and pick the tactical themes to include or avoid.");
         ui.add_space(8.0);
         widgets::caption(ui, "SET NAME");
         ui.add(
             egui::TextEdit::singleline(&mut self.builder.name).desired_width(ui.available_width()),
         );
-        widgets::caption(ui, "THEME FOCUS");
-        egui::ComboBox::from_id_salt("focus")
-            .width((ui.available_width() - 12.0).min(400.0))
-            .selected_text(
-                self.builder
-                    .include_themes
-                    .first()
-                    .map_or_else(|| "Any theme".into(), |t| crate::sets::theme_name(t)),
+        ui.add_space(6.0);
+        self.builder_themes(ui);
+    }
+    /// Searchable include/exclude picker. Each click cycles a theme: include → exclude → off.
+    fn builder_themes(&mut self, ui: &mut Ui) {
+        let semantic = self.palette.semantic();
+        let (include, exclude) = (
+            style::color(semantic.correct),
+            style::color(semantic.incorrect),
+        );
+        let snapshot = |b: &crate::sets::BuilderParams| {
+            (
+                b.include_themes.clone(),
+                b.exclude_themes.clone(),
+                b.theme_match,
             )
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.builder.include_themes, Vec::new(), "Any theme");
-                for (key, label) in THEMES {
-                    ui.selectable_value(&mut self.builder.include_themes, vec![key.into()], label);
+        };
+        let before = snapshot(&self.builder);
+        widgets::caption(ui, "THEMES");
+        ui.small("Click a theme to include it, again to exclude it, and once more to clear it.");
+        ui.add_space(4.0);
+        self.builder_theme_chips(ui, include, exclude);
+        self.builder_theme_picker(ui, include, exclude);
+        if self.builder.include_themes.len() < 2 {
+            // "All" is only meaningful (and only shown) with two or more included themes.
+            self.builder.theme_match = ThemeMatch::Any;
+        }
+        if before != snapshot(&self.builder) {
+            // A shortfall notice describes the old filter; drop it once themes change.
+            self.creation = None;
+        }
+    }
+    fn builder_theme_chips(&mut self, ui: &mut Ui, include: egui::Color32, exclude: egui::Color32) {
+        let mut removed = None;
+        if self.builder.include_themes.is_empty() && self.builder.exclude_themes.is_empty() {
+            ui.label(RichText::new("Any theme").color(ui.visuals().weak_text_color()));
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                let chosen = self
+                    .builder
+                    .include_themes
+                    .iter()
+                    .map(|t| (t, true))
+                    .chain(self.builder.exclude_themes.iter().map(|t| (t, false)));
+                for (key, included) in chosen {
+                    let (sign, color) = if included {
+                        ("+", include)
+                    } else {
+                        ("−", exclude)
+                    };
+                    if widgets::removable_chip(ui, &format!("{sign} {}", theme_name(key)), color)
+                        .on_hover_text("Remove")
+                        .clicked()
+                    {
+                        removed = Some(key.clone());
+                    }
                 }
+                if ui.small_button("Clear all").clicked() {
+                    self.builder.include_themes.clear();
+                    self.builder.exclude_themes.clear();
+                }
+            });
+        }
+        if let Some(key) = removed {
+            self.builder.clear_theme(&key);
+        }
+        if self.builder.include_themes.len() > 1 {
+            ui.horizontal_wrapped(|ui| {
+                ui.small("Included themes:");
+                for (mode, label, hint) in [
+                    (
+                        ThemeMatch::Any,
+                        "Match any",
+                        "Puzzles need at least one included theme",
+                    ),
+                    (
+                        ThemeMatch::All,
+                        "Match all",
+                        "Puzzles need every included theme",
+                    ),
+                ] {
+                    ui.selectable_value(&mut self.builder.theme_match, mode, label)
+                        .on_hover_text(hint);
+                }
+            });
+        }
+    }
+    fn builder_theme_picker(
+        &mut self,
+        ui: &mut Ui,
+        include: egui::Color32,
+        exclude: egui::Color32,
+    ) {
+        ui.add_space(4.0);
+        ui.add(
+            egui::TextEdit::singleline(&mut self.theme_search)
+                .hint_text("Search themes…")
+                .desired_width(ui.available_width().min(400.0)),
+        );
+        egui::ScrollArea::vertical()
+            .id_salt("theme-picker")
+            .max_height(150.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let mut any = false;
+                    for (key, label) in search_themes(&self.theme_search) {
+                        any = true;
+                        let state = self.builder.theme_selection(key);
+                        let color = match state {
+                            ThemeSelection::Included => Some(include),
+                            ThemeSelection::Excluded => Some(exclude),
+                            ThemeSelection::Neutral => None,
+                        };
+                        let mut text = RichText::new(label).size(12.0);
+                        if state == ThemeSelection::Excluded {
+                            text = text.strikethrough();
+                        }
+                        let mut button = egui::Button::new(
+                            text.color(color.unwrap_or_else(|| ui.visuals().text_color())),
+                        )
+                        .corner_radius(6);
+                        if let Some(color) = color {
+                            button = button
+                                .fill(color.gamma_multiply(0.15))
+                                .stroke(egui::Stroke::new(1.0, color));
+                        }
+                        let hover = match state {
+                            ThemeSelection::Neutral => "Click to include",
+                            ThemeSelection::Included => "Included · click to exclude",
+                            ThemeSelection::Excluded => "Excluded · click to clear",
+                        };
+                        if ui.add(button).on_hover_text(hover).clicked() {
+                            self.builder.cycle_theme(key);
+                        }
+                    }
+                    if !any {
+                        ui.small("No theme matches your search.");
+                    }
+                });
             });
     }
     fn builder_difficulty(&mut self, ui: &mut Ui) {
@@ -222,10 +351,13 @@ impl Woodpeck {
             ui.colored_label(
                 style::color(self.palette.semantic().warning),
                 format!(
-                    "{} puzzles short. Found {} of {} after widening the band from {}–{} to {}–{}.",
+                    "{} puzzles short. Found {} of {}{} after widening the band from {}–{} to {}–{}.",
                     c.shortfall(),
                     c.available,
                     c.requested,
+                    self.builder
+                        .theme_summary()
+                        .map_or_else(String::new, |t| format!(" matching {t}")),
                     c.original_band.0,
                     c.original_band.1,
                     c.used_band.0,

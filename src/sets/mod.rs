@@ -56,6 +56,26 @@ pub enum ThemeMatch {
     Any,
     All,
 }
+/// Where a theme sits in the builder's include/exclude picker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeSelection {
+    Neutral,
+    Included,
+    Excluded,
+}
+/// Builder themes whose label or key contains `query`, ignoring case and spacing.
+pub fn search_themes(query: &str) -> impl Iterator<Item = (&'static str, &'static str)> {
+    let normalize = |s: &str| {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let needle = normalize(query);
+    THEMES.into_iter().filter(move |(key, label)| {
+        needle.is_empty() || normalize(key).contains(&needle) || normalize(label).contains(&needle)
+    })
+}
 /// Borrowed theme constraints shared by local generation, `SQLite` queries and API fallback.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ThemeFilter<'a> {
@@ -132,6 +152,20 @@ impl BuilderParams {
             exclude: &self.exclude_themes,
             mode: self.theme_match,
         }
+    }
+    pub fn theme_selection(&self, key: &str) -> ThemeSelection {
+        if self.include_themes.iter().any(|t| t == key) {
+            ThemeSelection::Included
+        } else if self.exclude_themes.iter().any(|t| t == key) {
+            ThemeSelection::Excluded
+        } else {
+            ThemeSelection::Neutral
+        }
+    }
+    /// Remove a theme from whichever list holds it.
+    pub fn clear_theme(&mut self, key: &str) {
+        self.include_themes.retain(|t| t != key);
+        self.exclude_themes.retain(|t| t != key);
     }
     /// Toggle a theme through none → include → exclude → none, keeping lists sorted.
     pub fn cycle_theme(&mut self, key: &str) {
@@ -389,5 +423,21 @@ mod tests {
             serde_json::to_value(ThemeMatch::All).unwrap(),
             serde_json::json!("all")
         );
+    }
+    #[test]
+    fn theme_search_and_selection_state() {
+        let found: Vec<_> = search_themes("back rank").map(|(k, _)| k).collect();
+        assert_eq!(found, vec!["backRankMate"]);
+        assert!(search_themes("MATEIN2").any(|(k, _)| k == "mateIn2"));
+        assert_eq!(search_themes("").count(), THEMES.len());
+        assert_eq!(search_themes("zzz-nothing").count(), 0);
+        let mut b = BuilderParams::default();
+        assert_eq!(b.theme_selection("fork"), ThemeSelection::Neutral);
+        b.cycle_theme("fork");
+        assert_eq!(b.theme_selection("fork"), ThemeSelection::Included);
+        b.cycle_theme("fork");
+        assert_eq!(b.theme_selection("fork"), ThemeSelection::Excluded);
+        b.clear_theme("fork");
+        assert_eq!(b.theme_selection("fork"), ThemeSelection::Neutral);
     }
 }
