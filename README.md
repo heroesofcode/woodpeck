@@ -4,15 +4,14 @@ A local Woodpecker Method chess puzzle trainer, written in Rust. Build a fixed
 set, repeat it across cycles, and solve misses in a separate review queue.
 Puzzles from the Lichess puzzle database (CC0).
 
-Milestone 2 implements the core library, puzzle sourcing, and application service.
-The executable imports puzzles and initializes offline data; the desktop window
-arrives in the next milestone. Rust 1.97 or newer is required (edition 2024).
+Milestone 3 adds the native desktop: Dashboard, Train, Review, Progress, New set,
+and Settings, all backed by the persisted application service. Rust 1.97 or newer is required (edition 2024).
 Native `eframe` dependencies include Glow, Wayland, X11, and default fonts.
 
 ```sh
 cargo run -- --help
 cargo run -- --version
-cargo run                         # install/update the embedded starter pack
+cargo run                         # open the desktop; starter import runs in the background
 cargo run -- import puzzles.csv.zst
 cargo run -- import https://example.org/puzzles.csv.zst
 cargo run -- import --lichess      # stream the full Lichess database
@@ -90,12 +89,13 @@ when multiple tags describe the same puzzle. A shortage is reported explicitly
 if the cap cannot be met after widening. Selection is deterministic for a seed,
 with 32 candidate orderings tried per band to reduce greedy-selection bias.
 
-The default database path is `$XDG_DATA_HOME/woodpeck/woodpeck.db`, with the usual
+`WOODPECK_DATA_DIR` overrides the application data directory (the database is
+`$WOODPECK_DATA_DIR/woodpeck.db`). Otherwise, the default database path is `$XDG_DATA_HOME/woodpeck/woodpeck.db`, with the usual
 `$HOME/.local/share` fallback on Linux. `Store::memory`, explicit database paths,
 and `database_path_for` support isolated tests and portable use. Settings live in
 SQLite. Theme discovery prefers `$HOME/.local/state/omarchy/current/theme` over
 the legacy `.config` location. `ThemePoller` re-discovers the directory every two
-seconds and should be called by a worker in the desktop shell.
+seconds on a dedicated desktop worker, including directory/symlink swaps.
 
 `AppService::open` (or `new` with an existing `Store`) starts a serial worker
 and automatically queues the starter import. Call `poll_events` each frame to
@@ -125,9 +125,59 @@ Streaks use local calendar dates and are updated once per active day. Use
 zero. Correct cycle/review solves earn 10 XP; finishing a cycle earns 50 XP.
 Level L starts at `100 × (L − 1)²` XP, with the ranks from the functional spec.
 
-Later milestones add the native window and stable app ID, screens and board
-interaction, piece artwork and animations, theme-to-egui wiring, and packaging.
-The desktop entry is already in `assets/woodpeck.desktop`.
+The window title and native app ID/class are `woodpeck`, with Wayland and X11
+support. Navigation adapts from a sidebar to an icon rail to a top bar below
+640 logical pixels. Solving switches to a stacked, scrollable layout below
+900 pixels. The board is bounded by both content width and height, with
+click/click and drag/drop input, promotion selection, legal targets, check glow,
+move animation, and feedback flashes. `S` skips, `T` toggles the timer, arrows
+step the missed line, and Enter/Space advance. Shortcuts respect text entry,
+menus, modifiers, and promotion. Focus loss and minimizing pause the timer.
+Settings persist immediately. PGN export uses a path field; no file-dialog
+dependency is required. Full imports show byte/row progress and can be cancelled.
+The desktop entry is in `assets/woodpeck.desktop`.
+
+The embedded cburnett SVG pieces are by Colin M.L. Burnett, sourced from
+[lichess-org/lila](https://github.com/lichess-org/lila/tree/master/public/piece/cburnett),
+dual licensed GPLv2+ / CC BY-SA 3.0. See `assets/pieces/LICENSE`. `resvg` renders
+them at the physical square size and caches textures, including HiDPI sizes.
+UI fonts are loaded with fontconfig when available, with egui's built-in fallback.
+
+For a deterministic visual self-check, screenshot mode imports the starter into
+an isolated in-memory SQLite database, builds a set, and records two full cycles
+plus a partial third cycle, including misses and skips. It never opens your real
+database. After a few frames it saves a PNG and exits; a failed save returns an
+error. Egui 0.37 delivers screenshots through the viewport screenshot callback
+(the former screenshot event API was replaced).
+
+```sh
+xvfb-run -a -s "-screen 0 1920x1080x24" cargo run -- --screenshot /tmp/training.png --screen training --size 1280x800
+xvfb-run -a -s "-screen 0 1920x1080x24" cargo run -- --screenshot /tmp/narrow.png --screen training --size 360x640
+# Other screens: dashboard, review, progress, builder, settings
+# Other tiles: 640x900, 960x1080, 1920x1080; use a 3840x2160 Xvfb for 4K.
+```
+
+The visual validation matrix used for milestone 3 (after building the binary):
+
+```sh
+for screen in dashboard training review progress builder settings; do
+  for size in 1280x800 360x640; do
+    xvfb-run -a -s "-screen 0 1920x1080x24" target/debug/woodpeck --screenshot "/tmp/woodpeck-${screen}-${size}.png" --screen "$screen" --size "$size"
+  done
+done
+for spec in 'training 640x900' 'review 960x1080' 'progress 1920x1080'; do
+  set -- $spec
+  xvfb-run -a -s "-screen 0 1920x1080x24" target/debug/woodpeck --screenshot "/tmp/woodpeck-$1-$2.png" --screen "$1" --size "$2"
+done
+xvfb-run -a -s "-screen 0 3840x2160x24" target/debug/woodpeck --screenshot /tmp/woodpeck-dashboard-3840x2160.png --screen dashboard --size 3840x2160
+WINIT_X11_SCALE_FACTOR=2 xvfb-run -a -s "-screen 0 3840x2160x24" target/debug/woodpeck --screenshot /tmp/woodpeck-training-hidpi.png --screen training --size 1920x1080
+```
+
+Validation includes pure formatting, chart scaling, orientation/hit testing,
+shortcut dispatch, SVG rasterization, tile geometry, actual egui width checks for
+all screens, and a UI-to-service skip/Review flow. Run `cargo fmt --check`,
+`cargo test --all-features`, `cargo test --no-default-features`, and Clippy with
+`--all-targets` and `-- -D warnings -W clippy::pedantic` for both feature modes.
 
 License: GPL-3.0-or-later, compatible with shakmaty and pgn-reader. Puzzle data is
 CC0. Omarchy palette examples and the resolver fixture were supplied with the
