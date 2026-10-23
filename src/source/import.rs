@@ -1,7 +1,7 @@
 use super::{CsvPuzzles, ImportProgress, SourceError};
 use crate::{puzzle::Puzzle, store::Store};
 use std::{
-    io::{BufRead, BufReader, Cursor, Read},
+    io::{BufReader, Cursor, Read},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -61,11 +61,20 @@ pub fn import_stream(
         cancel: cancel.clone(),
     };
     let mut buffered = BufReader::new(counted);
-    let compressed = buffered.fill_buf()?.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]);
+    // A network Read may return fewer than four bytes before EOF. Collect the entire magic.
+    let mut prefix = Vec::with_capacity(4);
+    let sniffed = buffered.by_ref().take(4).read_to_end(&mut prefix);
+    cancel.check()?;
+    sniffed?;
+    let compressed = matches!(
+        prefix.as_slice(),
+        [0x28, 0xb5, 0x2f, 0xfd] | [0x50..=0x5f, 0x2a, 0x4d, 0x18]
+    );
+    let input = Cursor::new(prefix).chain(buffered);
     let decoded: Box<dyn Read + '_> = if compressed {
-        Box::new(zstd::stream::read::Decoder::with_buffer(buffered)?)
+        Box::new(zstd::stream::read::Decoder::new(input)?)
     } else {
-        Box::new(buffered)
+        Box::new(input)
     };
     let mut rows = CsvPuzzles::new(decoded);
     let mut batch = Vec::with_capacity(IMPORT_BATCH_SIZE);
@@ -238,6 +247,222 @@ mod tests {
         assert_eq!(
             s.setting("starter_version").unwrap().as_deref(),
             Some("next")
+        );
+    }
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+    use std::fmt::Write;
+    fn rows(count: usize, quality: bool) -> String {
+        let p = crate::puzzle::fixture();
+        let mut input = "PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes,GameUrl,OpeningTags,DailyDate\n".to_owned();
+        for i in 0..count {
+            writeln!(
+                input,
+                "p{i},{},{},1000,75,{},1000,fork,,,",
+                p.fen,
+                p.moves,
+                if quality { 100 } else { 0 }
+            )
+            .unwrap();
+        }
+        input
+    }
+    struct Fragmented<R>(R);
+    impl<R: Read> Read for Fragmented<R> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let n = buffer.len().min(1);
+            self.0.read(&mut buffer[..n])
+        }
+    }
+    struct Cancelling<'a> {
+        bytes: &'a [u8],
+        flag: CancelFlag,
+        boundary: usize,
+    }
+    impl Read for Cancelling<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.boundary == 0 {
+                self.flag.cancel();
+                return Ok(0);
+            }
+            let len = buffer.len().min(self.boundary);
+            let n = self.bytes.read(&mut buffer[..len])?;
+            self.boundary -= n;
+            Ok(n)
+        }
+    }
+
+    struct Broken;
+    impl Read for Broken {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("broken transport"))
+        }
+    }
+
+    #[test]
+    fn magic_detection_handles_one_byte_reads_and_reports_compressed_bytes() {
+        let input = rows(3, true);
+        let compressed = zstd::stream::encode_all(input.as_bytes(), 1).unwrap();
+        let mut store = Store::memory().unwrap();
+        let result = import_reader(
+            &mut store,
+            Fragmented(compressed.as_slice()),
+            &CancelFlag::default(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(result.accepted, 3);
+        assert_eq!(result.bytes, compressed.len() as u64);
+    }
+    #[test]
+    fn zstd_skippable_prefix_matches_the_full_lichess_dump() {
+        let input = rows(3, true);
+        let compressed = zstd::stream::encode_all(input.as_bytes(), 1).unwrap();
+        for marker in 0x50..=0x5f {
+            let mut prefixed = vec![marker, 0x2a, 0x4d, 0x18, 4, 0, 0, 0, 0xe4, 4, 0x8a, 0];
+            prefixed.extend_from_slice(&compressed);
+            let mut store = Store::memory().unwrap();
+            let result = import_reader(
+                &mut store,
+                prefixed.as_slice(),
+                &CancelFlag::default(),
+                |_| {},
+            )
+            .unwrap();
+            assert_eq!(result.accepted, 3);
+            assert_eq!(result.bytes, prefixed.len() as u64);
+        }
+    }
+    #[test]
+    fn cancellation_retains_committed_batches_and_discards_incomplete_batch() {
+        let input = rows(2500, true);
+        let flag = CancelFlag::default();
+        let mut saved = Vec::new();
+        let result = import_stream(
+            input.as_bytes(),
+            &flag,
+            |p| {
+                if p.scanned >= 1000 {
+                    flag.cancel();
+                }
+            },
+            |batch| {
+                saved.push(batch.len());
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(SourceError::Cancelled)));
+        assert_eq!(saved, [1000]);
+        // A read cancellation after 1100 accepted rows drops the remaining 100.
+        let flag = CancelFlag::default();
+        let header = input.lines().next().unwrap().len() + 1;
+        let boundary = header
+            + input
+                .lines()
+                .skip(1)
+                .take(1100)
+                .map(|l| l.len() + 1)
+                .sum::<usize>();
+        saved.clear();
+        let result = import_stream(
+            Cancelling {
+                bytes: input.as_bytes(),
+                flag: flag.clone(),
+                boundary,
+            },
+            &flag,
+            |_| {},
+            |batch| {
+                saved.push(batch.len());
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(SourceError::Cancelled)));
+        assert_eq!(saved, [1000]);
+    }
+    #[test]
+    fn rejected_rows_still_report_progress_and_allow_cancel() {
+        let input = rows(2500, false);
+        let flag = CancelFlag::default();
+        let mut reports = vec![];
+        let result = import_stream(
+            input.as_bytes(),
+            &flag,
+            |p| {
+                reports.push(p);
+                if p.scanned >= 1000 {
+                    flag.cancel();
+                }
+            },
+            |_| panic!("no accepted puzzles"),
+        );
+        assert!(matches!(result, Err(SourceError::Cancelled)));
+        assert_eq!(reports.last().unwrap().rejected, 1000);
+    }
+    #[test]
+    fn malformed_zstd_and_header_read_errors_propagate_instead_of_succeeding_empty() {
+        let flag = CancelFlag::default();
+        assert!(
+            import_stream(
+                &[0x28, 0xb5, 0x2f, 0xfd, 0, 1, 2][..],
+                &flag,
+                |_| {},
+                |_| Ok(())
+            )
+            .is_err()
+        );
+        assert!(CsvPuzzles::new(Broken).next().unwrap().is_err());
+    }
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+    use std::{io::Write, net::TcpListener};
+    #[test]
+    fn streams_url_download_and_path_using_magic_instead_of_filename() {
+        let fixture = include_bytes!("../../tests/fixtures/lichess.csv");
+        let compressed = zstd::stream::encode_all(fixture.as_slice(), 1).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("without-an-extension");
+        std::fs::write(&path, &compressed).unwrap();
+        let mut from_file = Store::memory().unwrap();
+        let file = import_location(
+            &mut from_file,
+            path.to_str().unwrap(),
+            &CancelFlag::default(),
+            |_| {},
+        )
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/puzzles", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let n = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..n]).starts_with("GET /puzzles "));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                compressed.len()
+            )
+            .unwrap();
+            // Small chunks also exercise the streaming HTTP body reader.
+            for chunk in compressed.chunks(64) {
+                stream.write_all(chunk).unwrap();
+            }
+        });
+        let mut from_url = Store::memory().unwrap();
+        let downloaded =
+            import_location(&mut from_url, &url, &CancelFlag::default(), |_| {}).unwrap();
+        server.join().unwrap();
+        assert_eq!(downloaded, file);
+        assert_eq!(
+            from_file.puzzle_count().unwrap(),
+            from_url.puzzle_count().unwrap()
         );
     }
 }

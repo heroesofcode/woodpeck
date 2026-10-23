@@ -126,6 +126,31 @@ mod tests {
         assert!(p.fen.contains(" w "));
     }
     #[test]
+    fn initial_ply_zero_and_last_ply_reconstruct_before_opponent_move() {
+        for (initial_ply, solution, setup, expected_fen) in [
+            (
+                0,
+                "e7e5",
+                "e2e4",
+                "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            ),
+            (
+                2,
+                "b8c6",
+                "g1f3",
+                "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+            ),
+        ] {
+            let json = serde_json::json!({"game": {"pgn": "1. e4 e5 2. Nf3"}, "puzzle": {
+                "id": "boundary", "rating": 1000, "plays": 1000, "themes": [],
+                "initialPly": initial_ply, "solution": [solution]
+            }});
+            let puzzle = parse_puzzle(&json.to_string()).unwrap();
+            assert_eq!(puzzle.fen, expected_fen);
+            assert_eq!(puzzle.moves, format!("{setup} {solution}"));
+        }
+    }
+    #[test]
     fn rejects_missing_solution_out_of_bounds_and_illegal_pgn() {
         let base = include_str!("../../tests/fixtures/batch.json");
         let mut value: serde_json::Value = serde_json::from_str(base).unwrap();
