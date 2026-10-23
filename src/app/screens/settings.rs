@@ -20,6 +20,8 @@ impl Woodpeck {
         ui.add_space(8.0);
         self.library_settings(ui);
         ui.add_space(8.0);
+        self.sync_settings(ui);
+        ui.add_space(8.0);
         self.export_settings(ui);
         ui.add_space(8.0);
         if before != self.settings {
@@ -36,6 +38,28 @@ impl Woodpeck {
         ui.add_space(18.0);
         ui.small("Puzzles from the Lichess puzzle database (CC0)");
         ui.small("cburnett pieces · GPLv2+ / CC BY-SA 3.0 · Colin M.L. Burnett");
+    }
+    fn sync_settings(&mut self, ui: &mut Ui) {
+        let config = self.service.sync_status();
+        widgets::card(ui).show(ui, |ui| {
+            ui.set_width((ui.available_width() - 1.0).max(0.0));
+            ui.heading("Sync");
+            ui.label("Keep progress across computers using a PRIVATE Git repository you own.");
+            widgets::caption(ui,"REMOTE URL");
+            ui.add(egui::TextEdit::singleline(&mut self.sync_remote).desired_width(ui.available_width()).hint_text("https://github.com/<user>/woodpeck-data.git"));
+            let mut enabled = config.enabled;
+            let toggled = ui.checkbox(&mut enabled,"Enable Git sync").changed();
+            let apply = ui.button("Apply remote URL").clicked();
+            if (toggled || apply) && let Err(error) = self.service.configure_sync(self.sync_remote.trim(),enabled) {self.error(error);}
+            ui.horizontal(|ui| {
+                if ui.add_enabled(config.enabled && config.status!=crate::sync::Status::Syncing,egui::Button::new("Sync now")).clicked() {self.service.sync_now();}
+                self.sync_indicator(ui);
+            });
+            let last = config.last_sync.and_then(|at|chrono::DateTime::from_timestamp(at,0)).map_or_else(||"Never".into(),|at|at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string());
+            ui.small(format!("Last sync: {last}"));
+            if let Some(error) = &config.last_error {ui.colored_label(style::color(self.palette.semantic().incorrect),format!("Last error: {error}"));}
+            ui.small("Uses system git and your credential helper or SSH. No tokens are stored by woodpeck.");
+        });
     }
     fn appearance_settings(&mut self, ui: &mut Ui) {
         widgets::card(ui).show(ui, |ui| {
