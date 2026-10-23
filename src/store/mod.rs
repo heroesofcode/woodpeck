@@ -3,6 +3,7 @@ mod attempts;
 mod puzzles;
 mod schema;
 mod sets;
+mod sync;
 #[cfg(test)]
 mod tests;
 pub use attempts::RecordedAttempt;
@@ -78,7 +79,21 @@ impl Store {
                 "Puzzle rating must be 400–3000.".into(),
             ));
         }
-        self.set_setting("preferences", &serde_json::to_string(settings)?)
+        let tx = self.connection.unchecked_transaction()?;
+        let previous = serde_json::to_value(self.settings()?)?;
+        let values = serde_json::to_value(settings)?;
+        for (key, value) in values
+            .as_object()
+            .ok_or_else(|| StoreError::InvalidData("Invalid preferences.".into()))?
+        {
+            if previous.get(key) != Some(value) {
+                tx.execute("INSERT INTO sync_fields(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=max(sync_fields.updated_at+1,excluded.updated_at)",rusqlite::params![key,value.to_string(),chrono::Utc::now().timestamp_millis()])?;
+            }
+        }
+        self.set_setting("preferences", &serde_json::to_string(settings)?)?;
+        tx.execute("UPDATE sync_changes SET generation=generation+1", [])?;
+        tx.commit()?;
+        Ok(())
     }
 }
 /// Platform data discovery for the application. Directory creation happens when opening the DB.

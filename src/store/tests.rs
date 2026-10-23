@@ -651,3 +651,61 @@ fn invalid_settings_do_not_replace_saved_preferences() {
     assert!(s.save_settings(&bad).is_err());
     assert_eq!(s.settings().unwrap(), good);
 }
+
+#[test]
+fn portable_sync_roundtrip_merges_divergence_and_retains_local_ids() {
+    use crate::sync::{format::State, merge::merge};
+    let mut a = Store::memory().unwrap();
+    let id = setup(&mut a);
+    let cycle = a.start_cycle(id, 1).unwrap();
+    let initial = a.export_sync().unwrap();
+    let mut b = Store::memory().unwrap();
+    // Force unrelated local row IDs before importing the shared set.
+    setup(&mut b);
+    b.import_sync(&initial).unwrap();
+    let bid = b.sets().unwrap().last().unwrap().id;
+    let bcycle = b.cycles(bid).unwrap()[0].id;
+    a.record_attempt(&cycle_attempt(id, cycle.id, "p00", Outcome::Incorrect, 2))
+        .unwrap();
+    b.record_attempt(&cycle_attempt(bid, bcycle, "p00", Outcome::Skipped, 3))
+        .unwrap();
+    a.record_attempt(&review_attempt(id, "p00", Outcome::Correct, 4))
+        .unwrap();
+    let mut settings = a.settings().unwrap();
+    settings.auto_advance = true;
+    a.save_settings(&settings).unwrap();
+    let sa = a.export_sync().unwrap();
+    let sb = b.export_sync().unwrap();
+    let joined = merge(&sa, &sb).unwrap();
+    assert_eq!(joined, merge(&sb, &sa).unwrap());
+    assert_eq!(joined, merge(&joined, &joined).unwrap());
+    assert_eq!(joined, merge(&joined, &sa).unwrap());
+    a.import_sync(&joined).unwrap();
+    b.import_sync(&joined).unwrap();
+    assert_eq!(a.attempts(id).unwrap().len(), 3);
+    assert_eq!(b.attempts(bid).unwrap().len(), 3);
+    assert_eq!(b.pending_review_count().unwrap(), 0);
+    assert!(b.settings().unwrap().auto_advance);
+    assert_eq!(a.export_sync().unwrap(), joined);
+    let wire = State::from_files(&joined.files().unwrap()).unwrap();
+    assert_eq!(joined, wire);
+    assert_eq!(
+        a.cycle_progress(cycle.id).unwrap().next_puzzle(),
+        Some("p01")
+    );
+}
+#[test]
+fn sync_import_rejects_bad_state_atomically_and_preserves_new_training() {
+    let mut s = Store::memory().unwrap();
+    let id = setup(&mut s);
+    let c = s.start_cycle(id, 1).unwrap();
+    let old = s.export_sync().unwrap();
+    s.record_attempt(&cycle_attempt(id, c.id, "p00", Outcome::Incorrect, 2))
+        .unwrap();
+    s.import_sync(&old).unwrap();
+    assert_eq!(s.attempts(id).unwrap().len(), 1);
+    let mut corrupt = old;
+    corrupt.sets.values_mut().next().unwrap().puzzles.clear();
+    assert!(s.import_sync(&corrupt).is_err());
+    assert_eq!(s.attempts(id).unwrap().len(), 1);
+}
