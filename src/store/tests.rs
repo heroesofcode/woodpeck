@@ -709,3 +709,30 @@ fn sync_import_rejects_bad_state_atomically_and_preserves_new_training() {
     assert!(s.import_sync(&corrupt).is_err());
     assert_eq!(s.attempts(id).unwrap().len(), 1);
 }
+
+#[test]
+fn imported_set_field_clocks_survive_reexport() {
+    let mut store = Store::memory().unwrap();
+    let id = setup(&mut store);
+    let mut remote = store.export_sync().unwrap();
+    let set = remote.sets.values_mut().next().unwrap();
+    let field = set.fields.get_mut("restrict_recommended").unwrap();
+    field.value = serde_json::json!(false);
+    field.updated_at = 9000;
+    store.import_sync(&remote).unwrap();
+    assert_eq!(store.export_sync().unwrap(), remote);
+    assert!(!store.set(id).unwrap().unwrap().params.restrict_recommended);
+}
+#[test]
+fn source_directory_is_never_a_data_directory() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert!(ensure_external_data_dir(&source.join("unused/woodpeck.db")).is_err());
+    let dir = tempfile::tempdir().unwrap();
+    assert!(ensure_external_data_dir(&dir.path().join("new/woodpeck.db")).is_ok());
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("source-link");
+        std::os::unix::fs::symlink(source, &link).unwrap();
+        assert!(ensure_external_data_dir(&link.join("unused/woodpeck.db")).is_err());
+    }
+}
