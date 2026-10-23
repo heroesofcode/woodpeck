@@ -75,7 +75,7 @@ fn finish(store: &mut Store, cycle_id: i64, at: i64) {
 #[test]
 fn migrations_idempotent_and_reject_future_schema() {
     let store = Store::memory().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 2);
+    assert_eq!(store.schema_version().unwrap(), 3);
     let mut conn = store.connection;
     schema::migrate(&mut conn).unwrap();
     conn.pragma_update(None, "user_version", 99).unwrap();
@@ -86,17 +86,49 @@ fn migrations_idempotent_and_reject_future_schema() {
 }
 #[test]
 fn migrates_existing_version_one_and_retains_data() {
-    let mut s = Store::memory().unwrap();
-    let set = setup(&mut s);
-    let c = s.start_cycle(set, 1).unwrap();
-    s.record_attempt(&cycle_attempt(set, c.id, "p00", Outcome::Incorrect, 2))
+    let schema = include_str!("schema.rs");
+    let sql = schema
+        .split("tx.execute_batch(\"CREATE TABLE puzzles (")
+        .nth(1)
+        .unwrap()
+        .split("\")?;")
+        .next()
         .unwrap();
-    s.connection.execute_batch("DROP INDEX puzzles_rating; DROP INDEX puzzle_themes_theme_rating; DROP INDEX cycle_puzzle_once; DROP INDEX one_active_cycle; DROP INDEX attempts_lifetime; DROP INDEX review_pending_recent; PRAGMA user_version=1;").unwrap();
-    let s = Store::from_connection(s.connection).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 2);
+    let old = Connection::open_in_memory().unwrap();
+    old.execute_batch(&format!("CREATE TABLE puzzles ({sql}"))
+        .unwrap();
+    old.pragma_update(None, "user_version", 1).unwrap();
+    old.execute_batch(
+        "INSERT INTO sets VALUES(1,'Old',NULL,1000,100,20,2,1,NULL,'fixed',1,'42');
+        INSERT INTO set_puzzles VALUES(1,1,'p00','{}');
+        INSERT INTO cycles VALUES(1,1,1,1,NULL,'[\"p00\"]');
+        INSERT INTO attempts VALUES(1,'p00',1,1,'cycle','incorrect',1,'[]',2);
+        INSERT INTO review_items VALUES('p00',1,2,2,'pending',NULL);",
+    )
+    .unwrap();
+    let s = Store::from_connection(old).unwrap();
+    assert_eq!(s.schema_version().unwrap(), 3);
+    for table in ["sets", "cycles", "attempts", "review_items"] {
+        let uid: String = s
+            .connection
+            .query_row(&format!("SELECT uid FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert!(uid.len() >= 32);
+    }
     assert_eq!(s.pending_review_count().unwrap(), 1);
-    assert_eq!(s.cycle_progress(c.id).unwrap().next_puzzle(), Some("p01"));
+    assert_eq!(s.cycle_progress(1).unwrap().next_puzzle(), None);
+    let before: String = s
+        .connection
+        .query_row("SELECT uid FROM attempts", [], |r| r.get(0))
+        .unwrap();
+    let s = Store::from_connection(s.connection).unwrap();
+    let after: String = s
+        .connection
+        .query_row("SELECT uid FROM attempts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(before, after);
 }
+
 #[test]
 fn puzzles_roundtrip_query_and_upsert_theme_index() {
     let mut s = Store::memory().unwrap();

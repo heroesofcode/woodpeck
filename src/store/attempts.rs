@@ -66,12 +66,16 @@ impl Store {
         let review_change = transition(existing.as_ref(), attempt);
         tx.execute("INSERT INTO attempts(puzzle_id,set_id,cycle_id,kind,outcome,time_ms,moves_played,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![attempt.puzzle_id,attempt.set_id,attempt.cycle_id,kind_name(attempt.kind),outcome_name(attempt.outcome),time_ms,serde_json::to_string(&attempt.moves_played)?,attempt.created_at])?;
         let id = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE attempts SET local_day=?1 WHERE id=?2",
+            params![day, id],
+        )?;
         if let ReviewChange::Save(item) = &review_change {
             tx.execute("INSERT INTO review_items(puzzle_id,set_id,added_at,last_missed_at,status,cleared_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(puzzle_id,set_id) DO UPDATE SET added_at=excluded.added_at,last_missed_at=excluded.last_missed_at,status=excluded.status,cleared_at=excluded.cleared_at",params![item.puzzle_id,item.set_id,item.added_at,item.last_missed_at,if item.status==ReviewStatus::Pending {"pending"} else {"cleared"},item.cleared_at])?;
         }
         let mut cycle_completed = false;
         if let Some(cycle_id) = attempt.cycle_id {
-            let (count,size):(u32,u32)=tx.query_row("SELECT (SELECT count(*) FROM attempts WHERE cycle_id=?1 AND kind='cycle'),size FROM sets WHERE id=?2",params![cycle_id,attempt.set_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            let (count,size):(u32,u32)=tx.query_row("SELECT (SELECT count(DISTINCT puzzle_id) FROM attempts WHERE cycle_id=?1 AND kind='cycle'),size FROM sets WHERE id=?2",params![cycle_id,attempt.set_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
             if count == size {
                 tx.execute(
                     "UPDATE cycles SET completed_at=?1 WHERE id=?2",
@@ -103,7 +107,7 @@ impl Store {
         })
     }
     pub fn attempts(&self, set_id: i64) -> Result<Vec<Attempt>> {
-        let mut stmt=self.connection.prepare("SELECT puzzle_id,set_id,cycle_id,kind,outcome,time_ms,moves_played,created_at FROM attempts WHERE set_id=?1 ORDER BY created_at,id")?;
+        let mut stmt=self.connection.prepare("SELECT puzzle_id,set_id,cycle_id,kind,outcome,time_ms,moves_played,created_at FROM attempts WHERE set_id=?1 ORDER BY created_at,uid")?;
         let rows = stmt
             .query_map([set_id], |r| {
                 Ok((
@@ -137,10 +141,11 @@ impl Store {
     }
     pub fn cycle_stats(&self, id: i64) -> Result<CycleStats> {
         let cycle = self.cycle(id)?.ok_or(StoreError::NotFound)?;
+        let mut seen = std::collections::BTreeSet::new();
         Ok(CycleStats::from_attempts(
             self.attempts(cycle.set_id)?
                 .iter()
-                .filter(|a| a.cycle_id == Some(id)),
+                .filter(|a| a.cycle_id == Some(id) && seen.insert(&a.puzzle_id)),
         ))
     }
     pub fn lifetime_accuracy(&self, puzzle_id: &str) -> Result<Accuracy> {

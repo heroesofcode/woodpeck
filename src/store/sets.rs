@@ -162,12 +162,15 @@ impl Store {
         let cycle = self.cycle(cycle_id)?.ok_or(StoreError::NotFound)?;
         let set = self.set(cycle.set_id)?.ok_or(StoreError::NotFound)?;
         let mut progress = CycleProgress::new(cycle.number, set.params.target_cycles, cycle.order)?;
+        let mut seen = BTreeSet::new();
         for a in self
             .attempts(cycle.set_id)?
             .iter()
             .filter(|a| a.kind == AttemptKind::Cycle && a.cycle_id == Some(cycle_id))
         {
-            progress.record(&a.puzzle_id, a.outcome)?;
+            if seen.insert(&a.puzzle_id) {
+                progress.record(&a.puzzle_id, a.outcome)?;
+            }
         }
         Ok(progress)
     }

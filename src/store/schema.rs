@@ -1,6 +1,6 @@
 use super::{Result, StoreError};
 use rusqlite::Connection;
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub fn migrate(connection: &mut Connection) -> Result<()> {
     connection.pragma_update(None, "foreign_keys", true)?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -56,6 +56,64 @@ pub fn migrate(connection: &mut Connection) -> Result<()> {
         CREATE INDEX attempts_lifetime ON attempts(puzzle_id,kind,outcome);
         CREATE INDEX review_pending_recent ON review_items(status,last_missed_at DESC);",
         )?;
+    }
+    if version < 3 {
+        tx.execute_batch(
+            "ALTER TABLE sets ADD COLUMN uid TEXT NOT NULL DEFAULT '';
+             UPDATE sets SET uid=lower(hex(randomblob(16)));
+             CREATE UNIQUE INDEX sets_uid ON sets(uid);
+             ALTER TABLE sets ADD COLUMN name_updated_at INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE sets ADD COLUMN target_cycles_updated_at INTEGER NOT NULL DEFAULT 0;
+             UPDATE sets SET name_updated_at=created_at*1000,target_cycles_updated_at=created_at*1000;
+             CREATE TRIGGER sets_identity AFTER INSERT ON sets WHEN NEW.uid='' BEGIN
+                UPDATE sets SET uid=lower(hex(randomblob(16))),name_updated_at=NEW.created_at*1000,
+                target_cycles_updated_at=NEW.created_at*1000 WHERE id=NEW.id;
+             END;
+             CREATE TRIGGER sets_name_clock AFTER UPDATE OF name ON sets WHEN OLD.name!=NEW.name BEGIN
+                UPDATE sets SET name_updated_at=max(OLD.name_updated_at+1,CAST(unixepoch('subsec')*1000 AS INTEGER)) WHERE id=NEW.id;
+             END;
+             CREATE TRIGGER sets_target_clock AFTER UPDATE OF target_cycles ON sets WHEN OLD.target_cycles!=NEW.target_cycles BEGIN
+                UPDATE sets SET target_cycles_updated_at=max(OLD.target_cycles_updated_at+1,CAST(unixepoch('subsec')*1000 AS INTEGER)) WHERE id=NEW.id;
+             END;
+             ALTER TABLE cycles ADD COLUMN uid TEXT NOT NULL DEFAULT '';
+             UPDATE cycles SET uid=(SELECT uid FROM sets WHERE id=set_id)||'-'||number;
+             CREATE UNIQUE INDEX cycles_uid ON cycles(uid);
+             CREATE TRIGGER cycles_identity AFTER INSERT ON cycles WHEN NEW.uid='' BEGIN
+                UPDATE cycles SET uid=(SELECT uid FROM sets WHERE id=NEW.set_id)||'-'||NEW.number WHERE id=NEW.id;
+             END;
+             ALTER TABLE attempts ADD COLUMN uid TEXT NOT NULL DEFAULT '';
+             UPDATE attempts SET uid=lower(hex(randomblob(16)));
+             CREATE UNIQUE INDEX attempts_uid ON attempts(uid);
+             CREATE TRIGGER attempts_identity AFTER INSERT ON attempts WHEN NEW.uid='' BEGIN
+                UPDATE attempts SET uid=lower(hex(randomblob(16))) WHERE id=NEW.id;
+             END;
+             ALTER TABLE attempts ADD COLUMN local_day INTEGER;
+             ALTER TABLE review_items ADD COLUMN uid TEXT NOT NULL DEFAULT '';
+             UPDATE review_items SET uid=lower(hex(randomblob(16)));
+             CREATE UNIQUE INDEX review_uid ON review_items(uid);
+             CREATE TRIGGER review_identity AFTER INSERT ON review_items WHEN NEW.uid='' BEGIN
+                UPDATE review_items SET uid=lower(hex(randomblob(16))) WHERE puzzle_id=NEW.puzzle_id AND set_id=NEW.set_id;
+             END;
+             ALTER TABLE review_items ADD COLUMN resolved_at INTEGER;
+             UPDATE review_items SET resolved_at=cleared_at;
+             CREATE TRIGGER review_resolution AFTER UPDATE OF cleared_at ON review_items WHEN NEW.cleared_at IS NOT NULL BEGIN
+                UPDATE review_items SET resolved_at=max(coalesce(OLD.resolved_at,NEW.cleared_at),NEW.cleared_at) WHERE puzzle_id=NEW.puzzle_id AND set_id=NEW.set_id;
+             END;
+             CREATE TABLE sync_fields (key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at INTEGER NOT NULL);
+             CREATE TABLE sync_changes (id INTEGER PRIMARY KEY CHECK(id=1),generation INTEGER NOT NULL);
+             INSERT INTO sync_changes VALUES(1,0);
+             DROP INDEX cycle_puzzle_once;
+             CREATE INDEX cycle_puzzle ON attempts(cycle_id,puzzle_id);",
+        )?;
+    }
+    if version < 3 {
+        for table in ["sets", "cycles", "attempts", "review_items"] {
+            for operation in ["INSERT", "UPDATE", "DELETE"] {
+                tx.execute_batch(&format!(
+                    "CREATE TRIGGER {table}_sync_{operation} AFTER {operation} ON {table} BEGIN UPDATE sync_changes SET generation=generation+1; END;"
+                ))?;
+            }
+        }
     }
     tx.pragma_update(None, "user_version", VERSION)?;
     tx.commit()?;
