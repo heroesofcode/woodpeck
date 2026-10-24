@@ -169,6 +169,7 @@ impl Woodpeck {
             super::super::library::histogram(
                 ui,
                 &self.library.bands,
+                None,
                 style::color(self.palette.semantic().accent),
                 65.0,
             );

@@ -53,14 +53,17 @@ pub fn service() -> Result<AppService, Box<dyn std::error::Error>> {
 pub(super) fn welcome(app: &mut super::Woodpeck, screen: super::Screen) {
     use super::{Screen, library::WelcomeStep};
     use crate::source::{ImportProgress, LibrarySize};
+    let accepted = 116_480;
+    let profile = LibrarySize::Medium.histogram();
+    let total = profile.iter().sum::<u64>();
+    let mut bands = profile.map(|count| count * accepted / total);
+    bands[5] += accepted - bands.iter().sum::<u64>();
     let progress = ImportProgress {
         bytes: 15_340_000,
         scanned: 307_000,
-        accepted: 116_480,
+        accepted,
         rejected: 190_520,
-        bands: [
-            700, 2500, 9900, 18300, 18700, 20400, 16800, 12700, 9000, 4800, 1700, 800, 180,
-        ],
+        bands,
     };
     if matches!(
         screen,
