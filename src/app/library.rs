@@ -454,19 +454,19 @@ impl Woodpeck {
         }
         .clamp(0.0, 1.0);
         let animated = self.screenshot.is_none() && ui.style().animation_time > 0.0;
-        let value = |key, n: u64| {
-            if animated {
-                f64::from(
-                    ui.ctx()
-                        .animate_value_with_time(egui::Id::unique(key), n as f32, 0.35),
-                )
-            } else {
-                n as f64
-            }
+        let job = self.library.job.as_ref().map_or(0, |job| job.id);
+        let accepted = animated_count(ui, ("accepted", job), progress.accepted, animated);
+        let scanned = animated_count(ui, ("scanned", job), progress.scanned, animated);
+        let bytes = animated_count(ui, ("bytes", job), progress.bytes, animated);
+        let fraction = if animated {
+            ui.ctx().animate_value_with_time(
+                egui::Id::unique(("library-fraction", job)),
+                fraction,
+                0.3,
+            )
+        } else {
+            fraction
         };
-        let accepted = value("library-accepted", progress.accepted);
-        let scanned = value("library-scanned", progress.scanned);
-        let bytes = value("library-bytes", progress.bytes);
         widgets::card(ui).show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.0).max(0.0));
             ui.horizontal_wrapped(|ui| {
@@ -480,8 +480,13 @@ impl Woodpeck {
                     .strong(),
             );
             ui.label(format!(
-                "{:.1} MB downloaded · {scanned:.0} rows scanned",
-                bytes / 1_000_000.0
+                "{:.1} MB {} · {scanned:.0} rows scanned",
+                bytes / 1_000_000.0,
+                if self.library.selected == LibrarySize::Starter {
+                    "read"
+                } else {
+                    "downloaded"
+                }
             ));
             ui.add(
                 egui::ProgressBar::new(fraction)
@@ -529,6 +534,30 @@ impl Woodpeck {
             );
         }
     }
+}
+/// Restart each counter from its displayed value when another worker report arrives.
+/// Cubic easing preserves continuity even when reports arrive faster than the transition.
+fn animated_count(ui: &Ui, key: (&str, u64), target: u64, animated: bool) -> f64 {
+    if !animated {
+        return target as f64;
+    }
+    let id = egui::Id::unique(("library-counter", key));
+    let now = ui.input(|i| i.time);
+    let (from, to, started) = ui
+        .data(|data| data.get_temp::<(f64, u64, f64)>(id))
+        .unwrap_or((0.0, target, now));
+    let t = ((now - started) / 0.35).clamp(0.0, 1.0);
+    let current = from + (to as f64 - from) * (1.0 - (1.0 - t).powi(3));
+    let next = if to == target {
+        (from, to, started)
+    } else {
+        (current, target, now)
+    };
+    ui.data_mut(|data| data.insert_temp(id, next));
+    if t < 1.0 || to != target {
+        ui.ctx().request_repaint();
+    }
+    current
 }
 pub(super) fn histogram(ui: &mut Ui, bands: &[u64; RATING_BANDS], accent: Color32, height: f32) {
     let (rect, _) = ui.allocate_exact_size(
