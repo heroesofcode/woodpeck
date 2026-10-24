@@ -133,13 +133,16 @@ impl Woodpeck {
                     "Build a set. Repeat the patterns. Make them second nature.",
                 );
                 ui.label(
-                    RichText::new(format!("{} puzzles available offline", self.library.count))
-                        .size(24.0)
-                        .strong(),
+                    RichText::new(format!(
+                        "{} puzzles available offline",
+                        widgets::grouped_count(self.library.count)
+                    ))
+                    .size(24.0)
+                    .strong(),
                 );
                 ui.small(format!(
                     "{} accepted this import · {:.1} MB read",
-                    self.library.progress.accepted,
+                    widgets::grouped_count(self.library.progress.accepted),
                     self.library.progress.bytes as f64 / 1_000_000.0
                 ));
                 histogram(ui, &self.library.bands, accent, 90.0);
@@ -191,7 +194,10 @@ impl Woodpeck {
         ui.add_space(18.0);
         if !self.library.message.is_empty() {
             ui.label(&self.library.message);
-            ui.strong(format!("{} puzzles available offline", self.library.count));
+            ui.strong(format!(
+                "{} puzzles available offline",
+                widgets::grouped_count(self.library.count)
+            ));
         }
         ui.add_enabled_ui(!self.service.is_busy(), |ui| {
             let label = if self.library.selected == LibrarySize::Starter {
@@ -475,18 +481,22 @@ impl Woodpeck {
             });
             ui.add_space(10.0);
             ui.label(
-                RichText::new(format!("{accepted:.0} puzzles accepted"))
-                    .size(26.0)
-                    .strong(),
+                RichText::new(format!(
+                    "{} puzzles accepted",
+                    widgets::grouped_count(accepted)
+                ))
+                .size(26.0)
+                .strong(),
             );
             ui.label(format!(
-                "{:.1} MB {} · {scanned:.0} rows scanned",
-                bytes / 1_000_000.0,
+                "{:.1} MB {} · {} rows scanned",
+                bytes as f64 / 1_000_000.0,
                 if self.library.selected == LibrarySize::Starter {
                     "read"
                 } else {
                     "downloaded"
-                }
+                },
+                widgets::grouped_count(scanned)
             ));
             ui.add(
                 egui::ProgressBar::new(fraction)
@@ -537,9 +547,9 @@ impl Woodpeck {
 }
 /// Restart each counter from its displayed value when another worker report arrives.
 /// Cubic easing preserves continuity even when reports arrive faster than the transition.
-fn animated_count(ui: &Ui, key: (&str, u64), target: u64, animated: bool) -> f64 {
+fn animated_count(ui: &Ui, key: (&str, u64), target: u64, animated: bool) -> u64 {
     if !animated {
-        return target as f64;
+        return target;
     }
     let id = egui::Id::unique(("library-counter", key));
     let now = ui.input(|i| i.time);
@@ -557,7 +567,10 @@ fn animated_count(ui: &Ui, key: (&str, u64), target: u64, animated: bool) -> f64
     if t < 1.0 || to != target {
         ui.ctx().request_repaint();
     }
-    current
+    // The eased count stays nonnegative and within the u64 endpoints; round for display.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let rounded = current.round() as u64;
+    rounded
 }
 pub(super) fn histogram(ui: &mut Ui, bands: &[u64; RATING_BANDS], accent: Color32, height: f32) {
     let (rect, _) = ui.allocate_exact_size(

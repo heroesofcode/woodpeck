@@ -147,7 +147,7 @@ impl Woodpeck {
                 });
             ui.strong(format!(
                 "{} puzzles · {}",
-                self.library.count,
+                widgets::grouped_count(self.library.count),
                 size.map_or("Custom library", LibrarySize::label)
             ));
             let date = self

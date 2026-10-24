@@ -465,8 +465,8 @@ impl Woodpeck {
                     .clamp(0.0, 1.0);
                     self.status = format!(
                         "{} rows scanned · {} puzzles imported · {:.1} MB",
-                        progress.scanned,
-                        progress.accepted,
+                        widgets::grouped_count(progress.scanned),
+                        widgets::grouped_count(progress.accepted),
                         progress.bytes as f64 / 1_000_000.0
                     );
                 }
@@ -502,7 +502,7 @@ impl Woodpeck {
                         Ok(_) => {
                             self.status = format!(
                                 "{} puzzles available offline",
-                                self.service.puzzle_count().unwrap_or(0)
+                                widgets::grouped_count(self.service.puzzle_count().unwrap_or(0))
                             );
                         }
                         Err(e) => {
