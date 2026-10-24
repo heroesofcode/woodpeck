@@ -145,7 +145,7 @@ impl Woodpeck {
                     widgets::grouped_count(self.library.progress.accepted),
                     self.library.progress.bytes as f64 / 1_000_000.0
                 ));
-                histogram(ui, &self.library.bands, accent, 90.0);
+                histogram(ui, &self.library.bands, None, accent, 90.0);
                 ui.add_space(20.0);
                 if widgets::primary(ui, "Start training").clicked() {
                     self.navigate(Screen::Builder);
@@ -435,7 +435,8 @@ impl Woodpeck {
             egui::pos2(x, rect.top() + 163.0),
             egui::vec2(rect.width() - 36.0, 33.0),
         );
-        paint_histogram(painter, chart, size.histogram(), accent, 1.0);
+        let bands = size.histogram().map(|count| count as f32);
+        paint_histogram(painter, chart, &bands, accent, histogram_max(&bands));
         for (x, align, label) in [
             (rect.left() + 18.0, egui::Align2::LEFT_TOP, "400"),
             (rect.center().x, egui::Align2::CENTER_TOP, "RATING"),
@@ -464,6 +465,10 @@ impl Woodpeck {
         let accepted = animated_count(ui, ("accepted", job), progress.accepted, animated);
         let scanned = animated_count(ui, ("scanned", job), progress.scanned, animated);
         let bytes = animated_count(ui, ("bytes", job), progress.bytes, animated);
+        let bands = std::array::from_fn(|index| {
+            animated_count(ui, ("band", job, index), progress.bands[index], animated)
+        });
+        let expected = expected_histogram(self.library.selected);
         let fraction = if animated {
             ui.ctx().animate_value_with_time(
                 egui::Id::unique(("library-fraction", job)),
@@ -504,7 +509,7 @@ impl Woodpeck {
                     .show_percentage(),
             );
             widgets::caption(ui, "PATTERNS AT EVERY LEVEL");
-            histogram(ui, &progress.bands, accent, 100.0);
+            histogram(ui, &bands, Some(&expected), accent, 100.0);
         });
     }
     fn celebrate(&self, ui: &mut Ui, eased: f32) {
@@ -547,7 +552,12 @@ impl Woodpeck {
 }
 /// Restart each counter from its displayed value when another worker report arrives.
 /// Cubic easing preserves continuity even when reports arrive faster than the transition.
-fn animated_count(ui: &Ui, key: (&str, u64), target: u64, animated: bool) -> u64 {
+fn animated_count(
+    ui: &Ui,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    target: u64,
+    animated: bool,
+) -> u64 {
     if !animated {
         return target;
     }
@@ -572,18 +582,40 @@ fn animated_count(ui: &Ui, key: (&str, u64), target: u64, animated: bool) -> u64
     let rounded = current.round() as u64;
     rounded
 }
-pub(super) fn histogram(ui: &mut Ui, bands: &[u64; RATING_BANDS], accent: Color32, height: f32) {
+/// Scale the measured profile to the selected import's expected accepted total.
+fn expected_histogram(size: LibrarySize) -> [f32; RATING_BANDS] {
+    let profile = size.histogram();
+    let total = profile.iter().sum::<u64>();
+    let expected = size.limit().unwrap_or(total);
+    profile.map(|count| count as f32 * expected as f32 / total.max(1) as f32)
+}
+fn histogram_max(bands: &[f32; RATING_BANDS]) -> f32 {
+    bands.iter().copied().fold(1.0, f32::max)
+}
+pub(super) fn histogram(
+    ui: &mut Ui,
+    bands: &[u64; RATING_BANDS],
+    expected: Option<&[f32; RATING_BANDS]>,
+    accent: Color32,
+    height: f32,
+) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
     );
-    paint_histogram(
-        ui.painter(),
-        rect.shrink2(egui::vec2(0.0, 10.0)),
-        bands,
-        accent,
-        1.0,
-    );
+    let rect = rect.shrink2(egui::vec2(0.0, 10.0));
+    let bands = bands.map(|count| count as f32);
+    let max = histogram_max(expected.unwrap_or(&bands));
+    if let Some(expected) = expected {
+        paint_histogram(
+            ui.painter(),
+            rect,
+            expected,
+            accent.gamma_multiply(0.18),
+            max,
+        );
+    }
+    paint_histogram(ui.painter(), rect, &bands, accent, max);
     ui.horizontal(|ui| {
         ui.small("400");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -594,14 +626,16 @@ pub(super) fn histogram(ui: &mut Ui, bands: &[u64; RATING_BANDS], accent: Color3
 fn paint_histogram(
     p: &egui::Painter,
     rect: egui::Rect,
-    bands: &[u64; RATING_BANDS],
+    bands: &[f32; RATING_BANDS],
     accent: Color32,
-    fill: f32,
+    max: f32,
 ) {
-    let max = (*bands.iter().max().unwrap_or(&1)).max(1) as f32;
     let width = rect.width() / RATING_BANDS as f32;
     for (index, count) in bands.iter().enumerate() {
-        let height = (*count as f32 / max * rect.height() * fill).max(2.0);
+        if *count <= 0.0 {
+            continue;
+        }
+        let height = (count / max).min(1.0) * rect.height();
         let bar = egui::Rect::from_min_max(
             egui::pos2(rect.left() + index as f32 * width, rect.bottom() - height),
             egui::pos2(
@@ -610,5 +644,73 @@ fn paint_histogram(
             ),
         );
         p.rect_filled(bar, 2, accent.gamma_multiply(0.35 + index as f32 / 24.0));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chart_bars(
+        bands: &[u64; RATING_BANDS],
+        expected: Option<&[f32; RATING_BANDS]>,
+    ) -> Vec<egui::epaint::RectShape> {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            histogram(ui, bands, expected, Color32::WHITE, 100.0);
+        });
+        let bars = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(bar) => Some(bar.clone()),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        bars
+    }
+
+    #[test]
+    fn live_chart_grows_toward_fixed_ghosts_while_committed_chart_fits_its_data() {
+        for size in [LibrarySize::Medium, LibrarySize::Full] {
+            let expected = expected_histogram(size);
+            let total = size.histogram().iter().sum::<u64>();
+            let expected_total = size.limit().unwrap_or(total);
+            assert!((expected.iter().sum::<f32>() - expected_total as f32).abs() < 1.0);
+            let early = size
+                .histogram()
+                .map(|count| count * (expected_total * 7 / 100) / total);
+            let late = size
+                .histogram()
+                .map(|count| count * (expected_total * 98 / 100) / total);
+            let early_bars = chart_bars(&early, Some(&expected));
+            let late_bars = chart_bars(&late, Some(&expected));
+            assert_eq!(early_bars.len(), 2 * RATING_BANDS);
+            assert_eq!(late_bars.len(), 2 * RATING_BANDS);
+            for index in 0..RATING_BANDS {
+                let ghost = &early_bars[index];
+                let early = &early_bars[index + RATING_BANDS];
+                let late = &late_bars[index + RATING_BANDS];
+                assert_eq!(ghost.rect, late_bars[index].rect);
+                assert!(ghost.fill.a() < early.fill.a());
+                assert!(early.rect.height() < late.rect.height());
+                assert!(late.rect.height() < ghost.rect.height());
+                assert!((early.rect.bottom() - ghost.rect.bottom()).abs() < 0.001);
+            }
+            for bands in [early, late] {
+                let committed = chart_bars(&bands, None);
+                assert_eq!(committed.len(), RATING_BANDS);
+                let tallest = committed
+                    .iter()
+                    .map(|bar| bar.rect.height())
+                    .fold(0.0, f32::max);
+                assert!((tallest - 80.0).abs() < 0.001);
+            }
+            assert_eq!(
+                chart_bars(&[0; RATING_BANDS], Some(&expected)).len(),
+                RATING_BANDS
+            );
+        }
     }
 }
