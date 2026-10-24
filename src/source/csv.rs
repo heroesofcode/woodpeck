@@ -42,6 +42,7 @@ pub struct ImportProgress {
     pub rejected: u64,
     /// Compressed bytes consumed for zstd input; raw bytes for plain CSV.
     pub bytes: u64,
+    pub bands: [u64; super::RATING_BANDS],
 }
 /// Lazy iterator: supports streaming uncompressed CSV or a zstd decoder without buffering the DB.
 pub struct CsvPuzzles<R: Read> {
@@ -87,6 +88,7 @@ impl<R: Read> CsvPuzzles<R> {
             let puzzle = Puzzle::from(row);
             if passes_quality(&puzzle) && puzzle.validate().is_ok() {
                 self.progress.accepted += 1;
+                self.progress.bands[super::rating_band(puzzle.rating)] += 1;
                 Some(puzzle)
             } else {
                 self.progress.rejected += 1;
@@ -146,6 +148,7 @@ mod tests {
                 accepted: 1,
                 rejected: 4,
                 bytes: 0,
+                bands: std::array::from_fn(|i| u64::from(i == 3)),
             }
         );
     }

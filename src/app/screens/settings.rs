@@ -1,8 +1,7 @@
 use super::super::{Woodpeck, style, widgets};
 use crate::{
-    service::Job,
     settings::{BoardTheme, ColorTheme, PieceRendering},
-    source::LICHESS_DATABASE_URL,
+    source::LibrarySize,
 };
 use eframe::egui::{self, Ui};
 impl Woodpeck {
@@ -14,11 +13,11 @@ impl Woodpeck {
             "A quiet space for focused practice. Make it yours.",
         );
         let before = self.settings.clone();
+        self.library_settings(ui);
+        ui.add_space(8.0);
         self.appearance_settings(ui);
         ui.add_space(8.0);
         self.practice_settings(ui);
-        ui.add_space(8.0);
-        self.library_settings(ui);
         ui.add_space(8.0);
         self.sync_settings(ui);
         ui.add_space(8.0);
@@ -136,37 +135,81 @@ impl Woodpeck {
         widgets::card(ui).show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.0).max(0.0));
             ui.heading("Puzzle library");
+            let size = self
+                .service
+                .local_setting("library_size")
+                .ok()
+                .flatten()
+                .and_then(|s| LibrarySize::parse(&s))
+                .or_else(|| {
+                    (self.library.count == crate::source::STARTER_COUNT)
+                        .then_some(LibrarySize::Starter)
+                });
             ui.strong(format!(
-                "{} puzzles available offline",
-                self.service.puzzle_count().unwrap_or(0)
+                "{} puzzles · {}",
+                self.library.count,
+                size.map_or("Custom library", LibrarySize::label)
             ));
-            ui.label(&self.status);
-            if self.service.is_busy() {
-                ui.add(
-                    egui::ProgressBar::new(self.job_fraction)
-                        .animate(true)
-                        .text(&self.status),
+            let date = self
+                .service
+                .local_setting("library_imported_at")
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+                .and_then(|at| chrono::DateTime::from_timestamp(at, 0))
+                .map_or_else(
+                    || "Never".into(),
+                    |at| {
+                        at.with_timezone(&chrono::Local)
+                            .format("%Y-%m-%d %H:%M")
+                            .to_string()
+                    },
                 );
-                if ui.button("Cancel import / download").clicked() {
-                    self.service.cancel_all();
+            ui.small(format!("Last import: {date}"));
+            super::super::library::histogram(
+                ui,
+                &self.library.bands,
+                style::color(self.palette.semantic().accent),
+                65.0,
+            );
+            if self.library.job.is_some() {
+                self.library_progress(ui);
+                if ui.button("Cancel download").clicked()
+                    && let Some(job) = &self.library.job
+                {
+                    job.cancel.cancel();
+                }
+            } else {
+                ui.add_enabled_ui(!self.service.is_busy(), |ui| {
+                    if self.library.selected == LibrarySize::Starter {
+                        self.library.selected = LibrarySize::Medium;
+                    }
+                    self.size_cards(ui, false);
+                    if widgets::primary(ui, &format!("Download {}", self.library.selected.label()))
+                        .clicked()
+                    {
+                        self.start_library(self.library.selected);
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Update from Lichess").clicked() {
+                            self.start_library(size.unwrap_or(LibrarySize::Full));
+                        }
+                        if ui.button("Re-import starter pack").clicked() {
+                            self.start_library(LibrarySize::Starter);
+                        }
+                    });
+                });
+                if !self.library.message.is_empty() {
+                    ui.label(&self.library.message);
                 }
             }
-            ui.add_enabled_ui(!self.service.is_busy(), |ui| {
-                if ui
-                    .button("Download full Lichess puzzle database (~300 MB)")
-                    .clicked()
-                {
-                    self.submit(Job::ImportFull {
-                        location: LICHESS_DATABASE_URL.into(),
-                    });
-                }
-                if ui.button("Re-import starter pack").clicked() {
-                    self.submit(Job::ImportStarter { force: true });
-                }
-            });
+            if ui.button("Show welcome screen again").clicked() {
+                self.show_welcome();
+            }
             ui.add_space(8.0);
             widgets::caption(ui, "DATA LOCATION");
-            ui.add(egui::Label::new(self.data_path.display().to_string()).wrap());
+            ui.add(egui::Label::new(self.display_data_path()).wrap());
+            ui.small("Local to this computer · puzzle library never synced");
         });
     }
     fn export_settings(&mut self, ui: &mut Ui) {

@@ -519,7 +519,9 @@ fn worker_startup_import_daily_by_id_fetch_and_errors() {
         JobOutput::Fetched { inserted: 0 }
     );
     let handle = service
-        .submit(Job::ImportFull {
+        .submit(Job::ImportLibrary {
+            size: crate::source::LibrarySize::Full,
+            limit: None,
             location: "/does/not/exist".into(),
         })
         .unwrap();
@@ -534,7 +536,9 @@ fn worker_startup_import_daily_by_id_fetch_and_errors() {
 fn worker_import_progress_and_queued_cancel() {
     let mut service = service(Store::memory().unwrap(), MockFetcher::default());
     let handle = service
-        .submit(Job::ImportFull {
+        .submit(Job::ImportLibrary {
+            size: crate::source::LibrarySize::Full,
+            limit: None,
             location: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/lichess.csv").into(),
         })
         .unwrap();
@@ -700,4 +704,86 @@ fn concurrent_synced_answers_fill_only_one_cycle_segment() {
         vec![Outcome::Incorrect]
     );
     assert_eq!(service.current_puzzle(cycle.id).unwrap().position, 1);
+}
+
+#[test]
+fn worker_library_job_obeys_limit_and_records_local_markers() {
+    use crate::source::LibrarySize;
+    let mut service = service(Store::memory().unwrap(), MockFetcher::default());
+    let handle = service
+        .submit(Job::ImportLibrary {
+            location: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/lichess.csv").into(),
+            size: LibrarySize::Medium,
+            limit: Some(2),
+        })
+        .unwrap();
+    let JobOutput::Imported(p) = finish(&mut service, handle.id).unwrap() else {
+        panic!()
+    };
+    assert_eq!(p.accepted, 2);
+    assert_eq!(service.puzzle_count().unwrap(), 2);
+    assert_eq!(
+        service.local_setting("library_size").unwrap().as_deref(),
+        Some("medium")
+    );
+    assert!(
+        service
+            .local_setting("library_imported_at")
+            .unwrap()
+            .is_some()
+    );
+    service
+        .set_local_setting("library_imported_at", "1")
+        .unwrap();
+    let handle = service
+        .submit(Job::ImportLibrary {
+            location: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/lichess.csv").into(),
+            size: LibrarySize::Full,
+            limit: Some(2),
+        })
+        .unwrap();
+    handle.cancel.cancel();
+    assert!(finish(&mut service, handle.id).is_err());
+    assert_eq!(
+        service.local_setting("library_size").unwrap().as_deref(),
+        Some("medium")
+    );
+    assert_eq!(
+        service
+            .local_setting("library_imported_at")
+            .unwrap()
+            .as_deref(),
+        Some("1")
+    );
+}
+
+#[test]
+fn onboarding_is_local_and_existing_libraries_are_marked_silently() {
+    let first = service(Store::memory().unwrap(), MockFetcher::default());
+    assert!(first.needs_onboarding().unwrap());
+    first.set_local_setting("onboarding_done", "true").unwrap();
+    first.set_local_setting("library_size", "full").unwrap();
+    first
+        .set_local_setting("library_imported_at", "42")
+        .unwrap();
+    assert!(!first.needs_onboarding().unwrap());
+    let state = lock(&first.store).unwrap().export_sync().unwrap();
+    for key in ["onboarding_done", "library_size", "library_imported_at"] {
+        assert!(!state.settings.contains_key(key));
+    }
+    let mut fresh = Store::memory().unwrap();
+    fresh.import_sync(&state).unwrap();
+    let second = service(fresh, MockFetcher::default());
+    assert!(second.needs_onboarding().unwrap());
+    let mut existing = Store::memory().unwrap();
+    existing.upsert_puzzles(&pool(9541)).unwrap();
+    let existing = service(existing, MockFetcher::default());
+    assert!(!existing.needs_onboarding().unwrap());
+    assert_eq!(
+        existing
+            .local_setting("onboarding_done")
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
 }

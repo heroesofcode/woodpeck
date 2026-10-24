@@ -3,6 +3,8 @@ mod api;
 mod client;
 mod csv;
 mod import;
+mod library;
+pub use library::*;
 mod pgn;
 pub use api::{parse_batch, parse_puzzle};
 pub use client::*;

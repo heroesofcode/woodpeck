@@ -48,3 +48,38 @@ pub fn service() -> Result<AppService, Box<dyn std::error::Error>> {
     }
     Ok(AppService::new(store)?)
 }
+
+/// Stable, offline states for fixed-frame welcome screenshots.
+pub(super) fn welcome(app: &mut super::Woodpeck, screen: super::Screen) {
+    use super::{Screen, library::WelcomeStep};
+    use crate::source::{ImportProgress, LibrarySize};
+    let progress = ImportProgress {
+        bytes: 15_340_000,
+        scanned: 307_000,
+        accepted: 116_480,
+        rejected: 190_520,
+        bands: [
+            700, 2500, 9900, 18300, 18700, 20400, 16800, 12700, 9000, 4800, 1700, 800, 180,
+        ],
+    };
+    if matches!(
+        screen,
+        Screen::Welcome | Screen::WelcomeProgress | Screen::WelcomeDone
+    ) {
+        app.screen = Screen::Welcome;
+        app.library.selected = LibrarySize::Medium;
+        app.library.step = match screen {
+            Screen::WelcomeProgress => WelcomeStep::Downloading,
+            Screen::WelcomeDone => WelcomeStep::Done,
+            _ => WelcomeStep::Choose,
+        };
+        app.library.progress = progress;
+        if screen == Screen::WelcomeDone {
+            app.library.count = 200_000;
+            app.library.bands = *LibrarySize::Medium.histogram();
+            app.library.progress.accepted = 200_000;
+            app.library.progress.scanned = 527_077;
+            app.library.progress.bytes = LibrarySize::Medium.download_bytes();
+        }
+    }
+}

@@ -2,8 +2,8 @@ use super::{Command, Event, Job, JobOutput, Result, SharedStore, create_set, loc
 use crate::{
     sets::generate,
     source::{
-        CancelFlag, PuzzleFetcher, STARTER_BYTES, STARTER_VERSION, SourceError, import_stream,
-        open_location,
+        CancelFlag, ImportOptions, LibrarySize, PuzzleFetcher, STARTER_BYTES, STARTER_VERSION,
+        SourceError, import_stream, import_stream_options, open_location,
     },
 };
 use std::{io::Cursor, sync::mpsc};
@@ -58,14 +58,22 @@ fn execute(
             }
             let result = import_stream(Cursor::new(STARTER_BYTES), cancel, progress, save)?;
             cancel.check()?;
-            lock(store)?.set_setting("starter_version", STARTER_VERSION)?;
+            let store = lock(store)?;
+            store.set_setting("starter_version", STARTER_VERSION)?;
+            store.record_library_import(LibrarySize::Starter, chrono::Utc::now().timestamp())?;
             Ok(JobOutput::Imported(result))
         }
-        Job::ImportFull { location } => {
+        Job::ImportLibrary {
+            location,
+            size,
+            limit,
+        } => {
             let reader = open_location(&location, cancel)?;
-            Ok(JobOutput::Imported(import_stream(
-                reader, cancel, progress, save,
-            )?))
+            let result =
+                import_stream_options(reader, ImportOptions { limit }, cancel, progress, save)?;
+            cancel.check()?;
+            lock(store)?.record_library_import(size, chrono::Utc::now().timestamp())?;
+            Ok(JobOutput::Imported(result))
         }
         Job::Fetch {
             theme,

@@ -1,5 +1,6 @@
 //! SQLite repositories. Recording an attempt and changing review membership are atomic.
 mod attempts;
+mod library;
 mod puzzles;
 mod schema;
 mod sets;

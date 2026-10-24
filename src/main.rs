@@ -2,7 +2,7 @@
 use std::process::ExitCode;
 use woodpeck::{
     cli::{self, Command},
-    source::{CancelFlag, import_location},
+    source::{CancelFlag, ImportOptions, import_location_options},
     store::{Store, database_path},
 };
 fn main() -> ExitCode {
@@ -28,22 +28,39 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         Command::Screenshot { path, screen, size } => {
             woodpeck::app::run(Some(woodpeck::app::Screenshot { path, screen, size }))?;
         }
-        Command::Import(location) => {
+        Command::Import {
+            location,
+            size,
+            limit,
+        } => {
             let path = database_path().ok_or("Could not find the application data directory.")?;
             let mut store = Store::open(&path)?;
             let cancel = CancelFlag::default();
             {
-                let result = import_location(&mut store, &location, &cancel, |p| {
-                    eprint!(
-                        "\r{} bytes · {} rows · {} accepted · {} rejected",
-                        p.bytes, p.scanned, p.accepted, p.rejected
-                    );
-                })?;
+                let started = std::time::Instant::now();
+                let result = import_location_options(
+                    &mut store,
+                    &location,
+                    size,
+                    ImportOptions { limit },
+                    &cancel,
+                    |p| {
+                        eprint!(
+                            "\r{} bytes · {} rows · {} accepted · {} rejected",
+                            p.bytes, p.scanned, p.accepted, p.rejected
+                        );
+                    },
+                )?;
                 eprintln!();
+                // Include the final WAL checkpoint and close in the summary and wall time.
+                drop(store);
                 println!(
-                    "Imported {} puzzles from {} rows into {}.",
+                    "Imported {} puzzles from {} rows · {} bytes · {:.2}s · {} database bytes into {}.",
                     result.accepted,
                     result.scanned,
+                    result.bytes,
+                    started.elapsed().as_secs_f64(),
+                    std::fs::metadata(&path)?.len(),
                     path.display()
                 );
             }
