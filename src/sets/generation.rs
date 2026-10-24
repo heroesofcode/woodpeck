@@ -1,4 +1,4 @@
-use super::{BuilderParams, InvalidParams, ThemeFilter};
+use super::{BuilderParams, InvalidParams, ThemeFilter, presets::is_category_theme};
 use crate::{puzzle::Puzzle, stats::cycle_order};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -95,7 +95,14 @@ fn stratified(
         for bucket in &mut buckets {
             for p in bucket.by_ref() {
                 advanced = true;
-                let themes: BTreeSet<_> = p.themes.iter().map(String::as_str).collect();
+                // Only motifs share the diversity cap; universal category tags (phase, length,
+                // evaluation) are on nearly every puzzle and would cap the whole set instead.
+                let themes: BTreeSet<_> = p
+                    .themes
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|t| !is_category_theme(t))
+                    .collect();
                 if params.is_general()
                     && themes
                         .iter()
@@ -373,6 +380,148 @@ mod tests {
             ),
             Err(GenerationError::InvalidParams(_))
         ));
+    }
+    const MOTIFS: [&str; 15] = [
+        "fork",
+        "pin",
+        "skewer",
+        "hangingPiece",
+        "mateIn1",
+        "mateIn2",
+        "discoveredAttack",
+        "deflection",
+        "attraction",
+        "sacrifice",
+        "trappedPiece",
+        "backRankMate",
+        "kingsideAttack",
+        "advancedPawn",
+        "defensiveMove",
+    ];
+    /// A Lichess-shaped pool: every puzzle carries exactly one phase, one length and one
+    /// evaluation tag, plus one or two motifs, all inside 1100–1300.
+    fn lichess_like(count: usize) -> Query {
+        const PHASES: [&str; 3] = ["opening", "middlegame", "endgame"];
+        const LENGTHS: [&str; 4] = ["oneMove", "short", "long", "veryLong"];
+        const EVALS: [&str; 4] = ["mate", "crushing", "advantage", "equality"];
+        let mut state = 0x9e37_79b9_u64;
+        let mut next = |n: usize| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize::try_from(state >> 33).unwrap() % n
+        };
+        Query(
+            (0..count)
+                .map(|i| {
+                    let mut p = crate::puzzle::fixture();
+                    p.id = format!("{i:05}");
+                    p.rating = 1100 + u16::try_from(next(201)).unwrap();
+                    let mut themes = vec![
+                        PHASES[next(PHASES.len())],
+                        LENGTHS[next(LENGTHS.len())],
+                        EVALS[next(EVALS.len())],
+                        MOTIFS[next(MOTIFS.len())],
+                    ];
+                    if next(2) == 0 {
+                        let second = MOTIFS[next(MOTIFS.len())];
+                        if !themes.contains(&second) {
+                            themes.push(second);
+                        }
+                    }
+                    p.themes = themes.into_iter().map(String::from).collect();
+                    p
+                })
+                .collect(),
+        )
+    }
+    fn general(size: u32) -> BuilderParams {
+        BuilderParams {
+            size,
+            rating_min: 1100,
+            rating_max: 1300,
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn general_150_fills_when_every_puzzle_has_a_phase_and_length_tag() {
+        // Regression: phase tags counted toward the 30% cap, so a general set topped out at
+        // 3 * 45 = 135 of 150 even with thousands of in-range candidates.
+        let q = lichess_like(3000);
+        let params = general(150);
+        assert!(params.is_general());
+        let g = generate(&q, &params, 7).unwrap();
+        assert_eq!(g.puzzles.len(), 150);
+        let phases: BTreeMap<_, _> = ["opening", "middlegame", "endgame"]
+            .iter()
+            .map(|phase| {
+                let n = g
+                    .puzzles
+                    .iter()
+                    .filter(|p| p.themes.iter().any(|t| t == phase));
+                (*phase, n.count())
+            })
+            .collect();
+        assert_eq!(phases.values().sum::<usize>(), 150);
+        assert!(phases.values().any(|n| *n > 45), "{phases:?}");
+    }
+    #[test]
+    fn every_general_size_fills_and_motifs_stay_capped() {
+        let q = lichess_like(4000);
+        for size in [20, 21, 50, 99, 100, 135, 136, 150, 200, 333, 499, 500] {
+            for seed in [1, 42] {
+                let g = generate(&q, &general(size), seed)
+                    .unwrap_or_else(|e| panic!("size {size} seed {seed}: {e}"));
+                assert_eq!(g.puzzles.len(), size as usize);
+                let cap = size * 3 / 10;
+                for motif in MOTIFS {
+                    let n = g
+                        .puzzles
+                        .iter()
+                        .filter(|p| p.themes.iter().any(|t| t == motif));
+                    let n = u32::try_from(n.count()).unwrap();
+                    assert!(n <= cap, "size {size}: {motif} has {n} > cap {cap}");
+                }
+            }
+        }
+    }
+    #[test]
+    fn category_only_puzzles_are_never_capped() {
+        let mut q = lichess_like(500);
+        for p in &mut q.0 {
+            p.themes = strings(&["middlegame", "short", "crushing"]);
+        }
+        let g = generate(&q, &general(500), 3).unwrap();
+        assert_eq!(g.puzzles.len(), 500);
+    }
+    #[test]
+    fn category_list_covers_universal_tags_but_no_motifs() {
+        use super::super::presets::{CATEGORY_THEMES, is_category_theme};
+        for tag in [
+            "opening",
+            "middlegame",
+            "endgame",
+            "oneMove",
+            "short",
+            "long",
+            "veryLong",
+            "mate",
+            "crushing",
+            "advantage",
+            "equality",
+        ] {
+            assert!(is_category_theme(tag), "{tag}");
+        }
+        for motif in MOTIFS
+            .iter()
+            .chain(&["rookEndgame", "mateIn3", "smotheredMate"])
+        {
+            assert!(!is_category_theme(motif), "{motif}");
+        }
+        assert_eq!(
+            CATEGORY_THEMES.iter().collect::<BTreeSet<_>>().len(),
+            CATEGORY_THEMES.len()
+        );
     }
     #[test]
     fn propagates_query_error() {

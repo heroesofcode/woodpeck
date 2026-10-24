@@ -192,6 +192,31 @@ pub const THEMES: [(&str, &str); 57] = [
     ("long", "Long"),
     ("veryLong", "Very Long"),
 ];
+/// Lichess category tags that describe *every* puzzle rather than a tactical motif: game
+/// phase (each puzzle has exactly one), solution length (exactly one), evaluation outcome
+/// (exactly one) and game source. They stay selectable as filters, but counting them toward a
+/// general set's per-theme diversity cap would starve the set: one phase tag per puzzle caps a
+/// set at three times the cap regardless of how many candidates exist.
+pub const CATEGORY_THEMES: [&str; 14] = [
+    "opening",
+    "middlegame",
+    "endgame",
+    "oneMove",
+    "short",
+    "long",
+    "veryLong",
+    "mate",
+    "crushing",
+    "advantage",
+    "equality",
+    "master",
+    "masterVsMaster",
+    "superGM",
+];
+/// Whether `key` is a universal category tag (see [`CATEGORY_THEMES`]) rather than a motif.
+pub fn is_category_theme(key: &str) -> bool {
+    CATEGORY_THEMES.contains(&key)
+}
 /// Curated builder label when known, otherwise the title-cased Lichess key.
 pub fn theme_name(key: &str) -> String {
     THEMES
