@@ -1,4 +1,4 @@
-use super::{CsvPuzzles, ImportProgress, SourceError};
+use super::{CsvPuzzles, ImportOptions, ImportProgress, LibrarySize, SourceError};
 use crate::{puzzle::Puzzle, store::Store};
 use std::{
     io::{BufReader, Cursor, Read},
@@ -50,6 +50,15 @@ impl<R: Read> Read for Counted<R> {
 pub fn import_stream(
     reader: impl Read,
     cancel: &CancelFlag,
+    progress: impl FnMut(ImportProgress),
+    save: impl FnMut(&[Puzzle]) -> Result<(), SourceError>,
+) -> Result<ImportProgress, SourceError> {
+    import_stream_options(reader, ImportOptions::default(), cancel, progress, save)
+}
+pub fn import_stream_options(
+    reader: impl Read,
+    options: ImportOptions,
+    cancel: &CancelFlag,
     mut progress: impl FnMut(ImportProgress),
     mut save: impl FnMut(&[Puzzle]) -> Result<(), SourceError>,
 ) -> Result<ImportProgress, SourceError> {
@@ -80,6 +89,12 @@ pub fn import_stream(
     let mut batch = Vec::with_capacity(IMPORT_BATCH_SIZE);
     progress(ImportProgress::default());
     loop {
+        if options
+            .limit
+            .is_some_and(|limit| rows.progress().accepted >= limit)
+        {
+            break;
+        }
         cancel.check()?;
         let next = rows.next_row();
         cancel.check()?;
@@ -143,6 +158,7 @@ fn import_starter_version(
     }
     let result = import_reader(store, Cursor::new(STARTER_BYTES), cancel, progress)?;
     store.set_setting("starter_version", version)?;
+    store.record_library_import(LibrarySize::Starter, chrono::Utc::now().timestamp())?;
     Ok(result)
 }
 pub fn import_location(
@@ -151,8 +167,30 @@ pub fn import_location(
     cancel: &CancelFlag,
     progress: impl FnMut(ImportProgress),
 ) -> Result<ImportProgress, SourceError> {
+    import_location_options(
+        store,
+        location,
+        LibrarySize::Full,
+        ImportOptions::default(),
+        cancel,
+        progress,
+    )
+}
+pub fn import_location_options(
+    store: &mut Store,
+    location: &str,
+    size: LibrarySize,
+    options: ImportOptions,
+    cancel: &CancelFlag,
+    progress: impl FnMut(ImportProgress),
+) -> Result<ImportProgress, SourceError> {
     let reader = open_location(location, cancel)?;
-    import_reader(store, reader, cancel, progress)
+    let result = import_stream_options(reader, options, cancel, progress, |batch| {
+        Ok(store.upsert_puzzles(batch)?)
+    })?;
+    cancel.check()?;
+    store.record_library_import(size, chrono::Utc::now().timestamp())?;
+    Ok(result)
 }
 pub fn open_location(
     location: &str,
@@ -484,6 +522,89 @@ mod location_tests {
         assert_eq!(
             from_file.puzzle_count().unwrap(),
             from_url.puzzle_count().unwrap()
+        );
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+    use std::fmt::Write;
+    fn input() -> String {
+        let p = crate::puzzle::fixture();
+        let mut text =
+            "PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes\n".to_owned();
+        for i in 0..5000 {
+            writeln!(
+                text,
+                "p{i},{},{},1000,75,{},1000,fork",
+                p.fen,
+                p.moves,
+                if i % 2 == 0 { 0 } else { 100 }
+            )
+            .unwrap();
+        }
+        text
+    }
+    #[test]
+    fn limit_counts_accepted_only_flushes_final_batch_and_stops_reading() {
+        let input = input();
+        for (limit, expected) in [(Some(7), 7), (Some(3000), 2500), (None, 2500), (Some(0), 0)] {
+            let mut saved = 0;
+            let mut reports = Vec::new();
+            let result = import_stream_options(
+                input.as_bytes(),
+                ImportOptions { limit },
+                &CancelFlag::default(),
+                |p| reports.push(p),
+                |batch| {
+                    saved += batch.len();
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(result.accepted, expected);
+            assert_eq!(saved as u64, expected);
+            assert_eq!(reports.last(), Some(&result));
+            assert_eq!(result.bands.iter().sum::<u64>(), expected);
+            if limit == Some(7) {
+                assert_eq!(result.scanned, 14);
+                assert_eq!(result.rejected, 7);
+                assert!(result.bytes < input.len() as u64);
+            }
+        }
+    }
+    #[test]
+    fn cancelled_import_does_not_advance_library_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("puzzles.csv");
+        std::fs::write(&path, input()).unwrap();
+        let mut store = Store::memory().unwrap();
+        store
+            .record_library_import(LibrarySize::Starter, 123)
+            .unwrap();
+        let flag = CancelFlag::default();
+        let result = import_location_options(
+            &mut store,
+            path.to_str().unwrap(),
+            LibrarySize::Full,
+            ImportOptions::default(),
+            &flag,
+            |p| {
+                if p.accepted >= 1000 {
+                    flag.cancel();
+                }
+            },
+        );
+        assert!(matches!(result, Err(SourceError::Cancelled)));
+        assert!(store.puzzle_count().unwrap() >= 1000);
+        assert_eq!(
+            store.setting("library_size").unwrap().as_deref(),
+            Some("starter")
+        );
+        assert_eq!(
+            store.setting("library_imported_at").unwrap().as_deref(),
+            Some("123")
         );
     }
 }

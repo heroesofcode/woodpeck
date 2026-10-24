@@ -2,6 +2,7 @@
 mod board;
 mod charts;
 mod demo;
+mod library;
 mod pieces;
 mod screens;
 mod shell;
@@ -26,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Screen {
     #[default]
     Dashboard,
@@ -35,6 +36,9 @@ pub enum Screen {
     Progress,
     Builder,
     Settings,
+    Welcome,
+    WelcomeProgress,
+    WelcomeDone,
 }
 impl Screen {
     pub fn parse(value: &str) -> Option<Self> {
@@ -45,6 +49,9 @@ impl Screen {
             "progress" => Some(Self::Progress),
             "builder" => Some(Self::Builder),
             "settings" => Some(Self::Settings),
+            "welcome" => Some(Self::Welcome),
+            "welcome-progress" => Some(Self::WelcomeProgress),
+            "welcome-done" => Some(Self::WelcomeDone),
             _ => None,
         }
     }
@@ -81,6 +88,7 @@ struct Session {
 }
 pub struct Woodpeck {
     service: AppService,
+    library: library::Library,
     settings: Settings,
     screen: Screen,
     sets: Vec<SetSummary>,
@@ -94,6 +102,7 @@ pub struct Woodpeck {
     origin: Instant,
     builder: BuilderParams,
     creation: Option<SetCreation>,
+    library_scroll_top: bool,
     theme_search: String,
     review_theme: String,
     review_sort: ReviewSort,
@@ -129,11 +138,21 @@ impl Woodpeck {
         style::fonts(ctx);
         style::apply(ctx, &palette);
         let clock = FrameClock(Rc::new(Cell::new(Duration::ZERO)));
-        let screen = screenshot.as_ref().map_or(Screen::Dashboard, |s| s.screen);
+        let screen = screenshot.as_ref().map_or_else(
+            || {
+                if service.needs_onboarding().unwrap_or(true) {
+                    Screen::Welcome
+                } else {
+                    Screen::Dashboard
+                }
+            },
+            |s| s.screen,
+        );
         let mut builder = crate::sets::PRESETS[0].builder(settings.user_rating);
         builder.shuffle_each_cycle = settings.shuffle_each_cycle;
         let mut app = Self {
             service,
+            library: library::Library::default(),
             settings,
             screen,
             sets: vec![],
@@ -147,6 +166,7 @@ impl Woodpeck {
             origin,
             builder,
             creation: None,
+            library_scroll_top: false,
             theme_search: String::new(),
             review_theme: String::new(),
             review_sort: ReviewSort::MostRecent,
@@ -171,6 +191,9 @@ impl Woodpeck {
             clearing_card: None,
         };
         app.refresh();
+        if app.screenshot.is_some() {
+            demo::welcome(&mut app, screen);
+        }
         if matches!(screen, Screen::Training) {
             app.resume_selected();
         }
@@ -193,6 +216,8 @@ impl Woodpeck {
         self.toast = Some((error.to_string(), Instant::now()));
     }
     fn refresh(&mut self) {
+        self.library.count = self.service.puzzle_count().unwrap_or(0);
+        self.library.bands = self.service.rating_histogram().unwrap_or_default();
         match self.service.list_sets() {
             Ok(sets) => self.sets = sets,
             Err(e) => self.error(e),
@@ -216,6 +241,10 @@ impl Woodpeck {
             .is_none_or(|id| !self.sets.iter().any(|s| s.set.id == id))
         {
             self.selected_set = self.sets.first().map(|s| s.set.id);
+        }
+        if let Some(screenshot) = &self.screenshot {
+            let screen = screenshot.screen;
+            demo::welcome(self, screen);
         }
     }
     fn navigate(&mut self, screen: Screen) {
@@ -420,8 +449,20 @@ impl Woodpeck {
         for event in self.service.poll_events() {
             match event {
                 Event::Started { .. } => self.status = "Working in the background…".into(),
-                Event::ImportProgress { progress, .. } => {
-                    self.job_fraction = (progress.bytes as f32 / 300_000_000.0).clamp(0.0, 0.99);
+                Event::ImportProgress { id, progress } => {
+                    if self.library.job.as_ref().is_some_and(|job| job.id == id) {
+                        self.library.progress = progress;
+                    }
+                    self.job_fraction = if self.library.selected
+                        == crate::source::LibrarySize::Medium
+                        && self.library.job.as_ref().is_some_and(|job| job.id == id)
+                    {
+                        progress.accepted as f32 / 200_000.0
+                    } else {
+                        progress.bytes as f32
+                            / crate::source::LibrarySize::Full.download_bytes() as f32
+                    }
+                    .clamp(0.0, 1.0);
                     self.status = format!(
                         "{} rows scanned · {} puzzles imported · {:.1} MB",
                         progress.scanned,
@@ -435,7 +476,27 @@ impl Woodpeck {
                     self.status =
                         format!("Fetching from Lichess · {batches} batches · {inserted} puzzles");
                 }
-                Event::Finished { result, .. } => {
+                Event::Finished { id, result } => {
+                    if self.library.job.as_ref().is_some_and(|job| job.id == id) {
+                        self.library.job = None;
+                        match &result {
+                            Ok(JobOutput::Imported(progress)) => {
+                                self.library.progress = *progress;
+                                self.welcome_step(library::WelcomeStep::Done);
+                            }
+                            Err(crate::service::ServiceError::Source(
+                                crate::source::SourceError::Cancelled,
+                            )) => {
+                                self.library.message = "Download cancelled. Committed puzzles were kept; choose a size to resume.".into();
+                                self.welcome_step(library::WelcomeStep::Choose);
+                            }
+                            Err(error) => {
+                                self.library.message = error.to_string();
+                                self.welcome_step(library::WelcomeStep::Error);
+                            }
+                            _ => {}
+                        }
+                    }
                     match result {
                         Ok(JobOutput::SetCreated(c)) => self.created(c),
                         Ok(_) => {

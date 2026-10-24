@@ -387,7 +387,7 @@ impl Woodpeck {
             ui.colored_label(
                 style::color(self.palette.semantic().warning),
                 format!(
-                    "{} puzzles short. Found {} of {} rated {}–{}{}. Widen the range, change the themes, or fetch more.",
+                    "{} puzzles short. Found {} of {} rated {}–{}{}. Widen the range, change the themes, fetch more, or download a bigger puzzle library.",
                     c.shortfall(),
                     c.available,
                     c.requested,
@@ -398,6 +398,10 @@ impl Woodpeck {
                         .map_or_else(String::new, |t| format!(" matching {t}")),
                 ),
             );
+            if ui.button("Open puzzle library").clicked() {
+                self.library_scroll_top = true;
+                self.navigate(super::super::Screen::Settings);
+            }
             if ui
                 .add_enabled(
                     !self.service.is_busy(),

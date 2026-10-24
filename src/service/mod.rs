@@ -76,8 +76,10 @@ pub enum Job {
     ImportStarter {
         force: bool,
     },
-    ImportFull {
+    ImportLibrary {
         location: String,
+        size: crate::source::LibrarySize,
+        limit: Option<u64>,
     },
     Fetch {
         theme: Option<String>,
@@ -247,6 +249,27 @@ impl AppService {
             }
         }
         events
+    }
+    pub fn local_setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(lock(&self.store)?.setting(key)?)
+    }
+    pub fn set_local_setting(&self, key: &str, value: &str) -> Result<()> {
+        Ok(lock(&self.store)?.set_setting(key, value)?)
+    }
+    pub fn rating_histogram(&self) -> Result<[u64; crate::source::RATING_BANDS]> {
+        Ok(lock(&self.store)?.rating_histogram()?)
+    }
+    pub fn needs_onboarding(&self) -> Result<bool> {
+        use crate::source::{OnboardingDecision, onboarding_decision};
+        let store = lock(&self.store)?;
+        let decision = onboarding_decision(
+            store.setting("onboarding_done")?.is_some(),
+            store.puzzle_count()?,
+        );
+        if decision == OnboardingDecision::MarkDone {
+            store.set_setting("onboarding_done", "true")?;
+        }
+        Ok(decision == OnboardingDecision::Show)
     }
     pub fn puzzle_count(&self) -> Result<u64> {
         Ok(lock(&self.store)?.puzzle_count()?)

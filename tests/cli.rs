@@ -214,3 +214,30 @@ exit 2
     );
     assert!(dir.path().join("created").exists());
 }
+
+#[test]
+fn limited_file_import_reports_summary_and_persists_selected_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/lichess.csv");
+    let output = run(
+        &["import", fixture, "--size", "medium", "--limit", "2"],
+        dir.path(),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary = String::from_utf8_lossy(&output.stdout);
+    assert!(summary.contains("Imported 2 puzzles"));
+    assert!(summary.contains("bytes"));
+    assert!(summary.contains("database bytes"));
+    let store = Store::open(&dir.path().join("woodpeck/woodpeck.db")).unwrap();
+    assert_eq!(store.puzzle_count().unwrap(), 2);
+    assert_eq!(
+        store.setting("library_size").unwrap().as_deref(),
+        Some("medium")
+    );
+    assert!(store.setting("library_imported_at").unwrap().is_some());
+    assert!(store.setting("onboarding_done").unwrap().is_none());
+}

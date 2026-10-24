@@ -53,7 +53,24 @@ impl Woodpeck {
             layout = layout::calculate(window.x + 160.0, window.y);
             layout.navigation_width = 56.0;
         }
-        self.navigation(ui, layout.navigation);
+        if self.screen != Screen::Welcome {
+            self.navigation(ui, layout.navigation);
+        }
+        if self.library.job.is_some() && self.screen != Screen::Welcome {
+            egui::Panel::top("library-status").show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spinner();
+                    ui.label(format!(
+                        "Library · {} accepted · {:.1} MB",
+                        self.library.progress.accepted,
+                        self.library.progress.bytes as f64 / 1_000_000.0
+                    ));
+                    if ui.button("View download").clicked() {
+                        self.show_welcome();
+                    }
+                });
+            });
+        }
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
@@ -61,7 +78,11 @@ impl Woodpeck {
                     .inner_margin(if window.x < 640.0 { 14 } else { 28 }),
             )
             .show(ui, |ui| {
-                let width = ui.available_width().min(1680.0);
+                let width = ui.available_width().min(if self.screen == Screen::Welcome {
+                    1000.0
+                } else {
+                    1680.0
+                });
                 let margin = ((ui.available_width() - width) / 2.0).max(0.0);
                 let content = egui::Rect::from_min_size(
                     ui.cursor().min + egui::vec2(margin, 0.0),
@@ -71,15 +92,19 @@ impl Woodpeck {
                     if matches!(self.screen, Screen::Training | Screen::Review) {
                         self.solving(ui, layout.mode, layout.panel_width);
                     } else {
-                        egui::ScrollArea::vertical()
-                            .id_salt("screen-scroll")
-                            .show(ui, |ui| match self.screen {
-                                Screen::Dashboard => self.dashboard(ui),
-                                Screen::Builder => self.builder_screen(ui),
-                                Screen::Progress => self.progress_screen(ui),
-                                Screen::Settings => self.settings_screen(ui),
-                                _ => {}
-                            });
+                        let mut scroll =
+                            egui::ScrollArea::vertical().id_salt(("screen-scroll", self.screen));
+                        if std::mem::take(&mut self.library_scroll_top) {
+                            scroll = scroll.vertical_scroll_offset(0.0);
+                        }
+                        scroll.show(ui, |ui| match self.screen {
+                            Screen::Welcome => self.welcome(ui),
+                            Screen::Dashboard => self.dashboard(ui),
+                            Screen::Builder => self.builder_screen(ui),
+                            Screen::Progress => self.progress_screen(ui),
+                            Screen::Settings => self.settings_screen(ui),
+                            _ => {}
+                        });
                     }
                 });
             });

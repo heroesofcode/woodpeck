@@ -128,3 +128,165 @@ fn every_screen_keeps_content_within_tiled_widths() {
         }
     }
 }
+
+fn welcome_frame(app: &mut Woodpeck, ctx: &egui::Context, width: f32, events: Vec<egui::Event>) {
+    app.poll();
+    let output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 900.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().inner_margin(14))
+                .show(ui, |ui| {
+                    let right = ui.max_rect().right();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        app.welcome(ui);
+                        assert!(
+                            ui.min_rect().right() <= right + 1.0,
+                            "welcome overflow at {width}"
+                        );
+                    });
+                });
+        },
+    );
+    output.drop_without_applying_deltas();
+}
+fn key(key: egui::Key) -> Vec<egui::Event> {
+    vec![
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        },
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ]
+}
+#[test]
+fn welcome_states_fit_tiled_widths_and_screenshot_done_is_stable() {
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut app = Woodpeck::new(
+        &ctx,
+        demo::service().unwrap(),
+        PathBuf::from("/tmp/demo.db"),
+        Some(Screenshot {
+            path: PathBuf::from("/tmp/demo.png"),
+            screen: Screen::WelcomeDone,
+            size: [360.0, 640.0],
+        }),
+    );
+    app.refresh();
+    assert_eq!(app.library.count, 200_000);
+    assert_eq!(app.library.bands.iter().sum::<u64>(), 200_000);
+    for width in [360.0, 640.0, 960.0, 1920.0] {
+        for step in [
+            library::WelcomeStep::Choose,
+            library::WelcomeStep::Downloading,
+            library::WelcomeStep::Done,
+            library::WelcomeStep::Error,
+        ] {
+            app.library.step = step;
+            app.library.message = "The connection was interrupted. Retry to continue.".into();
+            for _ in 0..2 {
+                welcome_frame(&mut app, &ctx, width, vec![]);
+            }
+        }
+    }
+}
+#[test]
+fn welcome_arrows_tab_enter_and_escape_persist_choice() {
+    use crate::source::LibrarySize;
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut app = Woodpeck::new(
+        &ctx,
+        demo::service().unwrap(),
+        PathBuf::from("/tmp/demo.db"),
+        None,
+    );
+    app.show_welcome();
+    welcome_frame(&mut app, &ctx, 960.0, vec![]);
+    welcome_frame(&mut app, &ctx, 960.0, key(egui::Key::ArrowRight));
+    assert_eq!(app.library.selected, LibrarySize::Full);
+    welcome_frame(&mut app, &ctx, 960.0, vec![]);
+    welcome_frame(&mut app, &ctx, 960.0, key(egui::Key::ArrowLeft));
+    welcome_frame(&mut app, &ctx, 960.0, vec![]);
+    assert_eq!(app.library.selected, LibrarySize::Medium);
+    ctx.memory_mut(|m| m.request_focus(egui::Id::unique(("library-card", "starter"))));
+    welcome_frame(&mut app, &ctx, 960.0, vec![]);
+    assert_eq!(app.library.selected, LibrarySize::Starter);
+    welcome_frame(&mut app, &ctx, 960.0, key(egui::Key::Tab));
+    welcome_frame(&mut app, &ctx, 960.0, vec![]);
+    assert_eq!(app.library.selected, LibrarySize::Medium);
+    ctx.memory_mut(|m| m.request_focus(egui::Id::unique(("library-card", "starter"))));
+    welcome_frame(&mut app, &ctx, 960.0, vec![]);
+    welcome_frame(&mut app, &ctx, 960.0, key(egui::Key::Enter));
+    assert_eq!(app.screen, Screen::Builder);
+    assert_eq!(
+        app.service
+            .local_setting("onboarding_done")
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
+    app.show_welcome();
+    welcome_frame(&mut app, &ctx, 360.0, key(egui::Key::Escape));
+    assert_eq!(app.screen, Screen::Builder);
+}
+
+#[test]
+fn library_worker_finishes_after_background_navigation_and_errors_can_retry() {
+    let ctx = egui::Context::default();
+    let mut app = Woodpeck::new(
+        &ctx,
+        demo::service().unwrap(),
+        PathBuf::from("/tmp/demo.db"),
+        None,
+    );
+    for (location, expected) in [
+        (
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/lichess.csv"),
+            library::WelcomeStep::Done,
+        ),
+        ("/missing/puzzles.csv", library::WelcomeStep::Error),
+    ] {
+        let handle = app
+            .service
+            .submit(Job::ImportLibrary {
+                location: location.into(),
+                size: crate::source::LibrarySize::Medium,
+                limit: Some(2),
+            })
+            .unwrap();
+        app.library.job = Some(handle);
+        app.welcome_step(library::WelcomeStep::Downloading);
+        app.navigate(Screen::Builder);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.library.job.is_some() {
+            app.poll();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(app.screen, Screen::Builder);
+        assert_eq!(app.library.step, expected);
+        if expected == library::WelcomeStep::Done {
+            assert_eq!(app.library.progress.accepted, 2);
+        } else {
+            assert_ne!(app.library.message, "");
+        }
+    }
+}
