@@ -281,6 +281,23 @@ mod tests {
         );
     }
     #[test]
+    fn starter_preserves_an_unmarked_larger_library() {
+        let mut store = Store::memory().unwrap();
+        let puzzles: Vec<_> = (0..=crate::source::STARTER_MAX_COUNT)
+            .map(|id| {
+                let mut puzzle = crate::puzzle::fixture();
+                puzzle.id = format!("existing{id}");
+                puzzle
+            })
+            .collect();
+        store.upsert_puzzles(&puzzles).unwrap();
+        import_starter(&mut store, false, &CancelFlag::default(), |_| {}).unwrap();
+        assert_eq!(
+            store.setting("library_size").unwrap().as_deref(),
+            Some("medium")
+        );
+    }
+    #[test]
     fn starter_is_versioned_idempotent_and_reimportable() {
         let mut s = Store::memory().unwrap();
         let c = CancelFlag::default();

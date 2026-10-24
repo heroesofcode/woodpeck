@@ -175,6 +175,29 @@ fn key(key: egui::Key) -> Vec<egui::Event> {
         },
     ]
 }
+fn button_is_enabled(ctx: &egui::Context, output: &egui::FullOutput, label: &str) -> bool {
+    let rect = output
+        .shapes
+        .iter()
+        .find_map(|shape| {
+            if let egui::Shape::Text(text) = &shape.shape
+                && text.galley.text() == label
+            {
+                Some(text.galley.rect.translate(text.pos.to_vec2()))
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    ctx.viewport(|viewport| {
+        viewport.prev_pass.widgets.layers().any(|(_, layer)| {
+            layer.iter().any(|widget| {
+                widget.enabled && widget.sense.senses_click() && widget.rect.contains_rect(rect)
+            })
+        })
+    })
+}
+
 #[test]
 fn welcome_states_fit_tiled_widths_and_screenshot_done_is_stable() {
     let ctx = egui::Context::default();
@@ -246,6 +269,76 @@ fn welcome_arrows_tab_enter_and_escape_persist_choice() {
     app.show_welcome();
     welcome_frame(&mut app, &ctx, 360.0, key(egui::Key::Escape));
     assert_eq!(app.screen, Screen::Builder);
+}
+
+#[test]
+fn library_download_is_available_during_startup_and_finishes_after_it() {
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let service = AppService::new(crate::store::Store::memory().unwrap()).unwrap();
+    let mut app = Woodpeck::new(&ctx, service, PathBuf::from("/tmp/demo.db"), None);
+    assert!(app.service.is_busy());
+    assert!(app.library.can_start());
+    let startup = app.service.background_import().unwrap();
+    assert_eq!(startup.size, crate::source::LibrarySize::Starter);
+
+    // Render before polling, as on the first frame: startup is still pending.
+    let output = ctx.run_ui(egui::RawInput::default(), |ui| app.settings_screen(ui));
+    let texts: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| {
+            if let egui::Shape::Text(text) = &shape.shape {
+                Some(text.galley.text().to_owned())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "Preparing the starter pack…")
+    );
+    assert!(texts.iter().any(|text| text == "Cancel background import"));
+    assert!(texts.iter().any(|text| text == "Download Medium"));
+    assert!(button_is_enabled(&ctx, &output, "Download Medium"));
+    assert!(button_is_enabled(&ctx, &output, "Cancel background import"));
+    output.drop_without_applying_deltas();
+
+    let output = ctx.run_ui(egui::RawInput::default(), |ui| app.welcome(ui));
+    assert!(button_is_enabled(&ctx, &output, "Download Medium"));
+    output.drop_without_applying_deltas();
+
+    // Use a local download source to exercise the queued job without network access.
+    let handle = app
+        .service
+        .submit(Job::ImportLibrary {
+            location: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/lichess.csv").into(),
+            size: crate::source::LibrarySize::Medium,
+            limit: Some(2),
+        })
+        .unwrap();
+    app.library.job = Some(handle);
+    app.welcome_step(library::WelcomeStep::Downloading);
+    assert!(!app.library.can_start());
+    let output = ctx.run_ui(egui::RawInput::default(), |ui| app.library_progress(ui));
+    assert!(output.shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Preparing the starter pack…")
+    }));
+    output.drop_without_applying_deltas();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while app.library.job.is_some() {
+        app.poll();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.library.step, library::WelcomeStep::Done);
+    assert_eq!(app.library.progress.accepted, 2);
+    assert!(app.library.count >= crate::source::STARTER_COUNT);
+    assert!(app.library.can_start());
+    assert!(app.service.background_import().is_none());
 }
 
 #[test]

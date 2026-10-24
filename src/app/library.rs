@@ -39,6 +39,11 @@ impl Default for Library {
         }
     }
 }
+impl Library {
+    pub fn can_start(&self) -> bool {
+        self.job.is_none()
+    }
+}
 impl Woodpeck {
     pub(super) fn welcome_step(&mut self, step: WelcomeStep) {
         self.library.step = step;
@@ -54,7 +59,7 @@ impl Woodpeck {
         }
     }
     pub(super) fn start_library(&mut self, size: LibrarySize) {
-        if !self.finish_onboarding() {
+        if !self.library.can_start() || !self.finish_onboarding() {
             return;
         }
         let job = if size == LibrarySize::Starter {
@@ -199,7 +204,7 @@ impl Woodpeck {
                 widgets::grouped_count(self.library.count)
             ));
         }
-        ui.add_enabled_ui(!self.service.is_busy(), |ui| {
+        ui.add_enabled_ui(self.library.can_start(), |ui| {
             let label = if self.library.selected == LibrarySize::Starter {
                 "Use starter pack".into()
             } else {
@@ -277,7 +282,7 @@ impl Woodpeck {
         }
         // Let focused buttons handle Enter themselves; an unfocused Enter starts the choice.
         if !ctx.egui_wants_keyboard_input()
-            && !self.service.is_busy()
+            && self.library.can_start()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
         {
             if self.library.selected == LibrarySize::Starter {
@@ -371,7 +376,7 @@ impl Woodpeck {
         });
         if response.has_focus()
             && ui.input(|i| i.key_pressed(egui::Key::Enter))
-            && !self.service.is_busy()
+            && self.library.can_start()
         {
             if size == LibrarySize::Starter {
                 self.skip_welcome();
@@ -452,23 +457,61 @@ impl Woodpeck {
         }
     }
     pub(super) fn library_progress(&mut self, ui: &mut Ui) {
-        let progress = self.library.progress;
+        let job = self.library.job.as_ref().map_or(0, |job| job.id);
+        if self
+            .service
+            .import_status(job)
+            .is_some_and(|import| !import.started)
+        {
+            ui.horizontal_wrapped(|ui| {
+                ui.spinner();
+                let starter = self
+                    .service
+                    .background_import()
+                    .is_some_and(|import| import.id != job && import.size == LibrarySize::Starter);
+                ui.label(if starter {
+                    "Preparing the starter pack…"
+                } else {
+                    "Waiting for the background job…"
+                });
+            });
+            ui.small(format!(
+                "Your {} import will start automatically.",
+                self.library.selected.label()
+            ));
+            return;
+        }
+        self.import_progress(
+            ui,
+            job,
+            self.library.selected,
+            self.library.progress,
+            self.library.job.is_some(),
+        );
+    }
+    pub(super) fn import_progress(
+        &self,
+        ui: &mut Ui,
+        job: u64,
+        size: LibrarySize,
+        progress: ImportProgress,
+        active: bool,
+    ) {
         let accent = style::color(self.palette.semantic().accent);
-        let fraction = if self.library.selected == LibrarySize::Full {
-            progress.bytes as f32 / self.library.selected.download_bytes() as f32
+        let fraction = if size == LibrarySize::Full {
+            progress.bytes as f32 / size.download_bytes() as f32
         } else {
-            progress.accepted as f32 / self.library.selected.limit().unwrap_or(1) as f32
+            progress.accepted as f32 / size.limit().unwrap_or(1) as f32
         }
         .clamp(0.0, 1.0);
         let animated = self.screenshot.is_none() && ui.style().animation_time > 0.0;
-        let job = self.library.job.as_ref().map_or(0, |job| job.id);
         let accepted = animated_count(ui, ("accepted", job), progress.accepted, animated);
         let scanned = animated_count(ui, ("scanned", job), progress.scanned, animated);
         let bytes = animated_count(ui, ("bytes", job), progress.bytes, animated);
         let bands = std::array::from_fn(|index| {
             animated_count(ui, ("band", job, index), progress.bands[index], animated)
         });
-        let expected = expected_histogram(self.library.selected);
+        let expected = expected_histogram(size);
         let fraction = if animated {
             ui.ctx().animate_value_with_time(
                 egui::Id::unique(("library-fraction", job)),
@@ -481,8 +524,12 @@ impl Woodpeck {
         widgets::card(ui).show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.0).max(0.0));
             ui.horizontal_wrapped(|ui| {
-                widgets::chip(ui, self.library.selected.label(), accent);
-                ui.label("Downloading & filtering for quality");
+                widgets::chip(ui, size.label(), accent);
+                ui.label(if size == LibrarySize::Starter {
+                    "Preparing the starter pack…"
+                } else {
+                    "Downloading & filtering for quality"
+                });
             });
             ui.add_space(10.0);
             ui.label(
@@ -496,7 +543,7 @@ impl Woodpeck {
             ui.label(format!(
                 "{:.1} MB {} · {} rows scanned",
                 bytes as f64 / 1_000_000.0,
-                if self.library.selected == LibrarySize::Starter {
+                if size == LibrarySize::Starter {
                     "read"
                 } else {
                     "downloaded"
@@ -505,7 +552,7 @@ impl Woodpeck {
             ));
             ui.add(
                 egui::ProgressBar::new(fraction)
-                    .animate(animated && self.library.job.is_some())
+                    .animate(animated && active)
                     .show_percentage(),
             );
             widgets::caption(ui, "PATTERNS AT EVERY LEVEL");

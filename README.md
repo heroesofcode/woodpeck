@@ -128,7 +128,12 @@ Disk figures describe a fresh library; imports and saved sets can need more spac
 and rating histogram. Download Medium or Full, update the recorded size from Lichess,
 re-import Starter, cancel an active download, or show the welcome screen again.
 The download can keep running while you use the app, with a small status in navigation.
-Smaller imports never downgrade the recorded library size. Cancelling keeps committed
+For older libraries without size markers, committed counts above 9,540 imply Medium;
+counts of at least 1,000,000 imply Full. Smaller imports never downgrade the recorded
+size or label a larger store as Starter. Updating Starter or an unknown size from
+Lichess downloads Full; the starter pack has its own re-import action. Downloads can
+queue behind startup preparation, whose progress and cancellation appear in Settings.
+Cancelling keeps committed
 puzzles and leaves the previous size/date markers unchanged.
 
 The Settings download buttons use the same streaming importer. Imports accept plain or zstd-compressed Lichess CSV, filter for popularity ≥80, rating deviation ≤100, ≥500 plays, and exclude `veryLong` puzzles. Invalid chess lines are rejected. Progress reports compressed bytes, scanned/accepted/rejected rows, and a live rating histogram. `--size` defaults to `full`; `--limit N` accepts a positive puzzle count for any local path or URL and overrides the preset limit. Rejected rows do not count. Medium stops reading as soon as 200,000 accepted rows have been saved, closing the stream early. Each CLI import prints a final count, byte, disk-size and wall-time summary. Cancelling in Settings retains committed batches of 1,000 accepted rows and drops the unfinished batch.
