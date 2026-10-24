@@ -10,13 +10,13 @@ A native **Woodpecker Method chess puzzle trainer**, inspired by [Peck Chess](ht
 - **Progress.** Time and accuracy charts, comparisons with cycle one, performance by theme, and most-missed positions. Small local streak, XP, and rank widgets.
 - **Omarchy theme sync with live reload.** Desktop colors and fontconfig fonts, with two-second theme polling that follows directory and symlink swaps. Built-in dark and light themes and eight board palettes.
 - **Responsive tiling layout.** Native Wayland and X11, a sidebar that collapses into a rail or top bar, and a board/panel layout that stacks below 900 px. Supports narrow 360 px tiles, wide displays, and HiDPI. SVG pieces, click/click and drag/drop, legal targets, and promotion selection.
-- **Puzzles ready offline.** An embedded Lichess starter pack of 8,540 puzzles imports on first launch. Stream the full database from Settings or the CLI. If a requested set has too few local matches, the builder offers a Lichess API fallback. Export your sets as PGN from Settings.
+- **A library that grows with you.** First-run onboarding offers the offline 8,540-puzzle Starter pack, a recommended 200,000-puzzle Medium library, or the complete filtered Lichess database. Watch live rating distributions as puzzles arrive, cancel while retaining committed batches, or continue training in the background. Manage and update the library in Settings. If a requested set has too few local matches, the builder offers a Lichess API fallback. Export your sets as PGN from Settings.
 
 Puzzles from the Lichess puzzle database (CC0).
 
 ## Screenshots
 
-Screenshots use an isolated demo database, with real training and review state.
+Screenshots use an isolated demo database, with real training and review state. Welcome captures also include deterministic [download progress](docs/screenshots/welcome-progress.png) and [completion](docs/screenshots/welcome-done.png).
 
 | Dashboard | Training |
 | --- | --- |
@@ -25,6 +25,8 @@ Screenshots use an isolated demo database, with real training and review state.
 | ![Review board, filters, and pending cards](docs/screenshots/review-wide.png) | ![Cycle comparisons and progress charts](docs/screenshots/progress.png) |
 | Set builder | Narrow training, 360×640 |
 | ![Preset picker and set builder](docs/screenshots/builder.png) | ![Training in a narrow tile](docs/screenshots/training-narrow.png) |
+| Welcome | Puzzle library |
+| ![First-run library choices](docs/screenshots/welcome.png) | ![Library management in Settings](docs/screenshots/settings.png) |
 
 ## Build and install
 
@@ -69,6 +71,8 @@ The default `sound` feature uses ALSA on Linux; playback happens in the backgrou
 
 ## Usage
 
+On first launch, choose a puzzle library or select **Start with the starter pack** to train offline immediately. The welcome screen explains the local data location and Lichess CC0 source. Existing installations with more than 9,540 puzzles skip this introduction automatically. The choice and library metadata belong to this computer and are never synced.
+
 Start with **New set**, choose a preset, optionally adjust the themes, then create a set. **Continue** resumes its current cycle. After a wrong move, walk through the missed line or advance; the item is already in **Review**. Use Review regularly and solve each queued puzzle correctly to clear it. **Progress** compares completed cycles. **Settings** controls themes, auto-advance, sound, tactical labels, imports, and PGN export.
 
 ### Choosing themes
@@ -97,11 +101,37 @@ Shortcuts pause while typing, while a menu/dialog or promotion picker is open, o
 woodpeck import /path/to/lichess_db_puzzle.csv.zst
 woodpeck import /path/to/puzzles.csv
 woodpeck import https://database.lichess.org/lichess_db_puzzle.csv.zst
-woodpeck import --lichess
+woodpeck import --lichess                    # default: full database
+woodpeck import --lichess --size medium      # stop at 200,000 accepted puzzles
+woodpeck import --lichess --size full
+woodpeck import /path/to/puzzles.csv.zst --limit 10000
+woodpeck import /path/to/puzzles.csv.zst --size medium --limit 50000
 woodpeck --help
 ```
 
-The Settings download button uses the same streaming importer. Imports accept plain or zstd-compressed Lichess CSV, filter for popularity ≥80, rating deviation ≤100, ≥500 plays, and exclude `veryLong` puzzles. Invalid chess lines are rejected. Progress reports bytes and rows. Cancelling in Settings retains committed batches of 1,000 accepted rows and drops the unfinished batch.
+| Library | Puzzles | Download | Database on disk | Estimated time |
+| --- | ---: | ---: | ---: | --- |
+| Starter | 8,540 | 0 MB | ≈5 MB | Ready offline |
+| Medium (recommended) | 200,000 | ≈26 MB | ≈102 MB | ≈20–60 seconds |
+| Full | ≈2.3 million | ≈307 MB | ≈1.21 GB | ≈10–17 minutes |
+
+Measurements use the 2026-10-22 Lichess dump and a release build. Medium consumed
+26,354,267 compressed bytes, scanned 527,077 rows and took 15.03 seconds locally.
+Full consumed 307,234,795 bytes, scanned 6,157,341 rows and accepted 2,335,803 puzzles;
+local wall time was 524.61 seconds, including SQLite's final checkpoint/close.
+Database sizes after close were 101,732,352 and 1,208,946,688 bytes respectively.
+The displayed time ranges add transfer time at 5–50 Mbit/s to measured local time;
+actual performance depends on the computer, connection and existing library.
+Disk figures describe a fresh library; imports and saved sets can need more space.
+
+**Settings → Puzzle library** shows the count, recorded size, local last-import date,
+and rating histogram. Download Medium or Full, update the recorded size from Lichess,
+re-import Starter, cancel an active download, or show the welcome screen again.
+The download can keep running while you use the app, with a small status in navigation.
+Smaller imports never downgrade the recorded library size. Cancelling keeps committed
+puzzles and leaves the previous size/date markers unchanged.
+
+The Settings download buttons use the same streaming importer. Imports accept plain or zstd-compressed Lichess CSV, filter for popularity ≥80, rating deviation ≤100, ≥500 plays, and exclude `veryLong` puzzles. Invalid chess lines are rejected. Progress reports compressed bytes, scanned/accepted/rejected rows, and a live rating histogram. `--size` defaults to `full`; `--limit N` accepts a positive puzzle count for any local path or URL and overrides the preset limit. Rejected rows do not count. Medium stops reading as soon as 200,000 accepted rows have been saved, closing the stream early. Each CLI import prints a final count, byte, disk-size and wall-time summary. Cancelling in Settings retains committed batches of 1,000 accepted rows and drops the unfinished batch.
 
 The API fallback is offered explicitly when local generation is short; it makes sequential requests and waits at least 60 seconds after HTTP 429. Requests use the Lichess difficulty levels that overlap your range, and the results are filtered locally to the exact range. The range is never widened silently. If too few puzzles match, the builder shows the shortfall so you can widen the range, change the themes, or fetch more. An incomplete set is never saved.
 
@@ -215,7 +245,7 @@ Validate every screen at common tiling sizes:
 
 ```sh
 mkdir -p /tmp/woodpeck-screenshots
-for screen in dashboard training review progress builder settings; do
+for screen in dashboard training review progress builder settings welcome welcome-progress welcome-done; do
   for size in 360x640 960x1080 1920x1080; do
     xvfb-run -a -s '-screen 0 1920x1080x24' \
       target/release/woodpeck --screenshot "/tmp/woodpeck-screenshots/$screen-$size.png" \
@@ -223,6 +253,8 @@ for screen in dashboard training review progress builder settings; do
   done
 done
 ```
+
+The three welcome screenshot screens use deterministic offline demo data, with animations settled for the capture.
 
 The code separates the puzzle engine, injected timer, set generation, review rules, progress calculations, streaming sources, SQLite repositories, and background application service from the native UI in `src/app/`.
 
