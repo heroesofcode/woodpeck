@@ -1,5 +1,18 @@
 //! Small visual building blocks and presentation calculations.
 use eframe::egui::{self, Color32, RichText, Ui};
+/// Format a count with comma-separated groups of three digits.
+pub fn grouped_count(count: u64) -> String {
+    let digits = count.to_string();
+    let mut grouped = String::with_capacity(digits.len() + (digits.len() - 1) / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 pub fn duration(ms: u64) -> String {
     let seconds = ms / 1000;
     if seconds >= 60 {
@@ -347,6 +360,26 @@ pub fn comparison(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn counts_group_digits_in_threes() {
+        for (count, expected) in [
+            (0, "0"),
+            (9, "9"),
+            (999, "999"),
+            (1_000, "1,000"),
+            (8_540, "8,540"),
+            (116_480, "116,480"),
+            (200_000, "200,000"),
+            (307_000, "307,000"),
+            (999_999, "999,999"),
+            (1_000_000, "1,000,000"),
+            (2_335_803, "2,335,803"),
+            (u64::MAX, "18,446,744,073,709,551,615"),
+        ] {
+            assert_eq!(grouped_count(count), expected);
+        }
+    }
+
     #[test]
     fn presentation() {
         assert_eq!(

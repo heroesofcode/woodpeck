@@ -62,7 +62,7 @@ impl Woodpeck {
                     ui.spinner();
                     ui.label(format!(
                         "Library · {} accepted · {:.1} MB",
-                        self.library.progress.accepted,
+                        widgets::grouped_count(self.library.progress.accepted),
                         self.library.progress.bytes as f64 / 1_000_000.0
                     ));
                     if ui.button("View download").clicked() {
