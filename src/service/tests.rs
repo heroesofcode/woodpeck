@@ -474,6 +474,74 @@ fn fallback_is_bounded_cancellable_and_never_saves_a_partial_set() {
     assert_eq!(service.list_sets().unwrap(), []);
 }
 #[test]
+fn startup_starter_preserves_an_unmarked_larger_library() {
+    let mut store = Store::memory().unwrap();
+    store.upsert_puzzles(&pool(9541)).unwrap();
+    let mut service = AppService::with_fetcher(store, Box::<MockFetcher>::default()).unwrap();
+    finish(&mut service, 1).unwrap();
+    assert_eq!(
+        service.local_setting("library_size").unwrap().as_deref(),
+        Some("medium")
+    );
+}
+
+#[test]
+fn library_download_queues_behind_startup_and_completes_afterwards() {
+    use crate::source::LibrarySize;
+    let mut service =
+        AppService::with_fetcher(Store::memory().unwrap(), Box::<MockFetcher>::default()).unwrap();
+    assert!(service.is_busy());
+    let startup = service.background_import().unwrap();
+    assert_eq!(startup.size, LibrarySize::Starter);
+    let download = service
+        .submit(Job::ImportLibrary {
+            location: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/lichess.csv").into(),
+            size: LibrarySize::Medium,
+            limit: Some(2),
+        })
+        .unwrap();
+    assert_eq!(service.background_import().unwrap().id, startup.id);
+    assert!(!service.import_status(download.id).unwrap().started);
+    let mut startup_finished = false;
+    let mut download_finished = false;
+    let mut starter_progress = false;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !download_finished {
+        for event in service.poll_events() {
+            match event {
+                Event::Started { id } if id == download.id => assert!(startup_finished),
+                Event::ImportProgress { id, progress } if id == startup.id => {
+                    starter_progress |= progress.accepted > 0;
+                }
+                Event::Finished { id, result } => {
+                    let JobOutput::Imported(progress) = result.unwrap() else {
+                        panic!()
+                    };
+                    if id == startup.id {
+                        assert_eq!(progress.accepted, crate::source::STARTER_COUNT);
+                        startup_finished = true;
+                    } else {
+                        assert_eq!(id, download.id);
+                        assert_eq!(progress.accepted, 2);
+                        download_finished = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(Instant::now() < deadline, "queued download timed out");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(starter_progress);
+    assert!(!service.is_busy());
+    assert!(service.background_import().is_none());
+    assert_eq!(
+        service.local_setting("library_size").unwrap().as_deref(),
+        Some("medium")
+    );
+}
+
+#[test]
 fn worker_startup_import_daily_by_id_fetch_and_errors() {
     let mut service =
         AppService::with_fetcher(Store::memory().unwrap(), Box::<MockFetcher>::default()).unwrap();

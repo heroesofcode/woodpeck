@@ -129,6 +129,13 @@ pub struct JobHandle {
     pub id: u64,
     pub cancel: CancelFlag,
 }
+#[derive(Clone, Copy, Debug)]
+pub struct ImportStatus {
+    pub id: u64,
+    pub size: crate::source::LibrarySize,
+    pub started: bool,
+    pub progress: ImportProgress,
+}
 struct Command {
     handle: JobHandle,
     job: Job,
@@ -143,6 +150,7 @@ pub struct AppService {
     commands: mpsc::Sender<Command>,
     events: mpsc::Receiver<Event>,
     pending: BTreeMap<u64, CancelFlag>,
+    imports: BTreeMap<u64, ImportStatus>,
     next_id: u64,
     sync: Option<crate::sync::worker::Worker>,
 }
@@ -172,6 +180,7 @@ impl AppService {
             commands,
             events,
             pending: BTreeMap::new(),
+            imports: BTreeMap::new(),
             next_id: 0,
             sync: None,
         };
@@ -213,6 +222,11 @@ impl AppService {
             id: self.next_id,
             cancel: CancelFlag::default(),
         };
+        let size = match &job {
+            Job::ImportStarter { .. } => Some(crate::source::LibrarySize::Starter),
+            Job::ImportLibrary { size, .. } => Some(*size),
+            _ => None,
+        };
         self.commands
             .send(Command {
                 handle: handle.clone(),
@@ -220,7 +234,25 @@ impl AppService {
             })
             .map_err(|_| ServiceError::WorkerUnavailable)?;
         self.pending.insert(handle.id, handle.cancel.clone());
+        if let Some(size) = size {
+            self.imports.insert(
+                handle.id,
+                ImportStatus {
+                    id: handle.id,
+                    size,
+                    started: false,
+                    progress: ImportProgress::default(),
+                },
+            );
+        }
         Ok(handle)
+    }
+    /// The first pending import, including the automatic starter import before it starts.
+    pub fn background_import(&self) -> Option<ImportStatus> {
+        self.imports.values().next().copied()
+    }
+    pub fn import_status(&self, id: u64) -> Option<ImportStatus> {
+        self.imports.get(&id).copied()
     }
     /// Also allows cancelling the automatic startup import by its event ID.
     pub fn cancel_job(&self, id: u64) -> bool {
@@ -244,8 +276,22 @@ impl AppService {
     pub fn poll_events(&mut self) -> Vec<Event> {
         let events: Vec<_> = self.events.try_iter().collect();
         for event in &events {
-            if let Event::Finished { id, .. } = event {
-                self.pending.remove(id);
+            match event {
+                Event::Started { id } => {
+                    if let Some(import) = self.imports.get_mut(id) {
+                        import.started = true;
+                    }
+                }
+                Event::ImportProgress { id, progress } => {
+                    if let Some(import) = self.imports.get_mut(id) {
+                        import.progress = *progress;
+                    }
+                }
+                Event::Finished { id, .. } => {
+                    self.pending.remove(id);
+                    self.imports.remove(id);
+                }
+                Event::FetchProgress { .. } => {}
             }
         }
         events

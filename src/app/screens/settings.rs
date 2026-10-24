@@ -173,6 +173,18 @@ impl Woodpeck {
                 style::color(self.palette.semantic().accent),
                 65.0,
             );
+            if let Some(import) = self.service.background_import()
+                && self
+                    .library
+                    .job
+                    .as_ref()
+                    .is_none_or(|job| job.id != import.id)
+            {
+                self.import_progress(ui, import.id, import.size, import.progress, true);
+                if ui.button("Cancel background import").clicked() {
+                    self.service.cancel_job(import.id);
+                }
+            }
             if self.library.job.is_some() {
                 self.library_progress(ui);
                 if ui.button("Cancel download").clicked()
@@ -181,7 +193,7 @@ impl Woodpeck {
                     job.cancel.cancel();
                 }
             } else {
-                ui.add_enabled_ui(!self.service.is_busy(), |ui| {
+                ui.add_enabled_ui(self.library.can_start(), |ui| {
                     if self.library.selected == LibrarySize::Starter {
                         self.library.selected = LibrarySize::Medium;
                     }
@@ -193,7 +205,9 @@ impl Woodpeck {
                     }
                     ui.horizontal_wrapped(|ui| {
                         if ui.button("Update from Lichess").clicked() {
-                            self.start_library(size.unwrap_or(LibrarySize::Full));
+                            self.start_library(
+                                size.unwrap_or(LibrarySize::Full).lichess_update_size(),
+                            );
                         }
                         if ui.button("Re-import starter pack").clicked() {
                             self.start_library(LibrarySize::Starter);

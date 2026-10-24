@@ -7,6 +7,11 @@ pub enum LibrarySize {
     Full,
 }
 pub const STARTER_COUNT: u64 = 8_540;
+/// Allow 1,000 extra puzzles before treating an unmarked library as larger than Starter.
+pub const STARTER_MAX_COUNT: u64 = STARTER_COUNT + 1_000;
+pub const MEDIUM_COUNT: u64 = 200_000;
+/// Infer Full only well beyond the Medium limit, allowing for overlapping imports.
+pub const FULL_MIN_COUNT: u64 = 1_000_000;
 pub const RATING_BANDS: usize = 13;
 pub const STARTER_HISTOGRAM: [u64; RATING_BANDS] =
     [9, 544, 894, 891, 896, 892, 891, 891, 893, 819, 769, 151, 0];
@@ -51,6 +56,23 @@ pub fn rating_band(rating: u16) -> usize {
 }
 impl LibrarySize {
     pub const ALL: [Self; 3] = [Self::Starter, Self::Medium, Self::Full];
+    pub fn from_puzzle_count(count: u64) -> Self {
+        if count >= FULL_MIN_COUNT {
+            Self::Full
+        } else if count > STARTER_MAX_COUNT {
+            Self::Medium
+        } else {
+            Self::Starter
+        }
+    }
+    /// Updating from Lichess always uses the remote database, even for Starter.
+    #[must_use]
+    pub fn lichess_update_size(self) -> Self {
+        match self {
+            Self::Medium => Self::Medium,
+            Self::Starter | Self::Full => Self::Full,
+        }
+    }
     pub fn key(self) -> &'static str {
         match self {
             Self::Starter => "starter",
@@ -71,7 +93,7 @@ impl LibrarySize {
     pub fn limit(self) -> Option<u64> {
         match self {
             Self::Starter => Some(STARTER_COUNT),
-            Self::Medium => Some(200_000),
+            Self::Medium => Some(MEDIUM_COUNT),
             Self::Full => None,
         }
     }
@@ -115,7 +137,7 @@ pub enum OnboardingDecision {
 pub fn onboarding_decision(done: bool, count: u64) -> OnboardingDecision {
     if done {
         OnboardingDecision::AlreadyDone
-    } else if count > STARTER_COUNT + 1_000 {
+    } else if count > STARTER_MAX_COUNT {
         OnboardingDecision::MarkDone
     } else {
         OnboardingDecision::Show
@@ -128,6 +150,30 @@ pub struct ImportOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inferred_sizes_and_remote_updates() {
+        for (count, size) in [
+            (0, LibrarySize::Starter),
+            (STARTER_COUNT, LibrarySize::Starter),
+            (STARTER_MAX_COUNT, LibrarySize::Starter),
+            (STARTER_MAX_COUNT + 1, LibrarySize::Medium),
+            (MEDIUM_COUNT, LibrarySize::Medium),
+            (FULL_MIN_COUNT - 1, LibrarySize::Medium),
+            (FULL_MIN_COUNT, LibrarySize::Full),
+            (2_335_803, LibrarySize::Full),
+        ] {
+            assert_eq!(LibrarySize::from_puzzle_count(count), size);
+        }
+        assert_eq!(
+            LibrarySize::Starter.lichess_update_size(),
+            LibrarySize::Full
+        );
+        assert_eq!(
+            LibrarySize::Medium.lichess_update_size(),
+            LibrarySize::Medium
+        );
+        assert_eq!(LibrarySize::Full.lichess_update_size(), LibrarySize::Full);
+    }
     #[test]
     fn choices_and_first_run() {
         assert_eq!(LibrarySize::Medium.limit(), Some(200_000));

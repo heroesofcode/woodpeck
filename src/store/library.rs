@@ -7,9 +7,12 @@ impl Store {
         let previous = self
             .setting("library_size")?
             .and_then(|s| LibrarySize::parse(&s));
+        // Older installations have no marker. Committed puzzles also provide a floor
+        // if a Starter marker was written before size inference was introduced.
+        let inferred = LibrarySize::from_puzzle_count(self.puzzle_count()?);
         self.set_setting(
             "library_size",
-            previous.map_or(size, |old| old.max(size)).key(),
+            previous.unwrap_or(inferred).max(inferred).max(size).key(),
         )?;
         self.set_setting("library_imported_at", &at.to_string())?;
         tx.commit()?;
@@ -31,6 +34,52 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn starter_import_infers_unmarked_large_stores() {
+        let store = Store::memory().unwrap();
+        // Only the committed row count matters to marker inference.
+        store
+            .connection
+            .execute(
+                "WITH RECURSIVE ids(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM ids WHERE n<?1)
+             INSERT INTO puzzles SELECT n,'','',1000,0,0,0,'[]' FROM ids",
+                [i64::try_from(crate::source::FULL_MIN_COUNT).unwrap()],
+            )
+            .unwrap();
+        store
+            .record_library_import(LibrarySize::Starter, 10)
+            .unwrap();
+        assert_eq!(
+            store.setting("library_size").unwrap().as_deref(),
+            Some("full")
+        );
+        store
+            .connection
+            .execute("DELETE FROM settings WHERE key='library_size'", [])
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "DELETE FROM puzzles WHERE CAST(id AS INTEGER)>?1",
+                [i64::try_from(crate::source::MEDIUM_COUNT).unwrap()],
+            )
+            .unwrap();
+        store
+            .record_library_import(LibrarySize::Starter, 20)
+            .unwrap();
+        assert_eq!(
+            store.setting("library_size").unwrap().as_deref(),
+            Some("medium")
+        );
+        store.connection.execute("DELETE FROM puzzles", []).unwrap();
+        store
+            .record_library_import(LibrarySize::Starter, 30)
+            .unwrap();
+        assert_eq!(
+            store.setting("library_size").unwrap().as_deref(),
+            Some("medium")
+        );
+    }
     #[test]
     fn markers_never_downgrade_and_histogram_clamps_edges() {
         let mut store = Store::memory().unwrap();
