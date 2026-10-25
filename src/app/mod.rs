@@ -124,6 +124,7 @@ pub struct Woodpeck {
     review_theme: String,
     review_sort: ReviewSort,
     status: String,
+    status_generation: u64,
     job_fraction: f32,
     cycle_marks: Vec<Outcome>,
     toast: Option<(String, Instant)>,
@@ -196,6 +197,7 @@ impl Woodpeck {
             review_theme: String::new(),
             review_sort: ReviewSort::MostRecent,
             status: "Preparing local puzzles…".into(),
+            status_generation: 0,
             job_fraction: 0.0,
             cycle_marks: vec![],
             toast: None,
@@ -490,18 +492,12 @@ impl Woodpeck {
     fn poll(&mut self) {
         self.poll_background();
         if self.service.poll_sync() {
-            self.refresh();
+            self.refresh_after_sync();
             self.reload_settings();
-            if let Some(session) = &self.session
-                && !session.recorded
-                && !self.saving
-                && let Some(cycle) = session.cycle_id
-            {
-                self.request_training(move |service| service.current_puzzle(cycle));
-            }
         }
 
         for event in self.service.poll_events() {
+            self.status_generation += 1;
             match event {
                 Event::Started { .. } => self.status = "Working in the background…".into(),
                 Event::ImportProgress { id, progress } => {
@@ -561,6 +557,8 @@ impl Woodpeck {
                             _ => {}
                         }
                     }
+                    let update_status =
+                        result.is_ok() && !matches!(&result, Ok(JobOutput::SetCreated(_)));
                     match result {
                         Ok(JobOutput::SetCreated(c)) => self.created(c),
                         Ok(_) => {
@@ -576,7 +574,7 @@ impl Woodpeck {
                     }
                     if library_changed {
                         // Source jobs can commit rows even when cancelled or failing.
-                        self.refresh_library();
+                        self.refresh_library(update_status);
                     } else {
                         self.refresh();
                     }

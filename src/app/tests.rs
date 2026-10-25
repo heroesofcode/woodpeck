@@ -597,10 +597,195 @@ fn attempts_advancement_and_ordinary_refresh_preserve_library_snapshot() {
     settle(&mut app);
     assert_eq!(app.library.count, u64::MAX);
     assert_eq!(app.library.bands, [u64::MAX; crate::source::RATING_BANDS]);
-    app.refresh_library();
+    app.refresh_library(false);
     settle(&mut app);
     assert_eq!(app.library.count, count);
     assert_eq!(app.library.bands, bands);
+}
+
+#[test]
+fn sync_notifications_preserve_moves_and_timer_when_training_position_is_unchanged() {
+    let (_, mut app) = training_app();
+    app.timer.set_conditions(TimerConditions {
+        player_turn: true,
+        interactive: true,
+        focused: true,
+        ..Default::default()
+    });
+    app.clock.0.set(Duration::from_secs(5));
+    let first_move = app
+        .session
+        .as_ref()
+        .unwrap()
+        .puzzle
+        .moves
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    app.play(&first_move);
+    let generation = app.load_generation;
+    let state = app.session.as_ref().unwrap().engine.state();
+    let position = app.session.as_ref().unwrap().engine.position().cloned();
+    // Syncing/Synced notifications and pulls with unrelated changes all use this refresh.
+    for unrelated_change in [false, true, false] {
+        if unrelated_change {
+            let card = &app.all_reviews[0];
+            app.service
+                .record_attempt(&Attempt {
+                    puzzle_id: card.puzzle.id.clone(),
+                    set_id: card.item.set_id,
+                    cycle_id: None,
+                    kind: AttemptKind::Review,
+                    outcome: Outcome::Correct,
+                    time_ms: 1000,
+                    moves_played: vec![],
+                    created_at: chrono::Local::now().timestamp(),
+                })
+                .unwrap();
+        }
+        app.refresh_after_sync();
+        settle(&mut app);
+        let session = app.session.as_ref().unwrap();
+        assert_eq!(app.load_generation, generation);
+        assert_eq!(
+            session.engine.moves_played(),
+            std::slice::from_ref(&first_move)
+        );
+        assert_eq!(session.engine.state(), state);
+        assert_eq!(session.engine.position(), position.as_ref());
+        assert_eq!(app.timer.elapsed(), Duration::from_secs(4));
+    }
+}
+
+#[test]
+fn sync_refresh_advances_changed_training_position_and_clears_completed_cycle() {
+    let (_, mut app) = training_app();
+    let session = app.session.as_ref().unwrap();
+    let cycle = session.cycle_id.unwrap();
+    let old = session.puzzle.id.clone();
+    let set_id = session.set_id;
+    loop {
+        let position = app.service.current_puzzle(cycle).unwrap();
+        let Some(puzzle) = position.puzzle else {
+            break;
+        };
+        app.service
+            .record_attempt(&Attempt {
+                puzzle_id: puzzle.id,
+                set_id,
+                cycle_id: Some(cycle),
+                kind: AttemptKind::Cycle,
+                outcome: Outcome::Correct,
+                time_ms: 1000,
+                moves_played: vec![],
+                created_at: chrono::Local::now().timestamp(),
+            })
+            .unwrap();
+        app.refresh_after_sync();
+        settle(&mut app);
+        if let Some(session) = &app.session {
+            assert_ne!(session.puzzle.id, old);
+            assert_eq!(session.position, position.position + 1);
+            assert_eq!(session.engine.state(), State::Loading);
+        }
+    }
+    assert!(app.session.is_none());
+}
+
+#[test]
+fn sync_refresh_replaces_reviews_cleared_elsewhere_and_empties_the_board() {
+    let (_, mut app) = training_app();
+    app.navigate(Screen::Review);
+    let generation = app.load_generation;
+    let now = app.now() + Duration::from_secs(1);
+    app.clock.0.set(now);
+    app.session.as_mut().unwrap().engine.update(now);
+    app.review_theme = "missing-theme".into();
+    app.filter_reviews();
+    app.refresh_after_sync();
+    settle(&mut app);
+    assert_eq!(app.load_generation, generation);
+    assert_eq!(
+        app.session.as_ref().unwrap().engine.state(),
+        State::PlayerTurn
+    );
+    app.review_theme.clear();
+    app.filter_reviews();
+    while let Some(session) = &app.session {
+        let old = session.puzzle.id.clone();
+        let count = app.pending;
+        app.service
+            .record_attempt(&Attempt {
+                puzzle_id: old.clone(),
+                set_id: session.set_id,
+                cycle_id: None,
+                kind: AttemptKind::Review,
+                outcome: Outcome::Correct,
+                time_ms: 1000,
+                moves_played: vec![],
+                created_at: chrono::Local::now().timestamp(),
+            })
+            .unwrap();
+        app.refresh_after_sync();
+        settle(&mut app);
+        assert_eq!(app.pending, count - 1);
+        assert!(app.session.as_ref().is_none_or(|s| s.puzzle.id != old));
+    }
+    assert_eq!(app.all_reviews, []);
+    assert_eq!(app.reviews, []);
+}
+
+#[test]
+fn delayed_sync_refresh_preserves_newer_or_recorded_sessions_and_pending_saves() {
+    let (_, mut app) = training_app();
+    app.refresh_after_sync();
+    app.navigate(Screen::Review);
+    let generation = app.load_generation;
+    let review = app.session.as_ref().unwrap().puzzle.id.clone();
+    settle(&mut app);
+    assert_eq!(app.load_generation, generation);
+    assert_eq!(app.session.as_ref().unwrap().puzzle.id, review);
+
+    solve(&mut app);
+    app.record();
+    app.refresh_after_sync();
+    settle(&mut app);
+    assert_eq!(app.load_generation, generation);
+    assert_eq!(app.session.as_ref().unwrap().puzzle.id, review);
+    assert!(app.session.as_ref().unwrap().recorded);
+}
+
+#[test]
+fn successful_import_status_uses_refreshed_library_count() {
+    let (_, mut app) = training_app();
+    let before = app.library.count;
+    let csv = include_str!("../../tests/fixtures/lichess.csv")
+        .replace("00008,", "new08,")
+        .replace("0000D,", "new0D,");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("new-puzzles.csv");
+    std::fs::write(&path, csv).unwrap();
+    app.submit(Job::ImportLibrary {
+        location: path.display().to_string(),
+        size: crate::source::LibrarySize::Medium,
+        limit: Some(2),
+    });
+    settle(&mut app);
+    assert_eq!(app.library.count, before + 2);
+    assert_eq!(
+        app.status,
+        format!(
+            "{} puzzles available offline",
+            widgets::grouped_count(before + 2)
+        )
+    );
+
+    app.refresh_library(true);
+    app.status_generation += 1;
+    app.status = "Working in the background…".into();
+    settle(&mut app);
+    assert_eq!(app.status, "Working in the background…");
 }
 
 #[test]
