@@ -1,0 +1,120 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+  # Rebuilds the binaries for a tag that already exists, which is the way to
+  # repair a release whose upload failed.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and attach binaries to
+        required: true
+        type: string
+
+# Nothing by default. Each job asks for what it uses.
+permissions: {}
+
+# Two pushes in quick succession must not race to cut the same release.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release pull request
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    timeout-minutes: 10
+    permissions:
+      contents: write # commit the version bump, create the tag and release
+      pull-requests: write # open and update the release pull request
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          # Events raised by the default token do not trigger workflows, so the
+          # release pull request opens without the required `ci` check. Closing
+          # and reopening it runs the checks; a PAT here avoids that step.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  binaries:
+    # A `release: published` event raised by the default token does not start
+    # another workflow either, so the binaries are built in the run that
+    # created the release.
+    name: release binaries
+    needs: [release-please]
+    if: always() && (needs.release-please.outputs.released == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write # upload the tarball and its checksum to the release
+      id-token: write # the OIDC token that signs the provenance attestation
+      attestations: write # store that attestation against the repository
+    env:
+      TAG: ${{ inputs.tag || needs.release-please.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      # Inline rather than the shared action: this job checks out the tag
+      # being built, which may predate changes to that action.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            pkg-config libxkbcommon-dev libwayland-dev libx11-dev \
+            libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
+            libegl1-mesa-dev libasound2-dev libfontconfig1-dev
+
+      - run: rustup toolchain install
+
+      # No build cache: what ships is built from the tagged source alone.
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        id: package
+        run: |
+          staging="woodpeck-${TAG#v}-x86_64-linux"
+          mkdir -p "$staging"
+          cp target/release/woodpeck "$staging/"
+          cp assets/woodpeck.desktop assets/woodpeck.svg README.md LICENSE "$staging/"
+          tar -czf "${staging}.tar.gz" "$staging"
+          sha256sum "${staging}.tar.gz" > "${staging}.tar.gz.sha256"
+          echo "tarball=${staging}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      # Only attest when the built commit is the one this run is for. A manual
+      # rebuild of an older tag dispatched from main is not, so it gets none.
+      # To attest a rebuild, dispatch on the tag itself:
+      # `gh workflow run release-please.yml --ref vX.Y.Z -f tag=vX.Y.Z`.
+      - name: Check the attestation would be true
+        id: provenance
+        run: |
+          built=$(git rev-parse HEAD)
+          if [ "$built" = "$GITHUB_SHA" ]; then
+            echo "attest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Built $built but this run is for $GITHUB_SHA; no provenance attestation."
+            echo "attest=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Verify with `gh attestation verify <tarball> --repo heroesofcode/woodpeck`.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: steps.provenance.outputs.attest == 'true'
+        with:
+          subject-path: ${{ steps.package.outputs.tarball }}
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" \
+            woodpeck-*.tar.gz woodpeck-*.sha256 --clobber

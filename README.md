@@ -67,6 +67,8 @@ install -Dm644 assets/woodpeck.svg "$HOME/.local/share/icons/hicolor/scalable/ap
 
 Ensure `$HOME/.local/bin` is in your `PATH`. The starter pack and chess pieces are embedded in the binary, so no asset directory is needed at runtime.
 
+Prebuilt x86_64 Linux tarballs are attached to each [GitHub release](https://github.com/heroesofcode/woodpeck/releases), with a SHA-256 checksum and a build provenance attestation (`gh attestation verify <tarball> --repo heroesofcode/woodpeck`). Extract one and run the same `install` commands from inside it, using `woodpeck`, `woodpeck.desktop`, and `woodpeck.svg` from the top level.
+
 The default `sound` feature uses ALSA on Linux; playback happens in the background and quietly skips unavailable audio devices. To omit audio, build with `cargo build --release --locked --no-default-features`.
 
 ## Usage
