@@ -46,7 +46,10 @@ impl BoardTheme {
 pub struct Settings {
     pub board_theme: BoardTheme,
     pub piece_rendering: PieceRendering,
+    /// Master switch; retain the legacy wire name for compatibility.
     pub completion_sound: bool,
+    /// Device-local volume, persisted with preferences but excluded from sync.
+    pub sound_volume: u8,
     pub show_theme_labels: bool,
     pub auto_advance: bool,
     pub color_theme: ColorTheme,
@@ -59,6 +62,7 @@ impl Default for Settings {
             board_theme: BoardTheme::Peck,
             piece_rendering: PieceRendering::Vector,
             completion_sound: true,
+            sound_volume: 35,
             show_theme_labels: true,
             auto_advance: false,
             color_theme: ColorTheme::System,
@@ -69,7 +73,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> bool {
-        (400..=3000).contains(&self.user_rating)
+        (400..=3000).contains(&self.user_rating) && self.sound_volume <= 100
     }
 }
 #[cfg(test)]
@@ -82,6 +86,31 @@ mod tests {
         assert_eq!(s.user_rating, 1200);
         assert_eq!(s.board_theme, BoardTheme::Peck);
         assert!(s.validate());
+    }
+    #[test]
+    fn legacy_sound_switch_and_volume_roundtrip() {
+        let legacy: Settings = serde_json::from_str(r#"{"completion_sound":false}"#).unwrap();
+        assert!(!legacy.completion_sound);
+        assert_eq!(legacy.sound_volume, 35);
+        for volume in [0, 35, 100] {
+            let settings = Settings {
+                sound_volume: volume,
+                ..legacy.clone()
+            };
+            assert!(settings.validate());
+            assert_eq!(
+                serde_json::from_str::<Settings>(&serde_json::to_string(&settings).unwrap())
+                    .unwrap(),
+                settings
+            );
+        }
+        assert!(
+            !Settings {
+                sound_volume: 101,
+                ..legacy
+            }
+            .validate()
+        );
     }
     #[test]
     fn all_options_roundtrip() {

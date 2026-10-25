@@ -36,6 +36,7 @@ pub enum Screen {
     #[default]
     Dashboard,
     Training,
+    TrainingSolved,
     Review,
     Progress,
     Builder,
@@ -49,6 +50,7 @@ impl Screen {
         match value {
             "dashboard" => Some(Self::Dashboard),
             "training" => Some(Self::Training),
+            "training-solved" => Some(Self::TrainingSolved),
             "review" => Some(Self::Review),
             "progress" => Some(Self::Progress),
             "builder" => Some(Self::Builder),
@@ -180,7 +182,11 @@ impl Woodpeck {
             progress: std::collections::BTreeMap::new(),
             library: library::Library::default(),
             settings,
-            screen,
+            screen: if screen == Screen::TrainingSolved {
+                Screen::Training
+            } else {
+                screen
+            },
             sets: vec![],
             reviews: vec![],
             pending: 0,
@@ -223,7 +229,7 @@ impl Woodpeck {
         if app.screenshot.is_some() {
             demo::welcome(&mut app, screen);
         }
-        if matches!(screen, Screen::Training) {
+        if matches!(screen, Screen::Training | Screen::TrainingSolved) {
             app.resume_selected();
         }
         if matches!(screen, Screen::Review) {
@@ -285,6 +291,14 @@ impl Woodpeck {
             recorded: false,
             finished_at: None,
         });
+        if self
+            .screenshot
+            .as_ref()
+            .is_some_and(|s| s.screen == Screen::TrainingSolved)
+            && let Some(session) = &mut self.session
+        {
+            demo::solve(&session.puzzle, &mut session.engine);
+        }
         self.timer.reset();
         self.board.reset();
         self.clearing_card = None;
@@ -377,6 +391,11 @@ impl Woodpeck {
         if let Some(s) = &mut self.session
             && s.engine.play(uci, now).is_ok()
         {
+            for event in s.engine.take_sounds() {
+                if self.screenshot.is_none() {
+                    crate::sound::play(event, &self.settings);
+                }
+            }
             self.board.player_moved();
             self.ctx.request_repaint();
         }
@@ -655,9 +674,15 @@ impl Woodpeck {
             self.palette = p;
         }
         self.poll();
+        crate::sound::configure(&self.settings);
         let solving = matches!(self.screen, Screen::Training | Screen::Review);
         if solving && let Some(session) = &mut self.session {
             session.engine.update(now);
+            for event in session.engine.take_sounds() {
+                if self.screenshot.is_none() {
+                    crate::sound::play(event, &self.settings);
+                }
+            }
         }
         let conditions = ctx.input(|i| TimerConditions {
             player_turn: self

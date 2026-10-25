@@ -19,15 +19,16 @@ impl Woodpeck {
                     |s| format!("TRAIN / {}", s.set.params.name.to_uppercase()),
                 )
         };
-        ui.horizontal(|ui| {
-            widgets::caption(ui, name);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("×  Exit").clicked() {
-                    self.navigate(Screen::Dashboard);
-                }
-            });
-        });
-        ui.add_space(15.0);
+        ui.add(
+            egui::Label::new(
+                RichText::new(name)
+                    .size(11.0)
+                    .strong()
+                    .color(ui.visuals().weak_text_color()),
+            )
+            .truncate(),
+        );
+        ui.add_space(8.0);
         if self.loading && self.session.is_none() {
             ui.spinner();
             return;
@@ -40,56 +41,95 @@ impl Woodpeck {
             }
             return;
         }
+        let state = self.session.as_ref().unwrap().engine.state();
+        let actions = match state {
+            State::FailedReview => 180.0,
+            State::Complete | State::Skipped => 128.0,
+            State::Invalid => 144.0,
+            _ => 112.0,
+        } + if self.record_error { 52.0 } else { 0.0 };
         let geometry = crate::layout::solving(
             ui.available_width(),
             ui.available_height(),
             mode,
             panel_width,
+            actions,
         );
-        if mode == LayoutMode::Columns {
-            let panel_width = geometry.panel_width;
-            let board_width = geometry.board_column;
-            let board_size = geometry.board_size;
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = 24.0;
-                ui.allocate_ui_with_layout(
-                    egui::vec2(board_width, ui.available_height()),
-                    egui::Layout::top_down(egui::Align::Center),
-                    |ui| {
-                        self.board_area(ui, board_size);
-                    },
-                );
-                ui.allocate_ui_with_layout(
-                    egui::vec2(panel_width, ui.available_height()),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("solve-panel")
-                            .show(ui, |ui| {
-                                if review {
-                                    self.review_panel(ui);
-                                } else {
-                                    self.training_panel(ui);
-                                }
-                            });
-                    },
-                );
-            });
+        let origin = ui.cursor().min;
+        let board_rect = egui::Rect::from_min_size(
+            origin + egui::vec2((geometry.board_column - geometry.board_size) / 2.0, 0.0),
+            egui::vec2(
+                geometry.board_size,
+                geometry.board_size + crate::layout::BOARD_FOOTER,
+            ),
+        );
+        let panel_origin = if mode == LayoutMode::Columns {
+            origin + egui::vec2(geometry.board_column + geometry.gap, 0.0)
         } else {
-            let size = geometry.board_size;
+            origin + egui::vec2(0.0, board_rect.height() + geometry.gap)
+        };
+        let panel_rect = egui::Rect::from_min_size(
+            panel_origin,
+            egui::vec2(geometry.panel_width, geometry.panel_height),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(board_rect), |ui| {
+            self.board_area(ui, geometry.board_size);
+        });
+        let details = egui::Rect::from_min_size(
+            panel_origin,
+            egui::vec2(geometry.panel_width, geometry.details_height),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(details), |ui| {
             egui::ScrollArea::vertical()
-                .id_salt("stacked-solve")
+                .id_salt("solve-details")
+                .max_height(geometry.details_height)
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    self.board_area(ui, size);
-                    ui.add_space(8.0);
                     if review {
                         self.review_panel(ui);
                     } else {
-                        self.training_panel(ui);
+                        self.training_panel(ui, geometry.compact);
                     }
                 });
-        }
+        });
+        let actions_rect = egui::Rect::from_min_max(
+            egui::pos2(
+                panel_rect.left(),
+                panel_rect.bottom() - geometry.action_height,
+            ),
+            panel_rect.max,
+        );
+        self.pinned_actions(ui, actions_rect);
     }
+
+    fn pinned_actions(&mut self, ui: &mut Ui, actions_rect: egui::Rect) {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(actions_rect), |ui| {
+            egui::Frame::new()
+                .fill(ui.visuals().panel_fill)
+                .corner_radius(10)
+                .inner_margin(8)
+                .show(ui, |ui| {
+                    ui.set_width((ui.available_width() - 1.0).max(0.0));
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+                    ui.spacing_mut().button_padding = egui::vec2(8.0, 3.0);
+                    ui.spacing_mut().interact_size.y = 24.0;
+                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
+                    self.solve_controls(ui);
+                    ui.horizontal(|ui| {
+                        if ui.small_button("× Exit").clicked() {
+                            self.navigate(Screen::Dashboard);
+                        }
+                        if let Some(session) = &self.session {
+                            ui.hyperlink_to(
+                                "Open on Lichess",
+                                format!("https://lichess.org/training/{}", session.puzzle.id),
+                            );
+                        }
+                    });
+                });
+        });
+    }
+
     fn board_area(&mut self, ui: &mut Ui, size: f32) {
         let played = self.session.as_ref().and_then(|s| {
             self.board.show(
@@ -103,7 +143,7 @@ impl Woodpeck {
         if let Some(uci) = played {
             self.play(&uci);
         }
-        ui.add_space(9.0);
+        ui.add_space(4.0);
         let text = self
             .session
             .as_ref()
@@ -115,13 +155,16 @@ impl Woodpeck {
                 State::Skipped => "Saved to Review. You can come back to it.",
                 State::Invalid => "This puzzle could not be loaded safely.",
             });
-        ui.label(
-            RichText::new(text)
-                .size(12.0)
-                .color(ui.visuals().weak_text_color()),
+        ui.add(
+            egui::Label::new(
+                RichText::new(text)
+                    .size(11.0)
+                    .color(ui.visuals().weak_text_color()),
+            )
+            .truncate(),
         );
     }
-    fn training_panel(&mut self, ui: &mut Ui) {
+    fn training_panel(&mut self, ui: &mut Ui, compact: bool) {
         let Some(session) = &self.session else {
             return;
         };
@@ -136,6 +179,10 @@ impl Woodpeck {
         let puzzle = session.puzzle.clone();
         let position = session.position;
         let color = session.engine.orientation();
+        if compact {
+            self.compact_training_panel(ui, &set, &puzzle, position, color);
+            return;
+        }
         widgets::card(ui).show(ui, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 7.0);
             ui.set_min_width((ui.available_width() - 1.0).max(0.0));
@@ -189,7 +236,7 @@ impl Woodpeck {
             ui.add_space(7.0);
             ui.separator();
             ui.add_space(8.0);
-            self.solve_controls(ui);
+            self.solve_membership_note(ui, false);
         });
         ui.add_space(10.0);
         ui.horizontal(|ui| {
@@ -197,6 +244,60 @@ impl Woodpeck {
             widgets::caption(ui, "T  TIMER");
             widgets::caption(ui, "ENTER  NEXT");
         });
+    }
+    fn compact_training_panel(
+        &mut self,
+        ui: &mut Ui,
+        set: &crate::service::SetSummary,
+        puzzle: &crate::puzzle::Puzzle,
+        position: usize,
+        color: Option<shakmaty::Color>,
+    ) {
+        ui.spacing_mut().item_spacing.y = 4.0;
+        ui.horizontal(|ui| {
+            ui.strong(format!("{} / {}", position + 1, set.set.params.size));
+            ui.label(
+                RichText::new(if self.timer.visible() {
+                    self.timer.display(false)
+                } else {
+                    "—:—".into()
+                })
+                .monospace()
+                .size(21.0),
+            );
+            if ui
+                .small_button("T")
+                .on_hover_text("Show / hide timer")
+                .clicked()
+            {
+                self.timer.toggle_visible();
+            }
+            ui.small(if color == Some(shakmaty::Color::Black) {
+                "Black"
+            } else {
+                "White"
+            });
+        });
+        ui.collapsing(
+            format!(
+                "Cycle {} · {:.0}% · Details",
+                set.latest_cycle.as_ref().map_or(1, |c| c.number),
+                set.stats.accuracy(set.set.params.size)
+            ),
+            |ui| {
+                ui.strong(&set.set.params.name);
+                self.training_stats(ui, set);
+                ui.small(format!("Rating {}", puzzle.rating));
+                if self.settings.show_theme_labels {
+                    ui.horizontal_wrapped(|ui| {
+                        for theme in &puzzle.themes {
+                            ui.small(crate::sets::theme_label(theme));
+                        }
+                    });
+                }
+                self.solve_membership_note(ui, false);
+            },
+        );
     }
     pub(in crate::app) fn timer_row(
         &mut self,
@@ -290,7 +391,6 @@ impl Woodpeck {
             return;
         };
         let state = s.engine.state();
-        let puzzle_id = s.puzzle.id.clone();
         let is_review = s.cycle_id.is_none();
         match state {
             State::Complete => {
@@ -346,7 +446,7 @@ impl Woodpeck {
                 }
             }
             State::Invalid => {
-                ui.heading("Puzzle unavailable");
+                ui.label(RichText::new("Puzzle unavailable").strong().size(17.0));
                 ui.label("This puzzle could not be loaded safely.");
                 if widgets::primary(ui, "Report and continue").clicked() {
                     self.advance();
@@ -365,7 +465,6 @@ impl Woodpeck {
                 }
             }
         }
-        self.solve_membership_note(ui, is_review, &puzzle_id);
     }
     fn cycle_complete(&mut self, ui: &mut Ui) {
         let Some(set) = self
@@ -484,7 +583,7 @@ impl Woodpeck {
         ui.separator();
         ui.add_space(10.0);
     }
-    fn solve_membership_note(&self, ui: &mut Ui, is_review: bool, puzzle_id: &str) {
+    pub(in crate::app) fn solve_membership_note(&self, ui: &mut Ui, is_review: bool) {
         if is_review
             && self.session.as_ref().is_some_and(|s| {
                 matches!(
@@ -509,13 +608,8 @@ impl Woodpeck {
                 "Added to Review",
             );
         }
-        ui.add_space(6.0);
-        if ui.link("Open on Lichess").clicked() {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(format!(
-                "https://lichess.org/training/{puzzle_id}"
-            )));
-        }
     }
+
     fn cycle_comparisons(&self, ui: &mut Ui, set: &crate::service::SetSummary) {
         if let Some(p) = self.progress.get(&set.set.id) {
             for (label, baseline) in [

@@ -20,8 +20,13 @@ configuration in the snapshot. Times are Unix seconds except `updated_at`
 | `review.json` | Puzzle ID to review identity, originating set UIDs, latest addition time, and retained resolution time |
 
 The only supported preferences are the fields in `Settings`: board and piece
-appearance, completion sound, tactical labels, auto advance, color theme, user
-rating, and shuffle preference. Window geometry, audio devices, library/import
+appearance, the sound effects master switch, tactical labels, auto advance, color theme, user
+rating, and shuffle preference. The master switch retains the boolean wire key
+`completion_sound`; legacy `false` disables all effects. Volume defaults to 35%,
+is stored locally as `sound_volume` (0–100), and is excluded from snapshots and
+preference clocks. Imports preserve the local volume. This keeps schema 3
+compatible with older clients and lets each device use its own listening level.
+Window geometry, audio devices, library/import
 state, data paths, and all sync configuration stay local. The puzzle library is
 excluded; each set includes its own complete puzzle data (`id`, `fen`, `moves`,
 `rating`, `rd`, `popularity`, `nb_plays`, `themes`). A second computer can train

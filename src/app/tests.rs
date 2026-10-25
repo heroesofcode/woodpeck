@@ -821,3 +821,133 @@ fn set_creation_queues_once_and_preserves_library_snapshot() {
     assert_eq!(app.library.count, u64::MAX);
     assert_eq!(app.screen, Screen::Training);
 }
+
+fn check_visible_action_text(
+    shape: &egui::epaint::Shape,
+    clip: egui::Rect,
+    viewport: egui::Rect,
+    expected: &[&str],
+    found: &mut Vec<String>,
+) {
+    match shape {
+        egui::epaint::Shape::Vec(shapes) => {
+            for shape in shapes {
+                check_visible_action_text(shape, clip, viewport, expected, found);
+            }
+        }
+        egui::epaint::Shape::Text(text) if expected.contains(&text.galley.job.text.as_str()) => {
+            let rect = text.galley.rect.translate(text.pos.to_vec2());
+            assert!(
+                clip.expand(1.0).contains_rect(rect),
+                "clipped {}: {rect:?} by {clip:?}",
+                text.galley.job.text
+            );
+            assert!(
+                viewport.contains_rect(rect),
+                "offscreen {}: {rect:?}",
+                text.galley.job.text
+            );
+            found.push(text.galley.job.text.clone());
+        }
+        _ => {}
+    }
+}
+
+fn feedback_engine(state: State, walkthrough_complete: bool) -> Engine {
+    let mut puzzle = crate::puzzle::fixture();
+    if state == State::Invalid {
+        puzzle.fen.clear();
+    }
+    let mut engine = Engine::new(&puzzle, Duration::ZERO, false);
+    engine.update(Duration::from_secs(1));
+    match state {
+        State::Complete => demo::solve(&puzzle, &mut engine),
+        State::Skipped => engine.skip().unwrap(),
+        State::FailedReview => {
+            engine.play("h5f6", Duration::from_secs(1)).unwrap();
+            engine.update(Duration::from_secs(2));
+            let walkthrough = engine.walkthrough().unwrap();
+            if walkthrough_complete {
+                while !walkthrough.is_complete() {
+                    walkthrough.next();
+                }
+            }
+        }
+        _ => {}
+    }
+    engine
+}
+
+#[test]
+fn solving_actions_are_visible_in_the_viewport_for_every_size_and_feedback_state() {
+    let ctx = egui::Context::default();
+    let mut app = Woodpeck::new(
+        &ctx,
+        demo::service().unwrap(),
+        PathBuf::from("/tmp/demo.db"),
+        None,
+    );
+    settle(&mut app);
+    app.navigate(Screen::Training);
+    settle(&mut app);
+    for (width, height) in [
+        (1280.0, 800.0),
+        (1920.0, 1080.0),
+        (1366.0, 768.0),
+        (900.0, 600.0),
+        (600.0, 1000.0),
+        (360.0, 640.0),
+    ] {
+        for (state, walkthrough_complete) in [
+            (State::PlayerTurn, false),
+            (State::Complete, false),
+            (State::FailedReview, false),
+            (State::FailedReview, true),
+            (State::Skipped, false),
+            (State::Invalid, false),
+        ] {
+            for save_error in [false, true] {
+                app.session.as_mut().unwrap().engine = feedback_engine(state, walkthrough_complete);
+                app.record_error = save_error;
+                let viewport =
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
+                let mut expected = vec!["× Exit", "Open on Lichess"];
+                expected.push(match state {
+                    State::Complete | State::Skipped => "Next puzzle  >",
+                    State::FailedReview => "Skip solution & next puzzle",
+                    State::Invalid => "Report and continue",
+                    _ => "Skip puzzle",
+                });
+                if save_error {
+                    expected.push("Retry saving");
+                }
+                for _ in 0..3 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(viewport),
+                            ..Default::default()
+                        },
+                        |ui| app.draw(ui),
+                    );
+                    let mut found = Vec::new();
+                    for shape in &output.shapes {
+                        check_visible_action_text(
+                            &shape.shape,
+                            shape.clip_rect,
+                            viewport,
+                            &expected,
+                            &mut found,
+                        );
+                    }
+                    for text in &expected {
+                        assert!(
+                            found.iter().any(|s| s == text),
+                            "missing {text} at {width}x{height}, {state:?}"
+                        );
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
+}

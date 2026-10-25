@@ -62,6 +62,7 @@ pub struct Engine {
     walkthrough: Option<Walkthrough>,
     moves_played: Vec<String>,
     allow_any_final_checkmate: bool,
+    sounds: Vec<crate::sound::Event>,
 }
 impl Engine {
     pub fn new(puzzle: &Puzzle, now: Duration, allow_any_final_checkmate: bool) -> Self {
@@ -80,6 +81,7 @@ impl Engine {
             walkthrough: None,
             moves_played: Vec::new(),
             allow_any_final_checkmate,
+            sounds: Vec::new(),
         }
     }
     /// Rebase a prepared, still-loading engine when it becomes visible.
@@ -110,6 +112,10 @@ impl Engine {
     }
     pub fn orientation(&self) -> Option<Color> {
         self.line.as_ref().map(|l| !l.positions[0].turn())
+    }
+    /// Consume effects exactly once, independent of rendering and animation frames.
+    pub fn take_sounds(&mut self) -> impl Iterator<Item = crate::sound::Event> + '_ {
+        self.sounds.drain(..)
     }
     pub fn moves_played(&self) -> &[String] {
         &self.moves_played
@@ -143,6 +149,11 @@ impl Engine {
         }
         if !self.opponent_applied {
             if let Some(line) = &self.line {
+                if let Some(position) = &self.position
+                    && let Ok(m) = line.moves[self.index].to_move(position)
+                {
+                    self.sounds.push(crate::sound::Event::from_move(m));
+                }
                 self.index += 1;
                 self.position = Some(line.positions[self.index].clone());
             }
@@ -156,6 +167,7 @@ impl Engine {
                 .is_some_and(|l| self.index == l.moves.len())
                 && !self.moves_played.is_empty()
             {
+                self.sounds.push(crate::sound::Event::Solved);
                 State::Complete
             } else {
                 State::PlayerTurn
@@ -177,12 +189,14 @@ impl Engine {
                 && self.index + 1 == line.moves.len()
                 && line.positions[self.index + 1].is_checkmate()
                 && after.is_checkmate());
+        self.sounds.push(crate::sound::Event::from_move(m));
         self.moves_played.push(input.to_owned());
         self.position = Some(after);
         if correct {
             self.index += 1;
             if self.index == line.moves.len() {
                 self.state = State::Complete;
+                self.sounds.push(crate::sound::Event::Solved);
             } else {
                 self.state = State::OpponentTurn;
                 self.opponent_applied = false;
@@ -194,6 +208,7 @@ impl Engine {
                 cursor: 0,
             });
             self.state = State::Incorrect;
+            self.sounds.push(crate::sound::Event::Wrong);
             self.deadline = now + ANIMATION;
         }
         Ok(())
@@ -403,5 +418,66 @@ mod special_move_tests {
         engine.play("h5g3", Duration::from_secs(101)).unwrap();
         engine.update(Duration::from_secs(200));
         assert_eq!(engine.state(), State::PlayerTurn);
+    }
+}
+
+#[cfg(test)]
+mod sound_tests {
+    use super::*;
+    use crate::{puzzle::fixture, sound::Event};
+    #[test]
+    fn actual_moves_emit_once_and_capture_then_solved_is_distinct() {
+        let mut e = Engine::new(&fixture(), Duration::ZERO, false);
+        e.update(Duration::from_secs(1));
+        assert_eq!(e.take_sounds().collect::<Vec<_>>(), [Event::Move]);
+        assert!(e.play("h5h1", Duration::from_secs(1)).is_err());
+        assert_eq!(e.take_sounds().count(), 0);
+        e.play("h5g3", Duration::from_secs(1)).unwrap();
+        assert_eq!(e.take_sounds().collect::<Vec<_>>(), [Event::Move]);
+        e.update(Duration::from_secs(2));
+        assert_eq!(e.take_sounds().collect::<Vec<_>>(), [Event::Move]);
+        e.play("g3f1", Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            e.take_sounds().collect::<Vec<_>>(),
+            [Event::Capture, Event::Solved]
+        );
+        e.update(Duration::from_secs(3));
+        assert_eq!(e.take_sounds().count(), 0);
+    }
+    #[test]
+    fn en_passant_and_opponent_captures_use_capture_effect() {
+        let mut puzzle = fixture();
+        puzzle.fen = "7k/8/8/8/3p4/8/4P3/7K w - - 0 1".into();
+        puzzle.moves = "e2e4 d4e3 h1g1".into();
+        let mut e = Engine::new(&puzzle, Duration::ZERO, false);
+        e.update(Duration::from_secs(1));
+        assert_eq!(e.take_sounds().collect::<Vec<_>>(), [Event::Move]);
+        e.play("d4e3", Duration::from_secs(1)).unwrap();
+        assert_eq!(e.take_sounds().collect::<Vec<_>>(), [Event::Capture]);
+        e.update(Duration::from_secs(2));
+        assert_eq!(
+            e.take_sounds().collect::<Vec<_>>(),
+            [Event::Move, Event::Solved]
+        );
+        puzzle.fen = "7k/8/8/8/8/4r3/4P3/7K b - - 0 1".into();
+        puzzle.moves = "e3e2 h1g1".into();
+        let mut e = Engine::new(&puzzle, Duration::ZERO, false);
+        e.update(Duration::from_secs(1));
+        assert_eq!(e.take_sounds().collect::<Vec<_>>(), [Event::Capture]);
+    }
+    #[test]
+    fn wrong_effect_is_not_repeated_during_feedback_or_walkthrough() {
+        let mut e = Engine::new(&fixture(), Duration::ZERO, false);
+        e.update(Duration::from_secs(1));
+        e.take_sounds().for_each(drop);
+        e.play("h5f6", Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            e.take_sounds().collect::<Vec<_>>(),
+            [Event::Move, Event::Wrong]
+        );
+        e.update(Duration::from_secs(2));
+        e.walkthrough().unwrap().next();
+        assert_eq!(e.take_sounds().count(), 0);
+        assert_eq!(e.state(), State::FailedReview);
     }
 }
