@@ -90,16 +90,20 @@ impl Store {
         let tx = self.connection.unchecked_transaction()?;
         let previous = serde_json::to_value(self.settings()?)?;
         let values = serde_json::to_value(settings)?;
+        let mut synced_changed = false;
         for (key, value) in values
             .as_object()
             .ok_or_else(|| StoreError::InvalidData("Invalid preferences.".into()))?
         {
             if key != "sound_volume" && previous.get(key) != Some(value) {
                 tx.execute("INSERT INTO sync_fields(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=max(sync_fields.updated_at+1,excluded.updated_at)",rusqlite::params![key,value.to_string(),chrono::Utc::now().timestamp_millis()])?;
+                synced_changed = true;
             }
         }
         self.set_setting("preferences", &serde_json::to_string(settings)?)?;
-        tx.execute("UPDATE sync_changes SET generation=generation+1", [])?;
+        if synced_changed {
+            tx.execute("UPDATE sync_changes SET generation=generation+1", [])?;
+        }
         tx.commit()?;
         Ok(())
     }
