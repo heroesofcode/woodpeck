@@ -33,22 +33,19 @@ impl Woodpeck {
             }
             return;
         };
-        let p = match self.service.progress(id) {
-            Ok(p) => p,
-            Err(e) => {
-                self.error(e);
-                return;
-            }
+        let Some(p) = self.progress.get(&id) else {
+            ui.spinner();
+            return;
         };
         let total = self
             .sets
             .iter()
             .find(|s| s.set.id == id)
             .map_or(0, |s| s.set.params.size);
-        self.progress_comparison(ui, &p);
-        Self::progress_tiles(ui, &p, total);
-        self.progress_charts(ui, &p, total);
-        self.progress_details(ui, &p);
+        self.progress_comparison(ui, p);
+        Self::progress_tiles(ui, p, total);
+        self.progress_charts(ui, p, total);
+        self.progress_details(ui, p);
     }
     fn progress_comparison(&self, ui: &mut Ui, p: &SetProgress) {
         let accent = style::color(self.palette.semantic().accent);

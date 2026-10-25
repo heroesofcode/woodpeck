@@ -1,7 +1,11 @@
 //! Native, responsive desktop interface over `AppService`.
+mod background;
+#[doc(hidden)]
+pub mod bench_support;
 mod board;
 mod charts;
 mod demo;
+mod frame_stats;
 mod library;
 mod pieces;
 mod screens;
@@ -12,7 +16,7 @@ mod widgets;
 use crate::{
     puzzle::{Engine, Outcome, Puzzle, State},
     review::{ReviewCard, ReviewSort},
-    service::{AppService, Event, Job, JobOutput, SetCreation, SetSummary, TrainingPosition},
+    service::{AppService, Event, Job, JobOutput, SetCreation, SetSummary},
     sets::BuilderParams,
     settings::Settings,
     stats::{Attempt, AttemptKind},
@@ -88,6 +92,19 @@ struct Session {
 }
 pub struct Woodpeck {
     service: AppService,
+    ctx: egui::Context,
+    background: Vec<background::Pending>,
+    loading: bool,
+    creating: bool,
+    library_dirty: bool,
+    load_generation: u64,
+    saving: bool,
+    record_error: bool,
+    advance_pending: bool,
+    prepared: Option<background::PreparedTraining>,
+    all_reviews: Vec<ReviewCard>,
+    motivation: crate::motivation::Motivation,
+    progress: std::collections::BTreeMap<i64, crate::service::SetProgress>,
     library: library::Library,
     settings: Settings,
     screen: Screen,
@@ -119,6 +136,8 @@ pub struct Woodpeck {
     palette: Palette,
     screenshot: Option<Screenshot>,
     frames: u32,
+    frame_stats: frame_stats::FrameStats,
+    frame_started: Instant,
     capture_requested: bool,
     capture_result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
     clearing_card: Option<(ReviewCard, Duration)>,
@@ -130,28 +149,34 @@ impl Woodpeck {
         data_path: PathBuf,
         screenshot: Option<Screenshot>,
     ) -> Self {
-        let settings = service.settings().unwrap_or_default();
+        let wake_ctx = ctx.clone();
+        service.set_waker(move || wake_ctx.request_repaint());
+        let settings = Settings::default();
         let sync_remote = service.sync_status().remote;
         let origin = Instant::now();
-        let theme = style::ThemeWatcher::new(settings.color_theme);
+        let theme = style::ThemeWatcher::new(settings.color_theme, ctx.clone());
         let palette = crate::theme::select(settings.color_theme, None);
         style::fonts(ctx);
         style::apply(ctx, &palette);
         let clock = FrameClock(Rc::new(Cell::new(Duration::ZERO)));
-        let screen = screenshot.as_ref().map_or_else(
-            || {
-                if service.needs_onboarding().unwrap_or(true) {
-                    Screen::Welcome
-                } else {
-                    Screen::Dashboard
-                }
-            },
-            |s| s.screen,
-        );
+        let screen = screenshot.as_ref().map_or(Screen::Dashboard, |s| s.screen);
         let mut builder = crate::sets::PRESETS[0].builder(settings.user_rating);
         builder.shuffle_each_cycle = settings.shuffle_each_cycle;
         let mut app = Self {
             service,
+            ctx: ctx.clone(),
+            background: vec![],
+            loading: false,
+            creating: false,
+            library_dirty: false,
+            load_generation: 0,
+            saving: false,
+            record_error: false,
+            advance_pending: false,
+            prepared: None,
+            all_reviews: vec![],
+            motivation: crate::motivation::Motivation::default(),
+            progress: std::collections::BTreeMap::new(),
             library: library::Library::default(),
             settings,
             screen,
@@ -186,11 +211,13 @@ impl Woodpeck {
             palette,
             screenshot,
             frames: 0,
+            frame_stats: frame_stats::FrameStats::default(),
+            frame_started: Instant::now(),
             capture_requested: false,
             capture_result: None,
             clearing_card: None,
         };
-        app.refresh();
+        app.initialize();
         if app.screenshot.is_some() {
             demo::welcome(&mut app, screen);
         }
@@ -215,39 +242,11 @@ impl Woodpeck {
     fn error(&mut self, error: impl std::fmt::Display) {
         self.toast = Some((error.to_string(), Instant::now()));
     }
-    fn refresh(&mut self) {
-        self.library.count = self.service.puzzle_count().unwrap_or(0);
-        self.library.bands = self.service.rating_histogram().unwrap_or_default();
-        match self.service.list_sets() {
-            Ok(sets) => self.sets = sets,
-            Err(e) => self.error(e),
-        }
-        match self.service.review_queue(
-            (!self.review_theme.is_empty()).then_some(self.review_theme.as_str()),
-            self.review_sort,
-        ) {
-            Ok(r) => self.reviews = r,
-            Err(e) => self.error(e),
-        }
-        self.pending = self.service.review_count().unwrap_or(0);
-        self.cycle_marks = self
-            .session
-            .as_ref()
-            .and_then(|s| s.cycle_id)
-            .and_then(|id| self.service.cycle_outcomes(id).ok())
-            .unwrap_or_default();
-        if self
-            .selected_set
-            .is_none_or(|id| !self.sets.iter().any(|s| s.set.id == id))
-        {
-            self.selected_set = self.sets.first().map(|s| s.set.id);
-        }
-        if let Some(screenshot) = &self.screenshot {
-            let screen = screenshot.screen;
-            demo::welcome(self, screen);
-        }
-    }
     fn navigate(&mut self, screen: Screen) {
+        if self.screen != screen && self.loading {
+            self.load_generation += 1;
+            self.loading = false;
+        }
         self.screen = screen;
         if screen == Screen::Training && self.session.as_ref().is_none_or(|s| s.cycle_id.is_none())
         {
@@ -259,6 +258,22 @@ impl Woodpeck {
     }
     fn load(&mut self, puzzle: Puzzle, set_id: i64, cycle_id: Option<i64>, position: usize) {
         let engine = Engine::new(&puzzle, self.now(), true);
+        self.load_engine(puzzle, engine, set_id, cycle_id, position);
+    }
+    fn load_engine(
+        &mut self,
+        puzzle: Puzzle,
+        engine: Engine,
+        set_id: i64,
+        cycle_id: Option<i64>,
+        position: usize,
+    ) {
+        self.load_generation += 1;
+        self.saving = false;
+        self.record_error = false;
+        self.advance_pending = false;
+        self.prepared = None;
+        self.loading = false;
         self.session = Some(Session {
             puzzle,
             engine,
@@ -271,15 +286,7 @@ impl Woodpeck {
         self.timer.reset();
         self.board.reset();
         self.clearing_card = None;
-    }
-    fn load_training(&mut self, p: TrainingPosition) {
-        self.selected_set = Some(p.cycle.set_id);
-        if let Some(puzzle) = p.puzzle {
-            self.load(puzzle, p.cycle.set_id, Some(p.cycle.id), p.position);
-        } else {
-            self.session = None;
-        }
-        self.refresh();
+        self.ctx.request_repaint();
     }
     fn resume_selected(&mut self) {
         if let Some(id) = self.selected_set {
@@ -289,13 +296,9 @@ impl Woodpeck {
                 self.board.reset();
                 return;
             }
-            match self
-                .service
-                .start_or_resume_cycle(id, chrono::Local::now().timestamp())
-            {
-                Ok(p) => self.load_training(p),
-                Err(e) => self.error(e),
-            }
+            self.request_training(move |service| {
+                service.start_or_resume_cycle(id, chrono::Local::now().timestamp())
+            });
         }
     }
     fn select_first_review(&mut self) {
@@ -311,14 +314,25 @@ impl Woodpeck {
         }
     }
     fn advance(&mut self) {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.engine.outcome().is_none())
+        {
+            return;
+        }
+        if self.saving || self.session.as_ref().is_some_and(|s| !s.recorded) {
+            self.advance_pending = true;
+            return;
+        }
         if self.screen == Screen::Review {
-            self.refresh();
             self.select_first_review();
-        } else if let Some(id) = self.session.as_ref().and_then(|s| s.cycle_id) {
-            match self.service.current_puzzle(id) {
-                Ok(p) => self.load_training(p),
-                Err(e) => self.error(e),
-            }
+        } else if let Some(prepared) = self.prepared.take() {
+            self.load_prepared(prepared);
+        } else if !self.loading
+            && let Some(id) = self.session.as_ref().and_then(|s| s.cycle_id)
+        {
+            self.request_training(move |service| service.current_puzzle(id));
         }
     }
     fn action(&mut self, action: shortcuts::Action) {
@@ -354,11 +368,15 @@ impl Woodpeck {
             }
         }
         self.clock.0.set(now);
+        self.ctx.request_repaint();
     }
     fn play(&mut self, uci: &str) {
         let now = self.now();
-        if let Some(s) = &mut self.session {
-            let _ = s.engine.play(uci, now);
+        if let Some(s) = &mut self.session
+            && s.engine.play(uci, now).is_ok()
+        {
+            self.board.player_moved();
+            self.ctx.request_repaint();
         }
     }
     fn record(&mut self) {
@@ -385,64 +403,101 @@ impl Woodpeck {
             moves_played: s.engine.moves_played().to_vec(),
             created_at: chrono::Local::now().timestamp(),
         };
-        match self.service.record_attempt(&attempt) {
-            Ok(_) => {
-                let now = self.now();
-                if let Some(s) = &mut self.session {
-                    s.recorded = true;
-                    s.finished_at = Some(now);
-                }
-                if attempt.kind == AttemptKind::Review {
-                    if outcome == Outcome::Correct {
-                        self.clearing_card = self
+        if self.saving || self.record_error {
+            return;
+        }
+        self.saving = true;
+        let generation = self.load_generation;
+        let now = self.now();
+        if let Some(s) = &mut self.session {
+            s.finished_at = Some(now);
+        }
+        let saved = attempt.clone();
+        self.background(
+            move |service| {
+                service.record_attempt(&saved)?;
+                let prepared = saved
+                    .cycle_id
+                    .map(|id| {
+                        service
+                            .current_puzzle(id)
+                            .map(background::PreparedTraining::new)
+                    })
+                    .transpose();
+                let view = background::ViewData::read(service, saved.cycle_id, false);
+                Ok((prepared, view))
+            },
+            move |app, result| {
+                match result {
+                    Ok((prepared, view)) => {
+                        // Saving still updates shared badges after navigation, but cannot replace a newer board.
+                        let clearing = app
                             .reviews
                             .iter()
                             .find(|c| {
                                 c.item.set_id == attempt.set_id && c.puzzle.id == attempt.puzzle_id
                             })
-                            .cloned()
-                            .map(|c| (c, now));
-                    }
-                    self.toast = Some((
-                        if outcome == Outcome::Correct {
-                            "Cleared from Review"
-                        } else {
-                            "Still pending"
+                            .cloned();
+                        match view {
+                            Ok(view) => app.apply_view(view),
+                            Err(error) => app.error(error),
                         }
-                        .into(),
-                        Instant::now(),
-                    ));
-                } else if outcome.is_miss() {
-                    self.toast = Some(("Added to Review".into(), Instant::now()));
+                        if generation != app.load_generation {
+                            return;
+                        }
+                        app.saving = false;
+                        if let Some(s) = &mut app.session {
+                            s.recorded = true;
+                        }
+                        match prepared {
+                            Ok(prepared) => app.prepared = prepared,
+                            Err(error) => app.error(error),
+                        }
+                        app.record_feedback(&attempt, clearing);
+                        if app.advance_pending {
+                            app.advance();
+                        }
+                    }
+                    Err(error) => {
+                        if generation == app.load_generation {
+                            app.saving = false;
+                            app.record_error = true;
+                        }
+                        app.error(error);
+                    }
                 }
-                self.refresh();
+            },
+        );
+    }
+    fn record_feedback(&mut self, attempt: &Attempt, clearing: Option<ReviewCard>) {
+        if attempt.kind == AttemptKind::Review {
+            if attempt.outcome == Outcome::Correct {
+                self.clearing_card = clearing.map(|c| (c, self.now()));
             }
-            Err(e) => self.error(e),
+            self.toast = Some((
+                if attempt.outcome == Outcome::Correct {
+                    "Cleared from Review"
+                } else {
+                    "Still pending"
+                }
+                .into(),
+                Instant::now(),
+            ));
+        } else if attempt.outcome.is_miss() {
+            self.toast = Some(("Added to Review".into(), Instant::now()));
         }
     }
     fn poll(&mut self) {
+        self.poll_background();
         if self.service.poll_sync() {
             self.refresh();
+            self.reload_settings();
             if let Some(session) = &self.session
                 && !session.recorded
+                && !self.saving
+                && let Some(cycle) = session.cycle_id
             {
-                if let Some(cycle) = session.cycle_id {
-                    if let Ok(position) = self.service.current_puzzle(cycle)
-                        && position.puzzle.as_ref().map(|p| &p.id) != Some(&session.puzzle.id)
-                    {
-                        self.load_training(position);
-                    }
-                } else if !self.reviews.iter().any(|card| {
-                    card.puzzle.id == session.puzzle.id && card.item.set_id == session.set_id
-                }) {
-                    self.select_first_review();
-                }
-            }
-            if let Ok(settings) = self.service.settings()
-                && settings != self.settings
-            {
-                self.theme = style::ThemeWatcher::new(settings.color_theme);
-                self.settings = settings;
+                self.request_training(move |service| service.current_puzzle(cycle));
             }
         }
 
@@ -450,6 +505,7 @@ impl Woodpeck {
             match event {
                 Event::Started { .. } => self.status = "Working in the background…".into(),
                 Event::ImportProgress { id, progress } => {
+                    self.library_dirty |= progress.accepted > 0;
                     if self.library.job.as_ref().is_some_and(|job| job.id == id) {
                         self.library.progress = progress;
                     }
@@ -473,10 +529,18 @@ impl Woodpeck {
                 Event::FetchProgress {
                     batches, inserted, ..
                 } => {
+                    self.library_dirty |= inserted > 0;
                     self.status =
                         format!("Fetching from Lichess · {batches} batches · {inserted} puzzles");
                 }
                 Event::Finished { id, result } => {
+                    let library_changed = self.library_dirty
+                        || matches!(
+                            &result,
+                            Ok(JobOutput::Imported(_) | JobOutput::Daily(_) | JobOutput::Puzzle(_))
+                        )
+                        || matches!(&result, Ok(JobOutput::Fetched { inserted }) if *inserted > 0);
+                    self.library_dirty = false;
                     if self.library.job.as_ref().is_some_and(|job| job.id == id) {
                         self.library.job = None;
                         match &result {
@@ -502,7 +566,7 @@ impl Woodpeck {
                         Ok(_) => {
                             self.status = format!(
                                 "{} puzzles available offline",
-                                widgets::grouped_count(self.service.puzzle_count().unwrap_or(0))
+                                widgets::grouped_count(self.library.count)
                             );
                         }
                         Err(e) => {
@@ -510,7 +574,12 @@ impl Woodpeck {
                             self.error(e);
                         }
                     }
-                    self.refresh();
+                    if library_changed {
+                        // Source jobs can commit rows even when cancelled or failing.
+                        self.refresh_library();
+                    } else {
+                        self.refresh();
+                    }
                 }
             }
         }
@@ -579,9 +648,9 @@ impl Woodpeck {
         }
     }
 }
-impl eframe::App for Woodpeck {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.clock.0.set(self.origin.elapsed());
+impl Woodpeck {
+    fn tick(&mut self, ctx: &egui::Context, time: Duration) {
+        self.clock.0.set(time);
         let now = self.now();
         if let Some(p) = self.theme.poll() {
             style::apply(ctx, &p);
@@ -589,6 +658,9 @@ impl eframe::App for Woodpeck {
         }
         self.poll();
         let solving = matches!(self.screen, Screen::Training | Screen::Review);
+        if solving && let Some(session) = &mut self.session {
+            session.engine.update(now);
+        }
         let conditions = ctx.input(|i| TimerConditions {
             player_turn: self
                 .session
@@ -601,29 +673,52 @@ impl eframe::App for Woodpeck {
         });
         self.timer.set_conditions(conditions);
         if solving {
-            if let Some(s) = &mut self.session {
-                s.engine.update(now);
-            }
             self.record();
         }
         if self.settings.auto_advance
             && solving
             && self.session.as_ref().is_some_and(|s| {
                 s.engine.state() == State::Complete
+                    && s.recorded
+                    && !self.loading
                     && s.finished_at
-                        .is_some_and(|t| now.saturating_sub(t) > Duration::from_millis(650))
+                        .is_some_and(|t| now.saturating_sub(t) > Duration::from_millis(350))
             })
         {
             self.advance();
         }
-        ctx.request_repaint_after(if solving || self.service.is_busy() {
-            Duration::from_millis(100)
-        } else {
-            Duration::from_secs(1)
-        });
+        if solving && let Some(s) = &self.session {
+            if let Some(deadline) = s.engine.next_deadline() {
+                ctx.request_repaint_after(deadline.saturating_sub(now));
+            }
+            if self.settings.auto_advance
+                && s.engine.state() == State::Complete
+                && s.recorded
+                && !self.loading
+                && let Some(then) = s.finished_at
+            {
+                ctx.request_repaint_after((then + Duration::from_millis(351)).saturating_sub(now));
+            }
+            if self.timer.visible() && s.engine.state() == State::PlayerTurn && conditions.running()
+            {
+                ctx.request_repaint_after(if self.screen == Screen::Review {
+                    Duration::from_millis(100)
+                } else {
+                    Duration::from_secs(1)
+                });
+            }
+        }
     }
+}
+impl eframe::App for Woodpeck {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.frame_started = Instant::now();
+        self.tick(ctx, self.origin.elapsed());
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.draw(ui);
+        self.frame_stats.record(self.frame_started.elapsed());
     }
 }
 pub fn run(screenshot: Option<Screenshot>) -> Result<(), Box<dyn std::error::Error>> {
@@ -634,6 +729,7 @@ pub fn run(screenshot: Option<Screenshot>) -> Result<(), Box<dyn std::error::Err
         AppService::open(&path)?
     };
     let sync_shutdown = service.sync_shutdown();
+    let local_shutdown = service.local_shutdown();
     let capture = screenshot.is_some();
     let (sender, receiver) = std::sync::mpsc::channel();
     let size = screenshot.as_ref().map_or([1280.0, 820.0], |s| s.size);
@@ -643,6 +739,10 @@ pub fn run(screenshot: Option<Screenshot>) -> Result<(), Box<dyn std::error::Err
             .with_app_id("woodpeck")
             .with_inner_size(size)
             .with_min_inner_size([340.0, 480.0]),
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -654,6 +754,7 @@ pub fn run(screenshot: Option<Screenshot>) -> Result<(), Box<dyn std::error::Err
             Ok(Box::new(app))
         }),
     );
+    local_shutdown.finish();
     if let Some(shutdown) = sync_shutdown {
         shutdown.finish();
     }

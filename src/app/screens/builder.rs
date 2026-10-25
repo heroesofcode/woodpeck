@@ -370,15 +370,18 @@ impl Woodpeck {
         ));
     }
     fn builder_create(&mut self, ui: &mut Ui) {
-        if widgets::primary(ui, "Create Set  >").clicked() {
-            let now = chrono::Local::now().timestamp();
-            match self
-                .service
-                .create_set(&self.builder, now.unsigned_abs(), now)
-            {
-                Ok(c) => self.created(c),
-                Err(e) => self.error(e),
-            }
+        if ui
+            .add_enabled_ui(!self.creating, |ui| widgets::primary(ui, "Create Set  >"))
+            .inner
+            .clicked()
+        {
+            self.create_set();
+        }
+        if self.creating {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Building your set…");
+            });
         }
         if let Some(c) = &self.creation
             && c.set_id.is_none()
@@ -428,5 +431,26 @@ impl Woodpeck {
                     .text("Background import / fetch"),
             );
         }
+    }
+    pub(in crate::app) fn create_set(&mut self) {
+        if self.creating {
+            return;
+        }
+        self.creating = true;
+        let now = chrono::Local::now().timestamp();
+        let params = self.builder.clone();
+        self.background(
+            move |service| service.create_set(&params, now.unsigned_abs(), now),
+            |app, result| {
+                app.creating = false;
+                match result {
+                    Ok(creation) => {
+                        app.refresh();
+                        app.created(creation);
+                    }
+                    Err(error) => app.error(error),
+                }
+            },
+        );
     }
 }

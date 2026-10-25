@@ -1,3 +1,4 @@
+use super::local::EventSender;
 use super::{Command, Event, Job, JobOutput, Result, SharedStore, create_set, lock};
 use crate::{
     sets::generate,
@@ -11,7 +12,7 @@ use std::{io::Cursor, sync::mpsc};
 pub(super) fn run(
     store: &SharedStore,
     commands: mpsc::Receiver<Command>,
-    events: &mpsc::Sender<Event>,
+    events: &EventSender,
     mut fetcher: Box<dyn PuzzleFetcher>,
 ) {
     for command in commands {
@@ -35,7 +36,7 @@ fn execute(
     job: Job,
     cancel: &CancelFlag,
     id: u64,
-    events: &mpsc::Sender<Event>,
+    events: &EventSender,
     fetcher: &mut dyn PuzzleFetcher,
 ) -> Result<JobOutput> {
     cancel.check()?;

@@ -102,10 +102,13 @@ pub fn fonts(ctx: &egui::Context) {
 pub struct ThemeWatcher {
     receiver: std::sync::mpsc::Receiver<Palette>,
     last: Option<Palette>,
+    _alive: std::sync::Arc<()>,
 }
 impl ThemeWatcher {
-    pub fn new(choice: crate::settings::ColorTheme) -> Self {
+    pub fn new(choice: crate::settings::ColorTheme, ctx: egui::Context) -> Self {
         let (sender, receiver) = std::sync::mpsc::channel();
+        let alive = std::sync::Arc::new(());
+        let weak = std::sync::Arc::downgrade(&alive);
         let _ = std::thread::Builder::new()
             .name("woodpeck-theme".into())
             .spawn(move || {
@@ -114,12 +117,20 @@ impl ThemeWatcher {
                 let mut poller = crate::theme::ThemePoller::new(home, choice);
                 let origin = std::time::Instant::now();
                 let mut palette = crate::theme::select(choice, None);
+                let mut sent = None;
                 loop {
                     if let Some(next) = poller.poll(origin.elapsed()) {
                         palette = next;
                     }
-                    if sender.send(palette.clone()).is_err() {
+                    if weak.upgrade().is_none() {
                         break;
+                    }
+                    if sent.as_ref() != Some(&palette) {
+                        if sender.send(palette.clone()).is_err() {
+                            break;
+                        }
+                        sent = Some(palette.clone());
+                        ctx.request_repaint();
                     }
                     std::thread::sleep(std::time::Duration::from_secs(2));
                 }
@@ -127,6 +138,7 @@ impl ThemeWatcher {
         Self {
             receiver,
             last: None,
+            _alive: alive,
         }
     }
     pub fn poll(&mut self) -> Option<Palette> {

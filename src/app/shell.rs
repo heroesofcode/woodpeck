@@ -235,7 +235,7 @@ impl Woodpeck {
     }
     fn streak(&mut self, ui: &mut Ui) {
         let accent = style::color(self.palette.semantic().accent);
-        let m = self.service.motivation().unwrap_or_default();
+        let m = &self.motivation;
         widgets::caption(ui, "KEEP YOUR RHYTHM");
         let today = i64::from(chrono::Datelike::num_days_from_ce(
             &chrono::Local::now().date_naive(),
@@ -282,6 +282,7 @@ impl Woodpeck {
         if let Some((message, then)) = &self.toast
             && then.elapsed() < Duration::from_secs(5)
         {
+            ctx.request_repaint_after(Duration::from_secs(5).saturating_sub(then.elapsed()));
             egui::Area::new(egui::Id::unique("toast"))
                 .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -18.0])
                 .order(egui::Order::Foreground)
@@ -318,14 +319,18 @@ impl Woodpeck {
                         )
                         .clicked()
                     {
-                        match self.service.delete_set(id) {
-                            Ok(()) => {
-                                self.delete = None;
-                                self.session = None;
-                                self.refresh();
-                            }
-                            Err(e) => self.error(e),
-                        }
+                        self.background(
+                            move |service| service.delete_set(id),
+                            |app, result| match result {
+                                Ok(()) => {
+                                    app.delete = None;
+                                    app.session = None;
+                                    app.load_generation += 1;
+                                    app.refresh();
+                                }
+                                Err(error) => app.error(error),
+                            },
+                        );
                     }
                 });
             });

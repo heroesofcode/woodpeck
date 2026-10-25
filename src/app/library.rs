@@ -21,6 +21,8 @@ pub(super) struct Library {
     pub job: Option<JobHandle>,
     pub progress: ImportProgress,
     pub count: u64,
+    pub size: Option<LibrarySize>,
+    pub imported_at: Option<i64>,
     pub bands: [u64; RATING_BANDS],
     pub message: String,
     pub entered: Instant,
@@ -33,6 +35,8 @@ impl Default for Library {
             job: None,
             progress: ImportProgress::default(),
             count: 0,
+            size: None,
+            imported_at: None,
             bands: [0; RATING_BANDS],
             message: String::new(),
             entered: Instant::now(),
@@ -50,13 +54,15 @@ impl Woodpeck {
         self.library.entered = Instant::now();
     }
     fn finish_onboarding(&mut self) -> bool {
-        match self.service.set_local_setting("onboarding_done", "true") {
-            Ok(()) => true,
-            Err(e) => {
-                self.error(e);
-                false
-            }
-        }
+        self.background(
+            |service| service.set_local_setting("onboarding_done", "true"),
+            |app, result| {
+                if let Err(error) = result {
+                    app.error(error);
+                }
+            },
+        );
+        true
     }
     pub(super) fn start_library(&mut self, size: LibrarySize) {
         if !self.library.can_start() || !self.finish_onboarding() {

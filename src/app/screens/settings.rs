@@ -24,11 +24,17 @@ impl Woodpeck {
         self.export_settings(ui);
         ui.add_space(8.0);
         if before != self.settings {
-            if let Err(e) = self.service.set_settings(&self.settings) {
-                self.error(e);
-            }
+            let settings = self.settings.clone();
+            self.background(
+                move |service| service.set_settings(&settings),
+                |app, result| {
+                    if let Err(error) = result {
+                        app.error(error);
+                    }
+                },
+            );
             if before.color_theme != self.settings.color_theme {
-                self.theme = style::ThemeWatcher::new(self.settings.color_theme);
+                self.theme = style::ThemeWatcher::new(self.settings.color_theme, self.ctx.clone());
                 let p = crate::theme::select(self.settings.color_theme, None);
                 style::apply(ui.ctx(), &p);
                 self.palette = p;
@@ -49,7 +55,13 @@ impl Woodpeck {
             let mut enabled = config.enabled;
             let toggled = ui.checkbox(&mut enabled,"Enable Git sync").changed();
             let apply = ui.button("Apply remote URL").clicked();
-            if (toggled || apply) && let Err(error) = self.service.configure_sync(self.sync_remote.trim(),enabled) {self.error(error);}
+            if toggled || apply {
+                let remote = self.sync_remote.trim().to_owned();
+                self.background(move |service| service.configure_sync(&remote, enabled), |app, result| match result {
+                    Ok(config) => app.service.sync_configured(config),
+                    Err(error) => app.error(error),
+                });
+            }
             ui.horizontal(|ui| {
                 if ui.add_enabled(config.enabled && config.status!=crate::sync::Status::Syncing,egui::Button::new("Sync now")).clicked() {self.service.sync_now();}
                 self.sync_indicator(ui);
@@ -135,27 +147,17 @@ impl Woodpeck {
         widgets::card(ui).show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.0).max(0.0));
             ui.heading("Puzzle library");
-            let size = self
-                .service
-                .local_setting("library_size")
-                .ok()
-                .flatten()
-                .and_then(|s| LibrarySize::parse(&s))
-                .or_else(|| {
-                    (self.library.count == crate::source::STARTER_COUNT)
-                        .then_some(LibrarySize::Starter)
-                });
+            let size = self.library.size.or_else(|| {
+                (self.library.count == crate::source::STARTER_COUNT).then_some(LibrarySize::Starter)
+            });
             ui.strong(format!(
                 "{} puzzles · {}",
                 widgets::grouped_count(self.library.count),
                 size.map_or("Custom library", LibrarySize::label)
             ));
             let date = self
-                .service
-                .local_setting("library_imported_at")
-                .ok()
-                .flatten()
-                .and_then(|s| s.parse().ok())
+                .library
+                .imported_at
                 .and_then(|at| chrono::DateTime::from_timestamp(at, 0))
                 .map_or_else(
                     || "Never".into(),
@@ -246,13 +248,16 @@ impl Woodpeck {
                 .clicked()
                 && let Some(id) = self.selected_set
             {
-                match self
-                    .service
-                    .export_pgn(id, std::path::Path::new(&self.export_path))
-                {
-                    Ok(()) => self.toast = Some(("PGN exported".into(), std::time::Instant::now())),
-                    Err(e) => self.error(e),
-                }
+                let path = std::path::PathBuf::from(&self.export_path);
+                self.background(
+                    move |service| service.export_pgn(id, &path),
+                    |app, result| match result {
+                        Ok(()) => {
+                            app.toast = Some(("PGN exported".into(), std::time::Instant::now()));
+                        }
+                        Err(error) => app.error(error),
+                    },
+                );
             }
         });
     }

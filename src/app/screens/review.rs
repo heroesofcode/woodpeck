@@ -14,7 +14,7 @@ impl Woodpeck {
             ui.label("No pending puzzles match this theme.");
             if ui.button("Show all themes").clicked() {
                 self.review_theme.clear();
-                self.refresh();
+                self.filter_reviews();
                 self.select_first_review();
             }
         }
@@ -34,12 +34,11 @@ impl Woodpeck {
             })
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut self.review_theme, String::new(), "All themes");
-                let all = self
-                    .service
-                    .review_queue(None, ReviewSort::MostRecent)
-                    .unwrap_or_default();
-                let themes: std::collections::BTreeSet<_> =
-                    all.iter().flat_map(|c| c.puzzle.themes.iter()).collect();
+                let themes: std::collections::BTreeSet<_> = self
+                    .all_reviews
+                    .iter()
+                    .flat_map(|c| c.puzzle.themes.iter())
+                    .collect();
                 for theme in themes {
                     ui.selectable_value(
                         &mut self.review_theme,
@@ -68,7 +67,7 @@ impl Woodpeck {
                 );
             });
         if old != (self.review_theme.clone(), self.review_sort) {
-            self.refresh();
+            self.filter_reviews();
             self.select_first_review();
         }
     }
@@ -98,8 +97,8 @@ impl Woodpeck {
             ui.add_space(4.0);
             self.clearing_review(ui);
             let mut chosen = None;
-            for card in self.reviews.clone() {
-                let response = self.review_card(ui, &card);
+            for card in &self.reviews {
+                let response = self.review_card(ui, card);
                 if ui
                     .interact(
                         response.rect,
@@ -109,7 +108,7 @@ impl Woodpeck {
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
-                    chosen = Some(card);
+                    chosen = Some(card.clone());
                 }
             }
             if let Some(card) = chosen {

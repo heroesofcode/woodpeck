@@ -229,6 +229,7 @@ for the portable schema and merge rules.
 ## Development
 
 ```sh
+export CARGO_BUILD_JOBS=4
 cargo fmt --all --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo clippy --all-targets --no-default-features --locked -- -D warnings
@@ -239,7 +240,17 @@ cargo install cargo-deny --locked
 cargo deny check
 ```
 
-Clippy pedantic is enabled; unsafe code is forbidden. Tests use fixtures, isolated SQLite databases, and loopback HTTP servers. The CI aggregate check is named `ci` and requires formatting, both Clippy configurations, tests, the release build, and supply-chain checks to succeed. PR titles use Conventional Commits.
+Clippy pedantic is enabled; unsafe code is forbidden. Tests use fixtures, isolated SQLite databases, and loopback HTTP servers. The CI aggregate check is named `ci` and requires formatting, both Clippy configurations, tests, the release build, benchmark compilation, and supply-chain checks to succeed. PR titles use Conventional Commits.
+
+**Benchmarks:** Run `cargo bench --locked` for move validation, in-memory store operations,
+set generation, piece rasterization, and headless training frames (including dragging and
+completion and advancement). Set `WOODPECK_BENCH_DB` to a closed database file to also
+benchmark disk-backed completion, feedback, advancement, and maximum frame time over a
+solve-and-advance sequence. Each run opens a disposable copy in the system temporary
+directory and creates training sets there as needed; the source is only copied.
+`WOODPECK_FRAME_STATS=1 cargo run --release --locked` prints application
+logic and UI CPU p50/p95/max times to stderr every five seconds of activity. It also works
+under Xvfb. These timings exclude GPU presentation; the headless benchmarks include tessellation.
 
 Generate a screenshot without opening your real database (requires Xvfb and `xauth`; on Debian/Ubuntu install `xvfb xauth`):
 
