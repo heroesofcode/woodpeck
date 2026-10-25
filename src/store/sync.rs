@@ -126,6 +126,9 @@ impl Store {
         if let Some(json) = self.setting("preferences")? {
             let values: BTreeMap<String, Value> = serde_json::from_str(&json)?;
             for (key, value) in values {
+                if key == "sound_volume" {
+                    continue;
+                }
                 let updated_at = self
                     .connection
                     .query_row(

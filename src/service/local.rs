@@ -184,15 +184,9 @@ impl LocalService {
         training_position(&store, cycle)
     }
     pub fn record_attempt(&self, attempt: &Attempt) -> Result<RecordedAttempt> {
-        let mut store = lock(&self.store)?;
-        let sounds = store.settings()?.completion_sound;
-        let recorded = store.record_attempt(attempt)?;
-        drop(store);
-        if sounds && attempt.outcome == Outcome::Correct {
-            crate::sound::play_completion();
-        }
-        Ok(recorded)
+        Ok(lock(&self.store)?.record_attempt(attempt)?)
     }
+
     pub fn record_review_attempt(&self, attempt: &Attempt) -> Result<RecordedAttempt> {
         if attempt.kind != AttemptKind::Review {
             return Err(StoreError::InvalidData("Expected a review attempt.".into()).into());

@@ -951,3 +951,35 @@ fn source_directory_is_never_a_data_directory() {
         assert!(ensure_external_data_dir(&link.join("unused/woodpeck.db")).is_err());
     }
 }
+
+#[test]
+fn sound_preferences_persist_and_sync_keeps_device_volume_local() {
+    let local = Store::memory().unwrap();
+    local
+        .set_setting("preferences", r#"{"completion_sound":false}"#)
+        .unwrap();
+    let mut settings = local.settings().unwrap();
+    assert!(!settings.completion_sound);
+    assert_eq!(settings.sound_volume, 35);
+    settings.completion_sound = true;
+    local.save_settings(&settings).unwrap();
+    settings.completion_sound = false;
+    settings.sound_volume = 71;
+    local.save_settings(&settings).unwrap();
+    assert_eq!(local.settings().unwrap(), settings);
+    let snapshot = local.export_sync().unwrap();
+    snapshot.validate().unwrap();
+    assert_eq!(snapshot.manifest.schema_version, 3);
+    assert!(!snapshot.settings.contains_key("sound_volume"));
+    assert_eq!(snapshot.settings["completion_sound"].value, false);
+    let mut remote = Store::memory().unwrap();
+    remote
+        .save_settings(&Settings {
+            sound_volume: 12,
+            ..Default::default()
+        })
+        .unwrap();
+    remote.import_sync(&snapshot).unwrap();
+    assert_eq!(remote.settings().unwrap().sound_volume, 12);
+    assert!(!remote.settings().unwrap().completion_sound);
+}

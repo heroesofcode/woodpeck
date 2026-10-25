@@ -84,7 +84,7 @@ impl Store {
     pub fn save_settings(&self, settings: &crate::settings::Settings) -> Result<()> {
         if !settings.validate() {
             return Err(StoreError::InvalidData(
-                "Puzzle rating must be 400–3000.".into(),
+                "Puzzle rating must be 400–3000 and sound volume 0–100%.".into(),
             ));
         }
         let tx = self.connection.unchecked_transaction()?;
@@ -94,7 +94,7 @@ impl Store {
             .as_object()
             .ok_or_else(|| StoreError::InvalidData("Invalid preferences.".into()))?
         {
-            if previous.get(key) != Some(value) {
+            if key != "sound_volume" && previous.get(key) != Some(value) {
                 tx.execute("INSERT INTO sync_fields(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=max(sync_fields.updated_at+1,excluded.updated_at)",rusqlite::params![key,value.to_string(),chrono::Utc::now().timestamp_millis()])?;
             }
         }

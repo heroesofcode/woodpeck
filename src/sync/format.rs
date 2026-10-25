@@ -160,7 +160,7 @@ impl State {
         if self
             .settings
             .keys()
-            .any(|key| known_settings.get(key).is_none())
+            .any(|key| key == "sound_volume" || known_settings.get(key).is_none())
         {
             return Err(SyncError::Invalid("Unknown preference field.".into()));
         }

@@ -50,7 +50,6 @@ impl Woodpeck {
         let window = ui.max_rect().size();
         let mut layout = layout::calculate(window.x, window.y);
         if self.collapsed && layout.navigation == Navigation::Sidebar {
-            layout = layout::calculate(window.x + 160.0, window.y);
             layout.navigation_width = 56.0;
         }
         if self.screen != Screen::Welcome {
@@ -339,7 +338,17 @@ impl Woodpeck {
     fn capture(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.frames += 1;
+        let settled = self.background.is_empty()
+            && !self.loading
+            && !self.saving
+            && self.session.as_ref().is_none_or(|s| {
+                !matches!(
+                    s.engine.state(),
+                    crate::puzzle::State::Loading | crate::puzzle::State::OpponentTurn
+                )
+            });
         if self.frames > 12
+            && settled
             && !self.capture_requested
             && let Some(screenshot) = &self.screenshot
         {

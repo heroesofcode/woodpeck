@@ -93,9 +93,15 @@ impl BoardWidget {
     ) -> Option<String> {
         let position = engine.position()?;
         let white = engine.orientation() != Some(Color::Black);
-        let size = size.min(ui.available_width()).max(1.0);
+        let size = size
+            .min(ui.available_width())
+            .min(ui.available_height())
+            .max(0.0);
+        if size < 1.0 {
+            return None;
+        }
         let (allocation, response) =
-            ui.allocate_exact_size(Vec2::new(size, size + 6.0), Sense::click_and_drag());
+            ui.allocate_exact_size(Vec2::splat(size), Sense::click_and_drag());
         let rect = Rect::from_min_size(allocation.min, Vec2::splat(size));
         self.rect = Some(rect);
         let now = ui.input(|i| i.time);

@@ -24,6 +24,7 @@ impl Woodpeck {
         self.export_settings(ui);
         ui.add_space(8.0);
         if before != self.settings {
+            crate::sound::configure(&self.settings);
             let settings = self.settings.clone();
             self.background(
                 move |service| service.set_settings(&settings),
@@ -124,7 +125,14 @@ impl Woodpeck {
         widgets::card(ui).show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.0).max(0.0));
             ui.heading("Practice");
-            ui.checkbox(&mut self.settings.completion_sound, "Completion sound");
+            ui.checkbox(&mut self.settings.completion_sound, "Sound effects");
+            widgets::caption(ui, "VOLUME");
+            ui.spacing_mut().slider_width = (ui.available_width() - 80.0).clamp(80.0, 200.0);
+            let volume =
+                ui.add(egui::Slider::new(&mut self.settings.sound_volume, 0..=100).suffix(" %"));
+            if volume.drag_stopped() {
+                crate::sound::play(crate::sound::Event::Move, &self.settings);
+            }
             ui.checkbox(&mut self.settings.show_theme_labels, "Show tactical labels");
             ui.checkbox(
                 &mut self.settings.auto_advance,

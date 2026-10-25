@@ -91,7 +91,7 @@ impl Woodpeck {
                 self.session.as_ref().and_then(|s| s.engine.orientation()),
                 true,
             );
-            self.solve_controls(ui);
+            self.solve_membership_note(ui, true);
             ui.separator();
             self.review_filters(ui);
             ui.add_space(4.0);

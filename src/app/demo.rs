@@ -86,3 +86,14 @@ pub(super) fn welcome(app: &mut super::Woodpeck, screen: super::Screen) {
         }
     }
 }
+
+/// Drive the real engine through the solution before capturing solved feedback.
+pub(super) fn solve(puzzle: &crate::puzzle::Puzzle, engine: &mut crate::puzzle::Engine) {
+    let mut time = std::time::Duration::from_secs(60);
+    for uci in puzzle.moves.split_whitespace().skip(1).step_by(2) {
+        engine.update(time);
+        let _ = engine.play(uci, time);
+        time += std::time::Duration::from_secs(1);
+    }
+    engine.update(time);
+}

@@ -41,8 +41,9 @@ pub fn calculate(width: f32, height: f32) -> Layout {
         Navigation::IconRail => 56.0,
         Navigation::Sidebar => 216.0,
     };
-    let available = (width - navigation_width - 32.0).max(0.0);
-    let mode = if width < 900.0 {
+    let margins = if width < 640.0 { 28.0 } else { 56.0 };
+    let available = (width - navigation_width - margins).max(0.0);
+    let mode = if width < 900.0 || height > width {
         LayoutMode::Stacked
     } else {
         LayoutMode::Columns
@@ -52,50 +53,77 @@ pub fn calculate(width: f32, height: f32) -> Layout {
     } else {
         available
     };
-    let board_width = if mode == LayoutMode::Columns {
-        (available - panel_width - 24.0).max(0.0)
+    let navigation_height = if navigation == Navigation::TopBar {
+        88.0
     } else {
-        available
+        0.0
     };
+    let content_height = (height - margins - navigation_height - 30.0).max(0.0);
+    let geometry = solving(available, content_height, mode, panel_width, 112.0);
     Layout {
         mode,
         navigation,
-        board_size: board_width.min((height - 96.0).max(0.0)),
+        board_size: geometry.board_size,
         panel_width,
         navigation_width,
     }
 }
 /// Geometry within the content area after the navigation, margins, and header.
+/// The action rectangle never belongs to a scroll area. Only `details_height` may scroll.
 #[derive(Clone, Copy, Debug)]
 pub struct SolvingLayout {
     pub board_size: f32,
     pub board_column: f32,
     pub panel_width: f32,
+    pub panel_height: f32,
+    pub details_height: f32,
+    pub action_height: f32,
+    pub compact: bool,
+    pub gap: f32,
 }
-pub fn solving(width: f32, height: f32, mode: LayoutMode, panel: f32) -> SolvingLayout {
-    let width = if width.is_finite() {
-        width.max(0.0)
-    } else {
-        0.0
-    };
-    let height = if height.is_finite() {
-        height.max(0.0)
-    } else {
-        0.0
-    };
+pub const BOARD_FOOTER: f32 = 24.0;
+
+pub fn solving(
+    width: f32,
+    height: f32,
+    mode: LayoutMode,
+    panel: f32,
+    actions: f32,
+) -> SolvingLayout {
+    let finite = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
+    let (width, height) = (finite(width), finite(height));
+    let compact = mode == LayoutMode::Stacked || height < 700.0;
+    let action_height = finite(actions).min(height);
+    let gap = (if compact { 10.0_f32 } else { 24.0 })
+        .min(width)
+        .min((height - action_height).max(0.0));
     if mode == LayoutMode::Columns {
-        let panel_width = panel.max(0.0).min(width * 0.43);
-        let board_column = (width - panel_width - 24.0).max(0.0);
+        let panel_width = finite(panel).min(width * 0.43);
+        let board_column = (width - panel_width - gap).max(0.0);
         SolvingLayout {
-            board_size: board_column.min((height - 42.0).max(0.0)),
+            board_size: board_column.min((height - BOARD_FOOTER).max(0.0)),
             board_column,
             panel_width,
+            panel_height: height,
+            details_height: (height - action_height - gap).max(0.0),
+            action_height,
+            compact,
+            gap,
         }
     } else {
+        // Keep a timer/progress summary visible even in the smallest portrait tile.
+        let details_height = (if height < 700.0 { 72.0_f32 } else { 140.0 })
+            .min((height - action_height - gap).max(0.0));
+        let panel_height = details_height + action_height + gap;
         SolvingLayout {
-            board_size: width.min((height - 30.0).max(0.0)),
+            board_size: width.min((height - panel_height - gap - BOARD_FOOTER).max(0.0)),
             board_column: width,
             panel_width: width,
+            panel_height,
+            details_height,
+            action_height,
+            compact,
+            gap,
         }
     }
 }
@@ -103,68 +131,67 @@ pub fn solving(width: f32, height: f32, mode: LayoutMode, panel: f32) -> Solving
 #[cfg(test)]
 mod tests {
     use super::*;
+    pub const SIZES: [(f32, f32); 9] = [
+        (1280.0, 800.0),
+        (1920.0, 1080.0),
+        (1366.0, 768.0),
+        (900.0, 600.0),
+        (600.0, 1000.0),
+        (360.0, 640.0),
+        (640.0, 900.0),
+        (960.0, 1080.0),
+        (3840.0, 2160.0),
+    ];
     #[test]
-    fn content_geometry_respects_both_columns_and_stack_height() {
-        for (w, h) in [
-            (360.0, 640.0),
-            (640.0, 900.0),
-            (960.0, 1080.0),
-            (1920.0, 1080.0),
-            (3840.0, 2160.0),
-        ] {
+    fn board_and_pinned_actions_fit_all_requested_sizes_and_states() {
+        for (w, h) in SIZES {
             let l = calculate(w, h);
-            let available = w - l.navigation_width - 56.0;
-            let g = solving(available, h - 140.0, l.mode, l.panel_width);
-            assert!(g.board_size <= available);
-            assert!(g.board_size <= h - 140.0);
-            if l.mode == LayoutMode::Columns {
-                assert!(g.board_column + g.panel_width + 24.0 <= available + 0.01);
-            }
-        }
-        assert_eq!(
-            solving(f32::NAN, 0.0, LayoutMode::Stacked, 320.0).board_size,
-            0.0
-        );
-    }
-    #[test]
-    fn breakpoints() {
-        assert_eq!(calculate(899.0, 900.0).mode, LayoutMode::Stacked);
-        assert_eq!(calculate(900.0, 900.0).mode, LayoutMode::Columns);
-        assert_eq!(calculate(360.0, 800.0).navigation, Navigation::TopBar);
-        assert_eq!(calculate(800.0, 800.0).navigation, Navigation::IconRail);
-        assert_eq!(calculate(3840.0, 2160.0).navigation, Navigation::Sidebar);
-    }
-    #[test]
-    fn hyprland_tiles_and_hidpi_logical_size() {
-        for (w, h, nav, mode) in [
-            (360.0, 640.0, Navigation::TopBar, LayoutMode::Stacked),
-            (640.0, 900.0, Navigation::IconRail, LayoutMode::Stacked),
-            (960.0, 1080.0, Navigation::IconRail, LayoutMode::Columns),
-            (1920.0, 1080.0, Navigation::Sidebar, LayoutMode::Columns),
-            (3840.0, 2160.0, Navigation::Sidebar, LayoutMode::Columns),
-        ] {
-            let layout = calculate(w, h);
-            assert_eq!(layout.navigation, nav);
-            assert_eq!(layout.mode, mode);
-            assert!(layout.board_size <= w - layout.navigation_width);
-            assert!(layout.board_size <= h - 96.0);
-        }
-        let physical = calculate(3840.0 / 2.0, 2160.0 / 2.0);
-        assert_eq!(physical.navigation, Navigation::Sidebar);
-    }
-    #[test]
-    fn geometry_never_overflows() {
-        for width in [0.0, 100.0, 360.0, 600.0, 899.0, 900.0, 1200.0, 3840.0] {
-            for height in [0.0, 80.0, 300.0, 800.0, 2160.0] {
-                let l = calculate(width, height);
-                assert!(l.board_size >= 0.0);
-                assert!(l.board_size <= width);
-                assert!(l.board_size <= (height - 96.0).max(0.0));
+            let margin = if w < 640.0 { 28.0 } else { 56.0 };
+            let nav_height = if l.navigation == Navigation::TopBar {
+                88.0
+            } else {
+                0.0
+            };
+            let available = w - l.navigation_width - margin;
+            let height = h - nav_height - margin - 30.0;
+            // Playing, solved, walkthrough, and walkthrough with a save retry.
+            for actions in [112.0, 128.0, 180.0, 232.0] {
+                let g = solving(available, height, l.mode, l.panel_width, actions);
+                assert!(g.board_size > 0.0, "{w}x{h}");
+                assert!(g.board_size <= available);
+                assert_eq!(g.action_height, actions);
+                assert!(g.details_height + g.gap + actions <= g.panel_height + 0.01);
                 if l.mode == LayoutMode::Columns {
-                    assert!(l.board_size + l.panel_width + l.navigation_width + 56.0 <= width);
+                    assert!(g.board_column + g.panel_width + g.gap <= available + 0.01);
+                    assert!(g.board_size + BOARD_FOOTER <= height + 0.01);
+                    assert!(g.panel_height <= height);
+                } else {
+                    assert!(g.board_size + BOARD_FOOTER + g.gap + g.panel_height <= height + 0.01);
                 }
             }
         }
-        assert_eq!(calculate(f32::NAN, f32::INFINITY).board_size, 0.0);
+    }
+    #[test]
+    fn breakpoints_and_compact_mode() {
+        assert_eq!(calculate(899.0, 900.0).mode, LayoutMode::Stacked);
+        assert_eq!(calculate(900.0, 600.0).mode, LayoutMode::Columns);
+        assert_eq!(calculate(960.0, 1080.0).mode, LayoutMode::Stacked);
+        assert_eq!(calculate(360.0, 640.0).navigation, Navigation::TopBar);
+        assert_eq!(calculate(900.0, 600.0).navigation, Navigation::IconRail);
+        assert_eq!(calculate(1920.0, 1080.0).navigation, Navigation::Sidebar);
+        assert!(solving(800.0, 510.0, LayoutMode::Columns, 288.0, 112.0).compact);
+        assert!(!solving(1600.0, 900.0, LayoutMode::Columns, 320.0, 112.0).compact);
+    }
+    #[test]
+    fn geometry_handles_degenerate_input() {
+        for width in [0.0, 100.0, 360.0, 900.0, f32::NAN] {
+            for height in [0.0, 80.0, 800.0, f32::INFINITY] {
+                for mode in [LayoutMode::Stacked, LayoutMode::Columns] {
+                    let g = solving(width, height, mode, 320.0, 180.0);
+                    assert!(g.board_size.is_finite() && g.board_size >= 0.0);
+                    assert!(g.action_height.is_finite() && g.action_height >= 0.0);
+                }
+            }
+        }
     }
 }

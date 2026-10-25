@@ -24,7 +24,7 @@ pub enum SyncCommand {
     Status,
     Disable,
 }
-pub const HELP: &str = "woodpeck — local Woodpecker Method puzzle training\n\nUsage: woodpeck [--help | --version]\n       woodpeck import <path-or-url>\n       woodpeck import --lichess [--size medium|full] [--limit N]\n       woodpeck import <path-or-url> [--size medium|full] [--limit N]\n       woodpeck sync init <remote-url> | --create\n       woodpeck sync now | status | disable\n\nOpt-in progress sync requires a PRIVATE repository and system git.\nImports plain CSV or zstd CSV into the local database.\n--lichess streams the Lichess puzzle database; default size is full.\n--limit caps accepted puzzles for any source (overrides --size limit).\nScreenshot: --screenshot <out.png> [--screen dashboard|training|review|progress|builder|settings|welcome|welcome-progress|welcome-done] [--size WxH]\nData override: $WOODPECK_DATA_DIR\nData: $XDG_DATA_HOME/woodpeck/woodpeck.db (Linux).\nPuzzles from the Lichess puzzle database (CC0).";
+pub const HELP: &str = "woodpeck — local Woodpecker Method puzzle training\n\nUsage: woodpeck [--help | --version]\n       woodpeck import <path-or-url>\n       woodpeck import --lichess [--size medium|full] [--limit N]\n       woodpeck import <path-or-url> [--size medium|full] [--limit N]\n       woodpeck sync init <remote-url> | --create\n       woodpeck sync now | status | disable\n\nOpt-in progress sync requires a PRIVATE repository and system git.\nImports plain CSV or zstd CSV into the local database.\n--lichess streams the Lichess puzzle database; default size is full.\n--limit caps accepted puzzles for any source (overrides --size limit).\nScreenshot: --screenshot <out.png> [--screen dashboard|training|training-solved|review|progress|builder|settings|welcome|welcome-progress|welcome-done] [--size WxH]\nData override: $WOODPECK_DATA_DIR\nData: $XDG_DATA_HOME/woodpeck/woodpeck.db (Linux).\nPuzzles from the Lichess puzzle database (CC0).";
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let args: Vec<_> = args.into_iter().collect();
     if args.first().is_some_and(|s| s == "--screenshot") {
@@ -171,7 +171,12 @@ mod tests {
         ] {
             assert!(args(&bad).is_err());
         }
-        for screen in ["welcome", "welcome-progress", "welcome-done"] {
+        for screen in [
+            "training-solved",
+            "welcome",
+            "welcome-progress",
+            "welcome-done",
+        ] {
             assert!(args(&["--screenshot", "demo.png", "--screen", screen]).is_ok());
         }
     }

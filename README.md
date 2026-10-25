@@ -6,10 +6,10 @@ A native **Woodpecker Method chess puzzle trainer**, inspired by [Peck Chess](ht
 
 - **A review queue that catches every miss.** Wrong answers and skips enter Review immediately, with a pending badge in navigation and a dashboard callout. Filter by theme or sort by recency and accuracy. Only a correct solve in Review clears an item; review attempts update lifetime accuracy without changing cycle results. The puzzle stays in its set for future cycles.
 - **Sets and presets.** General, tactical weakness, and rating presets; multi-theme filters that include and exclude Lichess themes; 20–500 positions; an inclusive rating range (400–3200, at least 100 points wide) set with a two-handle slider, number fields or quick ranges around your rating; and 1–10 cycles. Fixed snapshots preserve your positions when the puzzle library changes. Optional seeded shuffling changes the order each cycle.
-- **Cycles and a count-up timer.** Resume across restarts, compare cycles, and step through the solution after a mistake. The timer pauses during animations, feedback, walkthroughs, promotion, and loss of focus. Optional completion sound and auto-advance.
+- **Cycles and a count-up timer.** Resume across restarts, compare cycles, and step through the solution after a mistake. The timer pauses during animations, feedback, walkthroughs, promotion, and loss of focus. Quiet synthesized sounds for moves, captures, correct solutions, and mistakes, plus optional auto-advance. Settings includes a Sound effects switch and a 0–100% volume slider.
 - **Progress.** Time and accuracy charts, comparisons with cycle one, performance by theme, and most-missed positions. Small local streak, XP, and rank widgets.
 - **Omarchy theme sync with live reload.** Desktop colors and fontconfig fonts, with two-second theme polling that follows directory and symlink swaps. Built-in dark and light themes and eight board palettes.
-- **Responsive tiling layout.** Native Wayland and X11, a sidebar that collapses into a rail or top bar, and a board/panel layout that stacks below 900 px. Supports narrow 360 px tiles, wide displays, and HiDPI. SVG pieces, click/click and drag/drop, legal targets, and promotion selection.
+- **Responsive tiling layout.** Native Wayland and X11, a sidebar that collapses into a rail or top bar, and a board/panel layout that stacks below 900 px or in portrait windows. The square board fits both width and height; short windows use compact stats, and solving actions stay visible while secondary details can scroll. Supports narrow 360 px tiles, wide displays, and HiDPI. SVG pieces, click/click and drag/drop, legal targets, and promotion selection.
 - **A library that grows with you.** First-run onboarding offers the offline 8,540-puzzle Starter pack, a recommended 200,000-puzzle Medium library, or the complete filtered Lichess database. Watch live rating distributions as puzzles arrive, cancel while retaining committed batches, or continue training in the background. Manage and update the library in Settings. If a requested set has too few local matches, the builder offers a Lichess API fallback. Export your sets as PGN from Settings.
 
 Puzzles from the Lichess puzzle database (CC0).
@@ -263,7 +263,7 @@ Validate every screen at common tiling sizes:
 
 ```sh
 mkdir -p /tmp/woodpeck-screenshots
-for screen in dashboard training review progress builder settings welcome welcome-progress welcome-done; do
+for screen in dashboard training training-solved review progress builder settings welcome welcome-progress welcome-done; do
   for size in 360x640 960x1080 1920x1080; do
     xvfb-run -a -s '-screen 0 1920x1080x24' \
       target/release/woodpeck --screenshot "/tmp/woodpeck-screenshots/$screen-$size.png" \
@@ -272,7 +272,7 @@ for screen in dashboard training review progress builder settings welcome welcom
 done
 ```
 
-The three welcome screenshot screens use deterministic offline demo data, with animations settled for the capture.
+`training-solved` captures the solved-feedback controls. The three welcome screenshot screens use deterministic offline demo data, with animations settled for the capture.
 
 The code separates the puzzle engine, injected timer, set generation, review rules, progress calculations, streaming sources, SQLite repositories, and background application service from the native UI in `src/app/`.
 
