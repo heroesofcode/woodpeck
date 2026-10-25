@@ -25,7 +25,7 @@ pub fn chart(ui: &mut Ui, cycles: &[CycleSummary], set_size: u32, accuracy: bool
     let max = if accuracy {
         100.0
     } else {
-        maximum(cycles.iter().map(|c| c.stats.time_ms as f64)) * 1.15
+        maximum(cycles.iter().map(|c| c.stats.average_ms())) * 1.15
     };
     let p = ui.painter();
     let text = ui.visuals().weak_text_color();
@@ -62,12 +62,15 @@ pub fn chart(ui: &mut Ui, cycles: &[CycleSummary], set_size: u32, accuracy: bool
     for (index, c) in cycles.iter().enumerate() {
         let x = rect.left() + spacing * (index as f32 + 0.5);
         let value = if accuracy {
-            c.stats.accuracy(set_size)
+            c.stats.accuracy()
         } else {
-            c.stats.time_ms as f64
+            c.stats.average_ms()
         };
         let y = rect.bottom() - normalized(value, max) * rect.height();
-        if accuracy {
+        if c.stats.answered() == 0 {
+            // There is no performance value until a puzzle has been answered.
+            previous = None;
+        } else if accuracy {
             let r = Rect::from_min_max(
                 Pos2::new(x - spacing.min(64.0) * 0.28, y),
                 Pos2::new(x + spacing.min(64.0) * 0.28, rect.bottom()),
@@ -99,13 +102,33 @@ pub fn chart(ui: &mut Ui, cycles: &[CycleSummary], set_size: u32, accuracy: bool
             p.circle_stroke(point, 4.5, Stroke::new(2.0, color));
             previous = Some(point);
         }
-        p.text(
+    }
+    cycle_labels(ui, rect, cycles, set_size);
+}
+fn cycle_labels(ui: &mut Ui, rect: Rect, cycles: &[CycleSummary], set_size: u32) {
+    let spacing = rect.width() / cycles.len().max(1) as f32;
+    for (index, c) in cycles.iter().enumerate() {
+        let x = rect.left() + spacing * (index as f32 + 0.5);
+        ui.painter().text(
             Pos2::new(x, rect.bottom() + 14.0),
             egui::Align2::CENTER_CENTER,
-            format!("Cycle {}", c.number),
+            format!(
+                "{}{}{}",
+                if spacing >= 58.0 { "Cycle " } else { "C" },
+                c.number,
+                if c.complete { "" } else { "*" }
+            ),
             FontId::proportional(11.0),
-            text,
+            ui.visuals().weak_text_color(),
         );
+    }
+    for c in cycles.iter().filter(|c| !c.complete) {
+        ui.small(format!(
+            "* Cycle {} in progress · {} / {} done",
+            c.number,
+            c.stats.attempted(),
+            set_size
+        ));
     }
 }
 #[cfg(test)]

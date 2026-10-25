@@ -42,32 +42,52 @@ impl Woodpeck {
             .iter()
             .find(|s| s.set.id == id)
             .map_or(0, |s| s.set.params.size);
-        self.progress_comparison(ui, p);
+        self.progress_comparison(ui, p, total);
         Self::progress_tiles(ui, p, total);
         self.progress_charts(ui, p, total);
         self.progress_details(ui, p);
     }
-    fn progress_comparison(&self, ui: &mut Ui, p: &SetProgress) {
+    fn progress_comparison(&self, ui: &mut Ui, p: &SetProgress, total: u32) {
         let accent = style::color(self.palette.semantic().accent);
         widgets::card(ui).show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.0).max(0.0));
             widgets::caption(ui, "CYCLE PROGRESS");
-            let latest = p.cycles.iter().rev().find(|c| c.complete);
-            let first = p.cycles.iter().find(|c| c.complete);
+            let latest = p.cycles.last();
+            let first = p.cycles.iter().find(|c| c.number == 1 && c.complete);
             ui.label(
                 RichText::new(latest.map_or_else(
                     || "Your first cycle is in progress".into(),
-                    |c| format!("Cycle {} compared with cycle 1", c.number),
+                    |c| {
+                        if c.number == 1 {
+                            "Your first cycle".into()
+                        } else {
+                            format!("Cycle {} compared with cycle 1", c.number)
+                        }
+                    },
                 ))
                 .size(22.0)
                 .strong(),
             );
-            if let Some((first, latest)) = first.zip(latest) {
+            if let Some(latest) = latest {
+                ui.label(format!(
+                    "{} / {} done · {}",
+                    latest.stats.attempted(),
+                    total,
+                    if latest.complete {
+                        "complete"
+                    } else {
+                        "in progress"
+                    }
+                ));
+            }
+            if let Some((first, latest)) = first.zip(latest).filter(|(first, latest)| {
+                first.number != latest.number && latest.stats.answered() > 0
+            }) {
                 ui.add_space(10.0);
                 let time_delta = p
                     .report
                     .latest_vs_first
-                    .and_then(|d| d.time_reduction_percent)
+                    .and_then(|d| d.average_time_reduction_percent)
                     .map(widgets::delta_time);
                 let accuracy_delta = p
                     .report
@@ -76,17 +96,17 @@ impl Woodpeck {
                 let panels = |uis: &mut [Ui]| {
                     widgets::comparison(
                         &mut uis[0],
-                        "COMPLETION TIME",
-                        &widgets::duration(first.stats.time_ms),
-                        &widgets::duration(latest.stats.time_ms),
+                        "AVERAGE TIME / ANSWERED PUZZLE",
+                        &widgets::duration(first.stats.average_ms() as u64),
+                        &widgets::duration(latest.stats.average_ms() as u64),
                         time_delta.as_deref(),
                         accent,
                     );
                     widgets::comparison(
                         &mut uis[1],
                         "ACCURACY",
-                        &format!("{:.0}%", first.stats.accuracy(first.stats.attempted())),
-                        &format!("{:.0}%", latest.stats.accuracy(latest.stats.attempted())),
+                        &format!("{:.0}%", first.stats.accuracy()),
+                        &format!("{:.0}%", latest.stats.accuracy()),
                         accuracy_delta.as_deref(),
                         accent,
                     );
@@ -96,23 +116,27 @@ impl Woodpeck {
                 } else {
                     widgets::comparison(
                         ui,
-                        "COMPLETION TIME",
-                        &widgets::duration(first.stats.time_ms),
-                        &widgets::duration(latest.stats.time_ms),
+                        "AVERAGE TIME / ANSWERED PUZZLE",
+                        &widgets::duration(first.stats.average_ms() as u64),
+                        &widgets::duration(latest.stats.average_ms() as u64),
                         time_delta.as_deref(),
                         accent,
                     );
                     widgets::comparison(
                         ui,
                         "ACCURACY",
-                        &format!("{:.0}%", first.stats.accuracy(first.stats.attempted())),
-                        &format!("{:.0}%", latest.stats.accuracy(latest.stats.attempted())),
+                        &format!("{:.0}%", first.stats.accuracy()),
+                        &format!("{:.0}%", latest.stats.accuracy()),
                         accuracy_delta.as_deref(),
                         accent,
                     );
                 }
             } else {
-                ui.label("Finish your first cycle to establish a baseline.");
+                ui.label(if first.is_some() {
+                    "Answer puzzles in the next cycle to compare with your baseline."
+                } else {
+                    "Finish your first cycle to establish a baseline."
+                });
             }
         });
     }
@@ -136,7 +160,7 @@ impl Woodpeck {
             (
                 "AVERAGE SOLVE TIME",
                 widgets::duration(p.report.average_ms as u64),
-                "per attempted puzzle",
+                "per answered puzzle; skips included",
             ),
             (
                 "BEST CYCLE",
@@ -165,11 +189,11 @@ impl Woodpeck {
         let accent = style::color(self.palette.semantic().accent);
         ui.add_space(15.0);
         ui.heading("Cycle performance");
-        ui.label("Solve time and accuracy for each cycle. Hollow marks show a cycle in progress.");
+        ui.label("Average time and accuracy per answered puzzle; skips count as misses. Hollow marks show a cycle in progress.");
         if ui.available_width() > 700.0 {
             ui.columns(2, |uis| {
                 widgets::card(&uis[0]).show(&mut uis[0], |ui| {
-                    ui.heading("Time by cycle");
+                    ui.heading("Average time by cycle");
                     charts::chart(
                         ui,
                         &p.cycles,
@@ -193,7 +217,7 @@ impl Woodpeck {
                     ui.heading(if accuracy {
                         "Accuracy by cycle"
                     } else {
-                        "Time by cycle"
+                        "Average time by cycle"
                     });
                     charts::chart(ui, &p.cycles, total, accuracy, accent);
                 });

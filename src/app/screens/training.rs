@@ -203,7 +203,7 @@ impl Woodpeck {
                     format!("PUZZLE {} / {}", position + 1, set.set.params.size),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.strong(format!("{:.0}%", set.stats.accuracy(set.set.params.size)));
+                    ui.strong(format!("{:.0}%", set.stats.accuracy()));
                 });
             });
             self.segments(ui, set.set.params.size);
@@ -282,7 +282,7 @@ impl Woodpeck {
             format!(
                 "Cycle {} · {:.0}% · Details",
                 set.latest_cycle.as_ref().map_or(1, |c| c.number),
-                set.stats.accuracy(set.set.params.size)
+                set.stats.accuracy()
             ),
             |ui| {
                 ui.strong(&set.set.params.name);
@@ -507,14 +507,14 @@ impl Woodpeck {
                 widgets::stat(
                     ui,
                     "ACCURACY",
-                    format!("{:.0}%", set.stats.accuracy(set.set.params.size)),
+                    format!("{:.0}%", set.stats.accuracy()),
                     "Skips count as misses",
                 );
                 widgets::stat(
                     ui,
                     "AVERAGE",
-                    widgets::duration(set.stats.average_ms(set.set.params.size) as u64),
-                    "per puzzle",
+                    widgets::duration(set.stats.average_ms() as u64),
+                    "per answered puzzle; skips included",
                 );
                 self.cycle_comparisons(ui, &set);
                 ui.label(format!("{} puzzles waiting in Review", self.pending));
@@ -548,7 +548,7 @@ impl Woodpeck {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(
-                    RichText::new(format!("{:.0}%", set.stats.accuracy(set.set.params.size)))
+                    RichText::new(format!("{:.0}%", set.stats.accuracy()))
                         .size(26.0)
                         .strong(),
                 );
@@ -557,11 +557,9 @@ impl Woodpeck {
             ui.add_space(18.0);
             ui.vertical(|ui| {
                 ui.label(
-                    RichText::new(widgets::duration(
-                        set.stats.average_ms(set.set.params.size) as u64
-                    ))
-                    .size(26.0)
-                    .strong(),
+                    RichText::new(widgets::duration(set.stats.average_ms() as u64))
+                        .size(26.0)
+                        .strong(),
                 );
                 widgets::caption(ui, "AVG / PUZZLE");
             });
@@ -617,13 +615,13 @@ impl Woodpeck {
                 ("vs previous", p.cycles.iter().rev().nth(1)),
             ] {
                 if let Some(base) = baseline {
-                    let d = compare(set.stats, base.stats, set.set.params.size);
+                    let d = compare(set.stats, base.stats);
                     ui.horizontal_wrapped(|ui| {
                         ui.label(label);
-                        if let Some(t) = d.time_reduction_percent {
+                        if let Some(t) = d.average_time_reduction_percent {
                             widgets::chip(
                                 ui,
-                                widgets::delta_time(t),
+                                format!("{} avg / puzzle", widgets::delta_time(t)),
                                 style::color(self.palette.semantic().accent),
                             );
                         }

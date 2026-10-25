@@ -55,6 +55,7 @@ pub struct CycleStats {
     pub incorrect: u32,
     pub skipped: u32,
     pub invalid: u32,
+    /// Total time on answered puzzles, excluding unavailable attempts.
     pub time_ms: u64,
 }
 impl CycleStats {
@@ -70,35 +71,41 @@ impl CycleStats {
                 Outcome::Skipped => stats.skipped += 1,
                 Outcome::Invalid => stats.invalid += 1,
             }
-            stats.time_ms = stats.time_ms.saturating_add(a.time_ms.max(1));
+            if a.outcome != Outcome::Invalid {
+                stats.time_ms = stats.time_ms.saturating_add(a.time_ms.max(1));
+            }
         }
         stats
     }
     pub fn attempted(self) -> u32 {
         self.correct + self.incorrect + self.skipped + self.invalid
     }
-    /// Unavailable puzzles do not reduce accuracy. Unattempted positions do until complete.
-    pub fn accuracy(self, set_size: u32) -> f64 {
-        percent(self.correct, set_size.saturating_sub(self.invalid))
+    /// Answered puzzles include skips, but exclude unavailable positions.
+    pub fn answered(self) -> u32 {
+        self.correct + self.incorrect + self.skipped
     }
-    pub fn average_ms(self, set_size: u32) -> f64 {
-        if set_size == 0 {
+    /// Accuracy among answered puzzles; skips count as misses.
+    pub fn accuracy(self) -> f64 {
+        percent(self.correct, self.answered())
+    }
+    pub fn average_ms(self) -> f64 {
+        if self.answered() == 0 {
             0.0
         } else {
-            self.time_ms as f64 / f64::from(set_size)
+            self.time_ms as f64 / f64::from(self.answered())
         }
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Delta {
-    pub time_reduction_percent: Option<f64>,
+    pub average_time_reduction_percent: Option<f64>,
     pub accuracy_points: f64,
 }
-pub fn compare(current: CycleStats, baseline: CycleStats, size: u32) -> Delta {
+pub fn compare(current: CycleStats, baseline: CycleStats) -> Delta {
     Delta {
-        time_reduction_percent: (baseline.time_ms != 0)
-            .then(|| 100.0 * (1.0 - current.time_ms as f64 / baseline.time_ms as f64)),
-        accuracy_points: current.accuracy(size) - baseline.accuracy(size),
+        average_time_reduction_percent: (baseline.average_ms() > 0.0 && current.answered() > 0)
+            .then(|| 100.0 * (1.0 - current.average_ms() / baseline.average_ms())),
+        accuracy_points: current.accuracy() - baseline.accuracy(),
     }
 }
 /// Demo attempts never contribute to lifetime performance.
@@ -137,11 +144,19 @@ mod tests {
         let mut review = attempt(Outcome::Correct);
         review.kind = AttemptKind::Review;
         rows.push(review);
+        let mut demo = attempt(Outcome::Correct);
+        demo.kind = AttemptKind::Demo;
+        rows.push(demo);
+        rows[1].time_ms = 2000;
+        rows[2].time_ms = 3000;
+        rows[3].time_ms = 90_000;
         let s = CycleStats::from_attempts(&rows);
         assert_eq!(s.attempted(), 4);
-        assert_eq!(s.time_ms, 4000);
-        assert!((s.accuracy(4) - 100.0 / 3.0).abs() < 1e-9);
-        assert_eq!(s.average_ms(4), 1000.0);
+        assert_eq!(s.answered(), 3);
+        assert_eq!(s.invalid, 1);
+        assert_eq!(s.time_ms, 6000);
+        assert!((s.accuracy() - 100.0 / 3.0).abs() < 1e-9);
+        assert_eq!(s.average_ms(), 2000.0);
         assert_eq!(
             lifetime(&rows),
             Accuracy {
@@ -151,22 +166,75 @@ mod tests {
         );
     }
     #[test]
+    fn skips_count_as_answered_misses() {
+        let stats = CycleStats {
+            correct: 7,
+            incorrect: 2,
+            skipped: 1,
+            invalid: 5,
+            time_ms: 25_000,
+        };
+        assert_eq!(stats.answered(), 10);
+        assert_eq!(stats.accuracy(), 70.0);
+        assert_eq!(stats.average_ms(), 2500.0);
+    }
+    #[test]
+    fn unavailable_only_and_empty_cycles_have_zero_performance() {
+        for stats in [
+            CycleStats::default(),
+            CycleStats::from_attempts(&[attempt(Outcome::Invalid)]),
+        ] {
+            assert_eq!(stats.answered(), 0);
+            assert_eq!(stats.time_ms, 0);
+            assert_eq!(stats.accuracy(), 0.0);
+            assert_eq!(stats.average_ms(), 0.0);
+        }
+    }
+    #[test]
+    fn partial_and_completed_cycles_compare_average_time() {
+        let completed = CycleStats {
+            correct: 135,
+            incorrect: 15,
+            time_ms: 150_000,
+            ..Default::default()
+        };
+        let mut partial = CycleStats {
+            correct: 10,
+            time_ms: 10_000,
+            ..Default::default()
+        };
+        let delta = compare(partial, completed);
+        assert_eq!(delta.accuracy_points, 10.0);
+        assert_eq!(delta.average_time_reduction_percent, Some(0.0));
+        partial.time_ms = 5000;
+        assert_eq!(
+            compare(partial, completed).average_time_reduction_percent,
+            Some(50.0)
+        );
+    }
+    #[test]
     fn deltas_and_zero_denominators() {
         let first = CycleStats {
             correct: 13,
+            incorrect: 7,
             time_ms: 171_000,
             ..Default::default()
         };
         let last = CycleStats {
             correct: 17,
+            skipped: 3,
             time_ms: 114_000,
             ..Default::default()
         };
-        let d = compare(last, first, 20);
-        assert!((d.time_reduction_percent.unwrap() - 100.0 / 3.0).abs() < 1e-9);
+        let d = compare(last, first);
+        assert!((d.average_time_reduction_percent.unwrap() - 100.0 / 3.0).abs() < 1e-9);
         assert_eq!(d.accuracy_points, 20.0);
         assert_eq!(
-            compare(first, CycleStats::default(), 0).time_reduction_percent,
+            compare(first, CycleStats::default()).average_time_reduction_percent,
+            None
+        );
+        assert_eq!(
+            compare(CycleStats::default(), first).average_time_reduction_percent,
             None
         );
         assert_eq!(Accuracy::default().percent(), 0.0);
