@@ -953,6 +953,80 @@ fn source_directory_is_never_a_data_directory() {
 }
 
 #[test]
+fn local_settings_do_not_advance_sync_generation_or_preference_clocks() {
+    let store = Store::memory().unwrap();
+    let generation = store.sync_generation().unwrap();
+    let mut settings = Settings {
+        sound_volume: 71,
+        ..Default::default()
+    };
+    store.save_settings(&settings).unwrap();
+    assert_eq!(store.settings().unwrap(), settings);
+    assert_eq!(store.sync_generation().unwrap(), generation);
+    assert_eq!(
+        store
+            .connection
+            .query_row("SELECT count(*) FROM sync_fields", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+
+    settings.completion_sound = false;
+    store.save_settings(&settings).unwrap();
+    let snapshot = store.export_sync_snapshot().unwrap();
+    for volume in [12, 12, 0, 100] {
+        settings.sound_volume = volume;
+        store.save_settings(&settings).unwrap();
+        assert_eq!(store.settings().unwrap(), settings);
+        assert_eq!(store.export_sync_snapshot().unwrap(), snapshot);
+    }
+    for (key, value) in [("custom", "value"), ("library_size", "starter")] {
+        store.set_setting(key, value).unwrap();
+        assert_eq!(store.setting(key).unwrap().as_deref(), Some(value));
+        assert_eq!(store.export_sync_snapshot().unwrap(), snapshot);
+    }
+    assert_eq!(
+        store
+            .connection
+            .query_row("SELECT count(*) FROM sync_fields", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn synced_settings_advance_generation_and_only_changed_preference_clocks() {
+    let store = Store::memory().unwrap();
+    let mut settings = Settings {
+        auto_advance: true,
+        ..Default::default()
+    };
+    store.save_settings(&settings).unwrap();
+    let (initial, generation) = store.export_sync_snapshot().unwrap();
+    let clock = initial.settings["auto_advance"].updated_at;
+
+    settings.auto_advance = false;
+    settings.completion_sound = false;
+    settings.sound_volume = 71;
+    store.save_settings(&settings).unwrap();
+    assert_eq!(store.settings().unwrap(), settings);
+    assert_eq!(store.sync_generation().unwrap(), generation + 1);
+    let updated = store.export_sync().unwrap();
+    assert_eq!(updated.settings["auto_advance"].value, false);
+    assert!(updated.settings["auto_advance"].updated_at > clock);
+    assert_eq!(updated.settings["completion_sound"].value, false);
+    assert!(updated.settings["completion_sound"].updated_at > 0);
+    assert!(!updated.settings.contains_key("sound_volume"));
+    for (key, field) in initial.settings {
+        if key != "auto_advance" && key != "completion_sound" {
+            assert_eq!(updated.settings[&key], field);
+        }
+    }
+}
+
+#[test]
 fn sound_preferences_persist_and_sync_keeps_device_volume_local() {
     let local = Store::memory().unwrap();
     local
