@@ -106,6 +106,33 @@ fn attempt(position: &TrainingPosition, outcome: Outcome, day: i64) -> Attempt {
     }
 }
 #[test]
+fn ten_correct_in_a_150_puzzle_set_have_full_accuracy() {
+    let mut store = Store::memory().unwrap();
+    store.upsert_puzzles(&pool(150)).unwrap();
+    let service = service(store, MockFetcher::default());
+    let params = BuilderParams {
+        size: 150,
+        ..params()
+    };
+    let set_id = service.create_set(&params, 42, 1).unwrap().set_id.unwrap();
+    let mut pos = service.start_or_resume_cycle(set_id, 2).unwrap();
+    for _ in 0..10 {
+        service
+            .record_attempt(&attempt(&pos, Outcome::Correct, 10))
+            .unwrap();
+        pos = service.current_puzzle(pos.cycle.id).unwrap();
+    }
+    let set = service.list_sets().unwrap().remove(0);
+    assert_eq!(set.set.params.size, 150);
+    assert_eq!(set.stats.attempted(), 10);
+    assert_eq!(set.stats.accuracy(), 100.0);
+    assert_eq!(set.stats.average_ms(), 1000.0);
+    let progress = service.progress(set_id).unwrap();
+    assert!(!progress.cycles[0].complete);
+    assert_eq!(progress.cycles[0].stats, set.stats);
+    assert_eq!(progress.report.average_ms, 1000.0);
+}
+#[test]
 fn play_review_progress_next_cycle_export_delete_and_persistence() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db.sqlite");

@@ -128,7 +128,7 @@ impl Woodpeck {
             ui.add_space(5.0);
             ui.label(RichText::new(&set.set.params.name).size(23.0).strong());
             ui.label(format!(
-                "Cycle {} / {} · {} of {} positions",
+                "Cycle {} / {} · {} / {} done",
                 set.latest_cycle.as_ref().map_or(1, |c| c.number),
                 set.set.params.target_cycles,
                 set.stats.attempted(),
@@ -141,10 +141,7 @@ impl Woodpeck {
                 .desired_height(5.0),
             );
             ui.horizontal_wrapped(|ui| {
-                ui.small(format!(
-                    "{:.0}% accuracy",
-                    set.stats.accuracy(set.set.params.size)
-                ));
+                ui.small(format!("{:.0}% accuracy", set.stats.accuracy()));
                 ui.small(format!(
                     "{} solving time",
                     widgets::duration(set.stats.time_ms)

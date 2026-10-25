@@ -30,18 +30,15 @@ pub fn progress(
     attempts: &[Attempt],
     cycles: &[CycleSummary],
 ) -> ProgressReport {
+    let stats = CycleStats::from_attempts(attempts);
     let cycle_attempts: Vec<_> = attempts
         .iter()
         .filter(|a| a.kind == AttemptKind::Cycle)
         .collect();
     let mut accuracy = Accuracy::default();
-    let mut time_ms = 0_u64;
-    let mut attempted = 0_u32;
     let mut by_puzzle: BTreeMap<&str, (Accuracy, u32)> = BTreeMap::new();
     for a in cycle_attempts {
         accuracy.record(a.outcome);
-        attempted += 1;
-        time_ms = time_ms.saturating_add(a.time_ms.max(1));
         let entry = by_puzzle.entry(&a.puzzle_id).or_default();
         entry.0.record(a.outcome);
         if a.outcome.is_miss() {
@@ -76,28 +73,15 @@ pub fn progress(
         .min_by_key(|c| (c.stats.time_ms, c.number))
         .copied();
     let first = cycles.iter().find(|c| c.number == 1 && c.complete);
-    let latest = cycles
-        .iter()
-        .filter(|c| c.complete)
-        .max_by_key(|c| c.number);
+    let latest = cycles.iter().max_by_key(|c| c.number);
     let latest_vs_first = first
         .zip(latest)
-        .filter(|(a, b)| a.number != b.number)
-        .map(|(a, b)| {
-            compare(
-                b.stats,
-                a.stats,
-                u32::try_from(puzzles.len()).unwrap_or(u32::MAX),
-            )
-        });
+        .filter(|(a, b)| a.number != b.number && b.stats.answered() > 0)
+        .map(|(a, b)| compare(b.stats, a.stats));
     ProgressReport {
-        puzzles_attempted: attempted,
+        puzzles_attempted: stats.attempted(),
         accuracy,
-        average_ms: if attempted == 0 {
-            0.0
-        } else {
-            time_ms as f64 / f64::from(attempted)
-        },
+        average_ms: stats.average_ms(),
         best_cycle,
         latest_vs_first,
         by_theme,
@@ -121,18 +105,21 @@ mod tests {
         }
     }
     #[test]
-    fn progress_filters_review_and_uses_completed_cycles_for_comparison() {
+    fn progress_excludes_review_and_invalid_time_and_compares_latest_cycle() {
         let p = fixture();
         let mut q = p.clone();
         q.id = "second".into();
         q.themes = vec!["pin".into(), "pin".into()];
         let mut review = a(&p.id, Outcome::Correct);
         review.kind = AttemptKind::Review;
+        let mut invalid = a(&p.id, Outcome::Invalid);
+        invalid.time_ms = 90_000;
         let attempts = vec![
             a(&p.id, Outcome::Incorrect),
             a(&p.id, Outcome::Skipped),
             a(&q.id, Outcome::Correct),
             review,
+            invalid,
         ];
         let cycles = [
             CycleSummary {
@@ -164,8 +151,9 @@ mod tests {
                 complete: false,
             },
         ];
-        let report = progress(&[p.clone(), q], &attempts, &cycles);
-        assert_eq!(report.puzzles_attempted, 3);
+        let puzzles = [p.clone(), q];
+        let report = progress(&puzzles, &attempts, &cycles);
+        assert_eq!(report.puzzles_attempted, 4);
         assert_eq!(
             report.accuracy,
             Accuracy {
@@ -176,8 +164,16 @@ mod tests {
         assert_eq!(report.average_ms, 1000.0);
         assert_eq!(report.best_cycle.unwrap().number, 2);
         let delta = report.latest_vs_first.unwrap();
-        assert_eq!(delta.time_reduction_percent, Some(50.0));
+        assert!((delta.average_time_reduction_percent.unwrap() - 200.0 / 3.0).abs() < 1e-9);
         assert_eq!(delta.accuracy_points, 50.0);
+        let completed_report = progress(&puzzles, &attempts, &cycles[..2]);
+        assert_eq!(
+            completed_report
+                .latest_vs_first
+                .unwrap()
+                .average_time_reduction_percent,
+            Some(50.0)
+        );
         assert_eq!(
             report.by_theme["pin"],
             Accuracy {
@@ -188,6 +184,29 @@ mod tests {
         assert_eq!(report.most_missed[0].puzzle_id, p.id);
         assert_eq!(report.most_missed[0].misses, 2);
         assert_eq!(report.most_missed[0].position, 1);
+    }
+    #[test]
+    fn unanswered_latest_cycle_has_no_comparison() {
+        let cycles = [
+            CycleSummary {
+                number: 1,
+                stats: CycleStats {
+                    correct: 2,
+                    time_ms: 2000,
+                    ..Default::default()
+                },
+                complete: true,
+            },
+            CycleSummary {
+                number: 2,
+                stats: CycleStats {
+                    invalid: 1,
+                    ..Default::default()
+                },
+                complete: false,
+            },
+        ];
+        assert_eq!(progress(&[], &[], &cycles).latest_vs_first, None);
     }
     #[test]
     fn empty_progress_has_no_comparison_or_best() {
