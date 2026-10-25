@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.0](https://github.com/heroesofcode/woodpeck/compare/v0.2.0...v0.3.0) (2026-10-25)
+
+
+### Features
+
+* responsive training layout and sound effects ([2f6803c](https://github.com/heroesofcode/woodpeck/commit/2f6803c8f4c7449e09560b96a6ed443f793c9685))
+
+
+### Bug fixes
+
+* keep the active solve across sync status changes ([b11c495](https://github.com/heroesofcode/woodpeck/commit/b11c495ebf6d7f459fa702f9cb1158612904f2bd))
+* **settings:** keep local volume changes out of sync ([c6c2556](https://github.com/heroesofcode/woodpeck/commit/c6c25569416c878438272f29d94d6d863b1055f1))
+* **stats:** measure cycle accuracy over answered puzzles ([4d6d3fa](https://github.com/heroesofcode/woodpeck/commit/4d6d3faedbc50d1d4edebd9051d976e1ca8db8b5))
+
+
+### Performance
+
+* keep the training screen off blocking database work ([1c5c74a](https://github.com/heroesofcode/woodpeck/commit/1c5c74a2c81aeabda58befcda3caca81b439b8ae))
+
 ## [0.2.0](https://github.com/heroesofcode/woodpeck/compare/v0.1.0...v0.2.0) (2026-10-25)
 
 
