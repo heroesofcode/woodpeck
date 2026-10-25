@@ -4,23 +4,41 @@ use std::time::Duration;
 
 pub fn play_completion() {
     #[cfg(feature = "sound")]
-    let _ = std::thread::Builder::new()
-        .name("woodpeck-sound".into())
-        .spawn(|| {
-            use rodio::{DeviceSinkBuilder, Player};
-            let Ok(builder) = DeviceSinkBuilder::from_default_device() else {
-                return;
-            };
-            let Ok(mut stream) = builder.with_error_callback(|_| {}).open_stream() else {
-                return;
-            };
-            stream.log_on_drop(false);
-            let player = Player::connect_new(stream.mixer());
-            player.append(tone(660.0, 100, 0.12));
-            player.append(tone(880.0, 160, 0.10));
-            player.sleep_until_end();
+    {
+        use std::sync::{OnceLock, mpsc};
+        static PLAYER: OnceLock<mpsc::SyncSender<()>> = OnceLock::new();
+        let sender = PLAYER.get_or_init(|| {
+            let (sender, receiver) = mpsc::sync_channel(2);
+            let _ = std::thread::Builder::new()
+                .name("woodpeck-sound".into())
+                .spawn(move || {
+                    use rodio::{DeviceSinkBuilder, Player};
+                    let mut output = None;
+                    for () in receiver {
+                        if output.is_none() {
+                            let Ok(builder) = DeviceSinkBuilder::from_default_device() else {
+                                continue;
+                            };
+                            let Ok(mut stream) = builder.with_error_callback(|_| {}).open_stream()
+                            else {
+                                continue;
+                            };
+                            stream.log_on_drop(false);
+                            let player = Player::connect_new(stream.mixer());
+                            output = Some((stream, player));
+                        }
+                        let (_, player) = output.as_ref().expect("audio output");
+                        player.append(tone(660.0, 100, 0.12));
+                        player.append(tone(880.0, 160, 0.10));
+                        player.sleep_until_end();
+                    }
+                });
+            sender
         });
+        let _ = sender.try_send(());
+    }
 }
+
 #[cfg(feature = "sound")]
 fn tone(hz: f32, ms: u64, volume: f32) -> impl rodio::Source + Send {
     use rodio::{Source, source::SineWave};

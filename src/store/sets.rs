@@ -82,6 +82,19 @@ impl Store {
         }
         Ok(())
     }
+    /// Read one frozen puzzle without deserializing the whole set.
+    pub fn set_puzzle(&self, set_id: i64, puzzle_id: &str) -> Result<Option<Puzzle>> {
+        let json: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT puzzle_json FROM set_puzzles WHERE set_id=?1 AND puzzle_id=?2",
+                params![set_id, puzzle_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        json.map(|json| serde_json::from_str(&json).map_err(StoreError::from))
+            .transpose()
+    }
     pub fn set_puzzles(&self, id: i64) -> Result<Vec<Puzzle>> {
         let mut stmt = self
             .connection

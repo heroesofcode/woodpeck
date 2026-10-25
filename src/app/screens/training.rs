@@ -28,6 +28,10 @@ impl Woodpeck {
             });
         });
         ui.add_space(15.0);
+        if self.loading && self.session.is_none() {
+            ui.spinner();
+            return;
+        }
         if self.session.is_none() {
             if review {
                 self.review_empty(ui);
@@ -275,6 +279,13 @@ impl Woodpeck {
         }
     }
     pub(in crate::app) fn solve_controls(&mut self, ui: &mut Ui) {
+        if self.record_error {
+            ui.colored_label(ui.visuals().error_fg_color, "Progress could not be saved.");
+            if ui.button("Retry saving").clicked() {
+                self.record_error = false;
+                self.record();
+            }
+        }
         let Some(s) = &mut self.session else {
             return;
         };
@@ -410,24 +421,18 @@ impl Woodpeck {
                 ui.label(format!("{} puzzles waiting in Review", self.pending));
                 if !set.completed {
                     if widgets::primary(ui, "Start next cycle").clicked() {
-                        match self
-                            .service
-                            .next_cycle(set.set.id, chrono::Local::now().timestamp())
-                        {
-                            Ok(p) => self.load_training(p),
-                            Err(e) => self.error(e),
-                        }
+                        let id = set.set.id;
+                        self.request_training(move |service| {
+                            service.next_cycle(id, chrono::Local::now().timestamp())
+                        });
                     }
                 } else if set.set.params.target_cycles < 10
                     && widgets::primary(ui, "Run another cycle").clicked()
                 {
-                    match self
-                        .service
-                        .extend_cycle(set.set.id, chrono::Local::now().timestamp())
-                    {
-                        Ok(p) => self.load_training(p),
-                        Err(e) => self.error(e),
-                    }
+                    let id = set.set.id;
+                    self.request_training(move |service| {
+                        service.extend_cycle(id, chrono::Local::now().timestamp())
+                    });
                 }
                 if ui.button("Create a harder set").clicked() {
                     self.builder.set_range(crate::sets::normalize_range(
@@ -512,7 +517,7 @@ impl Woodpeck {
         }
     }
     fn cycle_comparisons(&self, ui: &mut Ui, set: &crate::service::SetSummary) {
-        if let Ok(p) = self.service.progress(set.set.id) {
+        if let Some(p) = self.progress.get(&set.set.id) {
             for (label, baseline) in [
                 ("vs cycle 1", p.cycles.first()),
                 ("vs previous", p.cycles.iter().rev().nth(1)),

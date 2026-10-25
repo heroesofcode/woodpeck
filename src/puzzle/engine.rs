@@ -82,6 +82,19 @@ impl Engine {
             allow_any_final_checkmate,
         }
     }
+    /// Rebase a prepared, still-loading engine when it becomes visible.
+    pub(crate) fn start_at(&mut self, now: Duration) {
+        debug_assert_eq!(self.state, State::Loading);
+        self.deadline = now;
+    }
+    /// Schedule state changes without polling at a fixed frame rate.
+    pub fn next_deadline(&self) -> Option<Duration> {
+        matches!(
+            self.state,
+            State::Loading | State::OpponentTurn | State::Incorrect
+        )
+        .then_some(self.deadline)
+    }
     pub fn state(&self) -> State {
         self.state
     }

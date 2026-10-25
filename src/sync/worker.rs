@@ -38,6 +38,13 @@ pub struct Worker {
 }
 impl Worker {
     pub fn start(path: &Path, latest: Config) -> Result<Self> {
+        Self::start_with_wake(path, latest, crate::service::Wake::default())
+    }
+    pub(crate) fn start_with_wake(
+        path: &Path,
+        latest: Config,
+        wake: crate::service::Wake,
+    ) -> Result<Self> {
         let (commands, receiver) = mpsc::channel();
         let (sender, events) = mpsc::channel();
         let done = Arc::new((Mutex::new(false), Condvar::new()));
@@ -49,7 +56,7 @@ impl Worker {
         std::thread::Builder::new()
             .name("woodpeck-sync".into())
             .spawn(move || {
-                run(&path, &receiver, &sender);
+                run(&path, &receiver, &sender, &wake);
                 let (lock, wake) = &*done;
                 if let Ok(mut finished) = lock.lock() {
                     *finished = true;
@@ -92,10 +99,20 @@ impl Drop for Worker {
             .send(Message::Close(Instant::now() + Duration::from_secs(3)));
     }
 }
-fn run(path: &Path, commands: &mpsc::Receiver<Message>, events: &mpsc::Sender<Config>) {
+fn run(
+    path: &Path,
+    commands: &mpsc::Receiver<Message>,
+    events: &mpsc::Sender<Config>,
+    wake: &crate::service::Wake,
+) {
+    let send = |config| {
+        let result = events.send(config);
+        wake.notify();
+        result
+    };
     let result = Store::open(path);
     let Ok(mut store) = result else {
-        let _ = events.send(Config {
+        let _ = send(Config {
             status: Status::Error,
             last_error: result.err().map(|e| e.to_string()),
             ..Config::default()
@@ -109,8 +126,7 @@ fn run(path: &Path, commands: &mpsc::Receiver<Message>, events: &mpsc::Sender<Co
     let mut previous = Config::default();
     let mut halted = false;
     loop {
-        let mut close = None;
-        let mut force = false;
+        let (mut close, mut force) = (None, false);
         match commands.recv_timeout(Duration::from_millis(500)) {
             Ok(Message::Now) => {
                 next = Some(Instant::now());
@@ -147,7 +163,7 @@ fn run(path: &Path, commands: &mpsc::Receiver<Message>, events: &mpsc::Sender<Co
             }
         }
         if cfg != previous {
-            let _ = events.send(cfg.clone());
+            let _ = send(cfg.clone());
             previous = cfg.clone();
         }
         let due = close.map_or_else(
@@ -155,7 +171,7 @@ fn run(path: &Path, commands: &mpsc::Receiver<Message>, events: &mpsc::Sender<Co
             |deadline| cfg.pending && Instant::now() < deadline,
         );
         if cfg.enabled && due {
-            let _ = events.send(Config {
+            let _ = send(Config {
                 status: Status::Syncing,
                 ..cfg
             });
@@ -181,7 +197,7 @@ fn run(path: &Path, commands: &mpsc::Receiver<Message>, events: &mpsc::Sender<Co
                 }
             }
             if let Ok(cfg) = config(&store) {
-                let _ = events.send(cfg.clone());
+                let _ = send(cfg.clone());
                 previous = cfg;
             }
         }
@@ -215,7 +231,9 @@ mod tests {
             let (commands, receiver) = mpsc::channel();
             let (sender, events) = mpsc::channel();
             commands.send(Message::Now).unwrap();
-            let thread = std::thread::spawn(move || run(&db, &receiver, &sender));
+            let thread = std::thread::spawn(move || {
+                run(&db, &receiver, &sender, &crate::service::Wake::default());
+            });
             loop {
                 let cfg = events.recv_timeout(Duration::from_secs(20)).unwrap();
                 if cfg.status == Status::Syncing {
@@ -246,7 +264,7 @@ mod tests {
         let (commands, receiver) = mpsc::channel();
         let (sender, events) = mpsc::channel();
         commands.send(Message::Close(Instant::now())).unwrap();
-        run(&db, &receiver, &sender);
+        run(&db, &receiver, &sender, &crate::service::Wake::default());
         assert!(events.try_iter().all(|cfg| cfg.status != Status::Syncing));
         let cfg = config(&store).unwrap();
         assert!(cfg.pending);

@@ -43,16 +43,35 @@ fn square_rect(rect: Rect, square: Square, white: bool) -> Rect {
 pub struct BoardWidget {
     pieces: Pieces,
     selected: Option<Square>,
+    rect: Option<Rect>,
     pub promotion: Option<String>,
     previous: Option<Board>,
     moving: Vec<(Square, Square)>,
     last_move: Vec<Square>,
     changed: f64,
+    snap_next: bool,
     flash: Option<(f64, bool)>,
     last_state: Option<State>,
 }
 impl BoardWidget {
+    pub(super) fn drag_origin(&self, engine: &Engine) -> Pos2 {
+        let position = engine.position().unwrap();
+        let from = position.legal_moves().first().unwrap().from().unwrap();
+        square_rect(
+            self.rect.unwrap(),
+            from,
+            engine.orientation() != Some(Color::Black),
+        )
+        .center()
+    }
+    pub(super) fn is_selected(&self) -> bool {
+        self.selected.is_some()
+    }
+    pub(super) fn player_moved(&mut self) {
+        self.snap_next = true;
+    }
     pub fn reset(&mut self) {
+        self.snap_next = false;
         self.selected = None;
         self.promotion = None;
         self.previous = None;
@@ -78,6 +97,7 @@ impl BoardWidget {
         let (allocation, response) =
             ui.allocate_exact_size(Vec2::new(size, size + 6.0), Sense::click_and_drag());
         let rect = Rect::from_min_size(allocation.min, Vec2::splat(size));
+        self.rect = Some(rect);
         let now = ui.input(|i| i.time);
         let board = position.board();
         self.update_board(board, engine.state(), now);
@@ -96,7 +116,24 @@ impl BoardWidget {
                     if let Some(piece) = board.piece_at(to)
                         && old.piece_at(to) != Some(piece)
                         && let Some(from) = Square::ALL.into_iter().find(|&from| {
-                            old.piece_at(from) == Some(piece) && board.piece_at(from) != Some(piece)
+                            board.piece_at(from) != old.piece_at(from)
+                                && (old.piece_at(from) == Some(piece)
+                                    || (piece.role != shakmaty::Role::Pawn
+                                        && to.rank()
+                                            == if piece.color == Color::White {
+                                                shakmaty::Rank::Eighth
+                                            } else {
+                                                shakmaty::Rank::First
+                                            }
+                                        && u32::from(to.rank()).abs_diff(u32::from(from.rank()))
+                                            == 1
+                                        && u32::from(to.file()).abs_diff(u32::from(from.file()))
+                                            <= 1
+                                        && old.piece_at(from)
+                                            == Some(shakmaty::Piece {
+                                                color: piece.color,
+                                                role: shakmaty::Role::Pawn,
+                                            })))
                         })
                     {
                         self.moving.push((from, to));
@@ -104,7 +141,8 @@ impl BoardWidget {
                     }
                 }
             }
-            self.changed = now;
+            self.changed = if self.snap_next { now - 0.14 } else { now };
+            self.snap_next = false;
             self.previous = Some(board.clone());
         }
         if self.last_state != Some(state) {
@@ -128,6 +166,14 @@ impl BoardWidget {
             8,
             color(c.lip),
         );
+        let checked_king = position
+            .is_check()
+            .then(|| board.king_of(position.turn()))
+            .flatten();
+        let font = FontId::new(
+            (sq * 0.19).clamp(9.0, 15.0),
+            egui::FontFamily::Name("coordinates".into()),
+        );
         for square in Square::ALL {
             let r = square_rect(rect, square, white);
             let dark = (u32::from(square.file()) + u32::from(square.rank())).is_multiple_of(2);
@@ -138,7 +184,7 @@ impl BoardWidget {
             if self.selected == Some(square) {
                 painter.rect_filled(r, 0, Color32::from_rgba_unmultiplied(226, 222, 60, 145));
             }
-            if position.is_check() && board.king_of(position.turn()) == Some(square) {
+            if checked_king == Some(square) {
                 for level in (1..=5).rev() {
                     painter.circle_filled(
                         r.center(),
@@ -148,10 +194,6 @@ impl BoardWidget {
                 }
             }
             let label_color = if dark { color(c.light) } else { color(c.dark) };
-            let font = FontId::new(
-                (sq * 0.19).clamp(9.0, 15.0),
-                egui::FontFamily::Name("coordinates".into()),
-            );
             if (white && square.file() == shakmaty::File::A)
                 || (!white && square.file() == shakmaty::File::H)
             {
@@ -170,7 +212,7 @@ impl BoardWidget {
                     r.max - Vec2::new(4.0, 3.0),
                     Align2::RIGHT_BOTTOM,
                     format!("{}", square.file().char()),
-                    font,
+                    font.clone(),
                     label_color,
                 );
             }
@@ -256,33 +298,28 @@ impl BoardWidget {
                 Color32::WHITE,
             );
         }
-        if fraction < 1.0 {
+        if fraction < 1.0 && !self.moving.is_empty() {
             ui.ctx().request_repaint();
         }
     }
     fn paint_flash(&self, ui: &Ui, rect: Rect, now: f64) {
         let painter = ui.painter();
         if let Some((then, correct)) = self.flash
-            && now - then < 0.35
+            && now - then < 0.22
         {
-            painter.rect_filled(
-                rect,
+            let alpha = ((1.0 - (now - then) / 0.22) * 180.0) as u8;
+            painter.rect_stroke(
+                rect.shrink(1.5),
                 0,
-                if correct {
-                    Color32::from_rgba_unmultiplied(
-                        81,
-                        195,
-                        98,
-                        ((1.0 - (now - then) / 0.35) * 65.0) as u8,
-                    )
-                } else {
-                    Color32::from_rgba_unmultiplied(
-                        230,
-                        55,
-                        55,
-                        ((1.0 - (now - then) / 0.35) * 80.0) as u8,
-                    )
-                },
+                Stroke::new(
+                    3.0,
+                    if correct {
+                        Color32::from_rgba_unmultiplied(81, 195, 98, alpha)
+                    } else {
+                        Color32::from_rgba_unmultiplied(230, 55, 55, alpha)
+                    },
+                ),
+                StrokeKind::Inside,
             );
             ui.ctx().request_repaint();
         }
@@ -316,17 +353,16 @@ impl BoardWidget {
             if let Some(from) = self.selected
                 && from != to
             {
-                let candidates: Vec<_> = position
+                if let Some(m) = position
                     .legal_moves()
                     .into_iter()
-                    .filter(|m| m.from() == Some(from) && m.to() == to)
-                    .collect();
-                if let Some(m) = candidates.first() {
+                    .find(|m| m.from() == Some(from) && m.to() == to)
+                {
                     if m.promotion().is_some() {
                         self.promotion = Some(format!("{from}{to}"));
                     } else {
                         played = Some(
-                            UciMove::from_move(*m, shakmaty::CastlingMode::Standard).to_string(),
+                            UciMove::from_move(m, shakmaty::CastlingMode::Standard).to_string(),
                         );
                     }
                     self.selected = None;
@@ -403,5 +439,30 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::*;
+    use std::time::Duration;
+    #[test]
+    fn engine_moves_slide_including_promotions_and_player_moves_snap() {
+        let mut puzzle = crate::puzzle::fixture();
+        puzzle.fen = "7k/P7/8/8/8/8/8/7K w - - 0 1".into();
+        puzzle.moves = "a7a8q h8g7".into();
+        let mut engine = Engine::new(&puzzle, Duration::ZERO, false);
+        let mut widget = BoardWidget::default();
+        widget.update_board(engine.position().unwrap().board(), engine.state(), 0.0);
+        assert_eq!(widget.moving.len(), 0);
+        engine.update(Duration::from_millis(80));
+        widget.update_board(engine.position().unwrap().board(), engine.state(), 0.08);
+        assert_eq!(widget.moving, [(Square::A7, Square::A8)]);
+        assert!((widget.changed - 0.08).abs() < f64::EPSILON);
+        engine.update(Duration::from_millis(220));
+        engine.play("h8g7", Duration::from_millis(300)).unwrap();
+        widget.player_moved();
+        widget.update_board(engine.position().unwrap().board(), engine.state(), 0.3);
+        assert!((0.3 - widget.changed - 0.14).abs() < f64::EPSILON);
     }
 }

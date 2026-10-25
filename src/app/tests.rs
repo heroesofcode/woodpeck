@@ -1,5 +1,16 @@
 use super::*;
 use crate::layout;
+fn settle(app: &mut Woodpeck) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        app.poll();
+        if app.background.is_empty() && !app.service.is_busy() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "local worker timed out");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
 #[test]
 fn skip_updates_badge_once_and_correct_review_preserves_cycle_stats() {
     let ctx = egui::Context::default();
@@ -10,7 +21,9 @@ fn skip_updates_badge_once_and_correct_review_preserves_cycle_stats() {
     };
     service.set_settings(&settings).unwrap();
     let mut app = Woodpeck::new(&ctx, service, PathBuf::from("/tmp/demo.db"), None);
+    settle(&mut app);
     app.navigate(Screen::Training);
+    settle(&mut app);
     let count = app.pending;
     let set_id = app.selected_set.unwrap();
     app.clock.0.set(Duration::from_secs(1));
@@ -22,6 +35,7 @@ fn skip_updates_badge_once_and_correct_review_preserves_cycle_stats() {
     app.action(shortcuts::Action::Skip);
     app.record();
     app.record();
+    settle(&mut app);
     assert_eq!(app.pending, count + 1);
     assert_eq!(app.cycle_marks.len(), 8);
     assert_eq!(app.toast.as_ref().unwrap().0, "Added to Review");
@@ -51,6 +65,7 @@ fn skip_updates_badge_once_and_correct_review_preserves_cycle_stats() {
         State::Complete
     );
     app.record();
+    settle(&mut app);
     assert_eq!(app.pending, count);
     assert_eq!(app.toast.as_ref().unwrap().0, "Cleared from Review");
     assert!(app.clearing_card.is_some());
@@ -75,6 +90,7 @@ fn every_screen_keeps_content_within_tiled_widths() {
         PathBuf::from("/tmp/demo.db"),
         None,
     );
+    settle(&mut app);
     for (width, height) in [
         (360.0, 640.0),
         (640.0, 900.0),
@@ -84,6 +100,7 @@ fn every_screen_keeps_content_within_tiled_widths() {
         let layout = layout::calculate(width, height);
         for (screen, _) in Screen::ALL {
             app.navigate(screen);
+            settle(&mut app);
             for _ in 0..2 {
                 let output = ctx.run_ui(
                     egui::RawInput {
@@ -213,6 +230,7 @@ fn welcome_states_fit_tiled_widths_and_screenshot_done_is_stable() {
         }),
     );
     app.refresh();
+    settle(&mut app);
     assert_eq!(app.library.count, 200_000);
     assert_eq!(app.library.bands.iter().sum::<u64>(), 200_000);
     for width in [360.0, 640.0, 960.0, 1920.0] {
@@ -259,6 +277,7 @@ fn welcome_arrows_tab_enter_and_escape_persist_choice() {
     welcome_frame(&mut app, &ctx, 960.0, vec![]);
     welcome_frame(&mut app, &ctx, 960.0, key(egui::Key::Enter));
     assert_eq!(app.screen, Screen::Builder);
+    settle(&mut app);
     assert_eq!(
         app.service
             .local_setting("onboarding_done")
@@ -334,6 +353,7 @@ fn library_download_is_available_during_startup_and_finishes_after_it() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
     }
+    settle(&mut app);
     assert_eq!(app.library.step, library::WelcomeStep::Done);
     assert_eq!(app.library.progress.accepted, 2);
     assert!(app.library.count >= crate::source::STARTER_COUNT);
@@ -374,6 +394,7 @@ fn library_worker_finishes_after_background_navigation_and_errors_can_retry() {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
+        settle(&mut app);
         assert_eq!(app.screen, Screen::Builder);
         assert_eq!(app.library.step, expected);
         if expected == library::WelcomeStep::Done {
@@ -382,4 +403,236 @@ fn library_worker_finishes_after_background_navigation_and_errors_can_retry() {
             assert_ne!(app.library.message, "");
         }
     }
+}
+
+fn training_app() -> (egui::Context, Woodpeck) {
+    let ctx = egui::Context::default();
+    let service = demo::service().unwrap();
+    service
+        .set_settings(&Settings {
+            completion_sound: false,
+            ..Settings::default()
+        })
+        .unwrap();
+    let mut app = Woodpeck::new(&ctx, service, PathBuf::new(), None);
+    settle(&mut app);
+    app.navigate(Screen::Training);
+    settle(&mut app);
+    app.clock.0.set(Duration::from_secs(1));
+    let now = app.now();
+    app.session.as_mut().unwrap().engine.update(now);
+    (ctx, app)
+}
+
+fn solve(app: &mut Woodpeck) {
+    let moves = app.session.as_ref().unwrap().puzzle.moves.clone();
+    let mut now = app.now() + Duration::from_secs(1);
+    app.clock.0.set(now);
+    app.session.as_mut().unwrap().engine.update(now);
+    for uci in moves.split_whitespace().skip(1).step_by(2) {
+        app.play(uci);
+        now += Duration::from_secs(1);
+        app.clock.0.set(now);
+        app.session.as_mut().unwrap().engine.update(now);
+    }
+    assert_eq!(
+        app.session.as_ref().unwrap().engine.state(),
+        State::Complete
+    );
+}
+
+#[test]
+fn completion_renders_while_save_waits_and_early_next_advances_once() {
+    let (ctx, mut app) = training_app();
+    let (release, wait) = std::sync::mpsc::channel();
+    let blocked = app
+        .service
+        .background(move |_| {
+            wait.recv().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let old = app.session.as_ref().unwrap().puzzle.id.clone();
+    let set_id = app.session.as_ref().unwrap().set_id;
+    solve(&mut app);
+    app.record();
+    app.record();
+    assert!(app.saving);
+    app.advance();
+    assert!(app.advance_pending);
+    for _ in 0..3 {
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| app.draw(ui));
+        output.drop_without_applying_deltas();
+        app.poll();
+        assert_eq!(app.session.as_ref().unwrap().puzzle.id, old);
+    }
+    release.send(()).unwrap();
+    blocked
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    settle(&mut app);
+    assert_ne!(app.session.as_ref().unwrap().puzzle.id, old);
+    assert_eq!(app.session.as_ref().unwrap().position, 8);
+    assert_eq!(
+        app.service
+            .progress(set_id)
+            .unwrap()
+            .cycles
+            .last()
+            .unwrap()
+            .stats
+            .attempted(),
+        8
+    );
+}
+
+#[test]
+fn save_acknowledgment_survives_navigation_and_cannot_replace_another_session() {
+    let (_, mut app) = training_app();
+    let (release, wait) = std::sync::mpsc::channel();
+    let blocked = app
+        .service
+        .background(move |_| {
+            wait.recv().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    solve(&mut app);
+    app.record();
+    app.navigate(Screen::Dashboard);
+    release.send(()).unwrap();
+    blocked
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    settle(&mut app);
+    assert!(!app.saving);
+    assert!(app.session.as_ref().unwrap().recorded);
+    app.navigate(Screen::Training);
+    app.advance();
+    assert_eq!(app.session.as_ref().unwrap().position, 8);
+    solve(&mut app);
+    app.record();
+    // Selecting a review board while a training write completes must preserve that board.
+    app.navigate(Screen::Review);
+    let review = app.session.as_ref().unwrap().puzzle.id.clone();
+    settle(&mut app);
+    assert_eq!(app.session.as_ref().unwrap().puzzle.id, review);
+    assert!(app.session.as_ref().unwrap().cycle_id.is_none());
+}
+
+#[test]
+fn hidden_timer_idle_frames_have_no_periodic_repaint() {
+    let (ctx, mut app) = training_app();
+    app.timer.toggle_visible();
+    // Expire all input/feedback animations before checking the viewport deadline.
+    for time in [10, 11, 12] {
+        let output = ctx.run_ui(
+            egui::RawInput {
+                time: Some(f64::from(time)),
+                ..Default::default()
+            },
+            |ui| {
+                app.tick(ui.ctx(), Duration::from_secs_f64(f64::from(time)));
+                app.draw(ui);
+            },
+        );
+        if time == 12 {
+            assert_eq!(
+                output.viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+                Duration::MAX
+            );
+        }
+        output.drop_without_applying_deltas();
+    }
+}
+
+#[test]
+fn failed_save_can_retry_without_advancing_or_recording_twice() {
+    let (_, mut app) = training_app();
+    solve(&mut app);
+    let set_id = app.session.as_ref().unwrap().set_id;
+    app.session.as_mut().unwrap().set_id = -1;
+    app.record();
+    settle(&mut app);
+    assert!(app.record_error);
+    assert!(!app.session.as_ref().unwrap().recorded);
+    app.advance();
+    assert!(app.advance_pending);
+    app.session.as_mut().unwrap().set_id = set_id;
+    app.record_error = false;
+    app.record();
+    app.record();
+    settle(&mut app);
+    assert!(!app.record_error);
+    assert_eq!(app.session.as_ref().unwrap().position, 8);
+    assert_eq!(
+        app.service
+            .progress(set_id)
+            .unwrap()
+            .cycles
+            .last()
+            .unwrap()
+            .stats
+            .attempted(),
+        8
+    );
+}
+
+#[test]
+fn attempts_advancement_and_ordinary_refresh_preserve_library_snapshot() {
+    let (_, mut app) = training_app();
+    let count = app.library.count;
+    let bands = app.library.bands;
+    // A sentinel detects accidental inclusion of library queries in ordinary snapshots.
+    app.library.count = u64::MAX;
+    app.library.bands = [u64::MAX; crate::source::RATING_BANDS];
+    app.refresh();
+    settle(&mut app);
+    solve(&mut app);
+    app.record();
+    settle(&mut app);
+    app.advance();
+    settle(&mut app);
+    assert_eq!(app.library.count, u64::MAX);
+    assert_eq!(app.library.bands, [u64::MAX; crate::source::RATING_BANDS]);
+    app.refresh_library();
+    settle(&mut app);
+    assert_eq!(app.library.count, count);
+    assert_eq!(app.library.bands, bands);
+}
+
+#[test]
+fn set_creation_queues_once_and_preserves_library_snapshot() {
+    let (ctx, mut app) = training_app();
+    app.navigate(Screen::Builder);
+    app.builder.size = 20;
+    app.library.count = u64::MAX;
+    let before = app.sets.len();
+    let (release, wait) = std::sync::mpsc::channel();
+    let blocked = app
+        .service
+        .background(move |_| {
+            wait.recv().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    app.create_set();
+    app.create_set();
+    assert!(app.creating);
+    assert_eq!(app.background.len(), 1);
+    let output = ctx.run_ui(egui::RawInput::default(), |ui| app.draw(ui));
+    assert!(!button_is_enabled(&ctx, &output, "Create Set  >"));
+    output.drop_without_applying_deltas();
+    release.send(()).unwrap();
+    blocked
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    settle(&mut app);
+    assert!(!app.creating);
+    assert_eq!(app.sets.len(), before + 1);
+    assert_eq!(app.library.count, u64::MAX);
+    assert_eq!(app.screen, Screen::Training);
 }

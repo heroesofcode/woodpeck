@@ -855,3 +855,24 @@ fn onboarding_is_local_and_existing_libraries_are_marked_silently() {
         Some("true")
     );
 }
+
+#[test]
+fn local_submission_does_not_wait_for_store_and_shutdown_drains_writes() {
+    let service = service(Store::memory().unwrap(), MockFetcher::default());
+    let shutdown = service.local_shutdown();
+    let store = lock(&service.store).unwrap();
+    let reply = service
+        .background(|local| local.set_local_setting("queued", "saved"))
+        .unwrap();
+    assert!(matches!(reply.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    drop(store);
+    reply.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    assert_eq!(
+        service.local_setting("queued").unwrap().as_deref(),
+        Some("saved")
+    );
+    let reply = service.background(LocalService::puzzle_count).unwrap();
+    drop(service);
+    shutdown.finish();
+    assert_eq!(reply.try_recv().unwrap().unwrap(), 0);
+}
