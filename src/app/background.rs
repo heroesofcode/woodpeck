@@ -176,23 +176,71 @@ impl Woodpeck {
         );
     }
     pub(super) fn refresh(&mut self) {
-        self.refresh_view(false);
+        self.refresh_view(false, false);
     }
-    pub(super) fn refresh_library(&mut self) {
-        self.refresh_view(true);
+    pub(super) fn refresh_library(&mut self, update_status: bool) {
+        self.refresh_view(true, update_status);
     }
-    fn refresh_view(&mut self, library: bool) {
+    fn refresh_view(&mut self, library: bool, update_status: bool) {
         let cycle = self.session.as_ref().and_then(|s| s.cycle_id);
+        let status_generation = self.status_generation;
         self.background(
             move |service| ViewData::read(service, cycle, library),
-            |app, result| {
+            move |app, result| {
                 match result {
-                    Ok(view) => app.apply_view(view),
+                    Ok(view) => {
+                        app.apply_view(view);
+                        if update_status && app.status_generation == status_generation {
+                            app.status = format!(
+                                "{} puzzles available offline",
+                                super::widgets::grouped_count(app.library.count)
+                            );
+                        }
+                    }
                     Err(error) => app.error(error),
                 }
                 if let Some(screenshot) = &app.screenshot {
                     super::demo::welcome(app, screenshot.screen);
                 }
+            },
+        );
+    }
+    pub(super) fn refresh_after_sync(&mut self) {
+        let generation = self.load_generation;
+        let cycle = self.session.as_ref().and_then(|s| s.cycle_id);
+        let puzzle_id = self.session.as_ref().map(|s| s.puzzle.id.clone());
+        self.background(
+            move |service| {
+                let view = ViewData::read(service, cycle, false)?;
+                let changed = cycle
+                    .and_then(|id| service.current_puzzle(id).ok())
+                    .filter(|p| p.puzzle.as_ref().map(|p| &p.id) != puzzle_id.as_ref())
+                    .map(PreparedTraining::new);
+                Ok((view, changed))
+            },
+            move |app, result| match result {
+                Ok((view, changed)) => {
+                    app.apply_view(view);
+                    // A sync snapshot must not replace a newer board or interrupt a save/load.
+                    if generation != app.load_generation || app.saving || app.loading {
+                        return;
+                    }
+                    if let Some(session) = &app.session
+                        && !session.recorded
+                    {
+                        if session.cycle_id.is_some() {
+                            if let Some(prepared) = changed {
+                                app.load_prepared(prepared);
+                            }
+                        } else if !app.all_reviews.iter().any(|card| {
+                            card.puzzle.id == session.puzzle.id
+                                && card.item.set_id == session.set_id
+                        }) {
+                            app.select_first_review();
+                        }
+                    }
+                }
+                Err(error) => app.error(error),
             },
         );
     }
