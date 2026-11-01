@@ -1,0 +1,20 @@
+{
+  "file": "old-style.epub",
+  "notation": "old style source qualifier",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. P-K4 P-K4 2. K. Kt. to B's 3d. Q. Kt. to B's 3d.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6"
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

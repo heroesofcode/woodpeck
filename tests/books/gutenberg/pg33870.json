@@ -1,0 +1,340 @@
+{
+  "file": "pg33870.epub",
+  "notation": "historical descriptive",
+  "complete": false,
+  "fragments": [
+    {
+      "page": 15,
+      "anchor": "1. P - K 4 P - K 3 2. P - Q 4 P - Q 4 3. Kt - Q B 3 P × P 4. Kt × P Kt - Q 2 5. Kt - K B 3 K Kt - B 3",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e6",
+        "d2d4",
+        "d7d5",
+        "b1c3",
+        "d5e4",
+        "c3e4",
+        "b8d7",
+        "g1f3",
+        "g8f6"
+      ]
+    },
+    {
+      "page": 16,
+      "anchor": "1. P - K 4 P - K 4 2. Kt - K B 3 Kt - Q B 3 3. B - Kt 5 Kt - B 3 4. O - O P - Q 3 5. B × Kt ch P × B",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "f1b5",
+        "g8f6",
+        "e1g1",
+        "d7d6",
+        "b5c6",
+        "b7c6"
+      ]
+    },
+    {
+      "page": 17,
+      "anchor": "1. P - K 4 P - K 4 2. Kt - K B 3 Kt - Q B 3 3. Kt - B 3 Kt - B 3 4. B - Kt 5 B - Kt 5 5. O - O O - O",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "b1c3",
+        "g8f6",
+        "f1b5",
+        "f8b4",
+        "e1g1",
+        "e8g8"
+      ]
+    },
+    {
+      "page": 17,
+      "anchor": "1. P - Q 4 P - Q 4 2. Kt - K B 3 Kt - K B 3 3. P - B 4 P - K 3 4. Kt - B 3 Q Kt - Q 2 5. B - Kt 5 P - B 3",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "d7d5",
+        "g1f3",
+        "g8f6",
+        "c2c4",
+        "e7e6",
+        "b1c3",
+        "b8d7",
+        "c1g5",
+        "c7c6"
+      ]
+    },
+    {
+      "page": 25,
+      "anchor": "1. P - K 4 P - K 4 2. Kt - K B 3 Kt - Q B 3 3. B - Kt 5 P - Q R 3 4. B - R 4 Kt - B 3 5. O - O Kt × P",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "f1b5",
+        "a7a6",
+        "b5a4",
+        "g8f6",
+        "e1g1",
+        "f6e4"
+      ]
+    },
+    {
+      "page": 26,
+      "anchor": "1. P - Q 4 P - Q 4 2. P - Q B 4 P - K 3 3. Kt - Q B 3 Kt - K B 3 4. B - Kt 5 B - K 2 5. P - K 3 Q Kt - Q 2",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "d7d5",
+        "c2c4",
+        "e7e6",
+        "b1c3",
+        "g8f6",
+        "c1g5",
+        "f8e7",
+        "e2e3",
+        "b8d7"
+      ]
+    },
+    {
+      "page": 27,
+      "anchor": "1. P - Q 4 P - Q 4 2. P - Q B 4 P - K 3 3. Kt - Q B 3 Kt - K B 3 4. B - Kt 5 B - K 2 5. P - K 3 Kt - K 5",
+      "occurrence": 0,
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "d7d5",
+        "c2c4",
+        "e7e6",
+        "b1c3",
+        "g8f6",
+        "c1g5",
+        "f8e7",
+        "e2e3",
+        "f6e4"
+      ]
+    },
+    {
+      "page": 28,
+      "anchor": "1. P - Q 4 P - Q 4 2. Kt - K B 3 P - Q B 4 3. P - B 4 P - K 3 4. P × Q P K P × P 5. Kt - B 3 Kt -Q B 3",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "d7d5",
+        "g1f3",
+        "c7c5",
+        "c2c4",
+        "e7e6",
+        "c4d5",
+        "e6d5",
+        "b1c3",
+        "b8c6"
+      ]
+    },
+    {
+      "page": 28,
+      "anchor": "1. P - Q 4 Kt - K B 3 2. Kt - K B 3 P - Q 3 3. B - Kt 5 Q Kt - Q 2 4. P - K 3 P - K 4 5. Kt - B 3 P - B 3",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "g8f6",
+        "g1f3",
+        "d7d6",
+        "c1g5",
+        "b8d7",
+        "e2e3",
+        "e7e5",
+        "b1c3",
+        "c7c6"
+      ]
+    },
+    {
+      "page": 29,
+      "anchor": "1. P - Q 4 P - K 3 2. P - K 4 P - Q 4 3. Kt - Q B 3 Kt - K B 3 4. B - Kt 5 B - Kt 5",
+      "occurrence": 0,
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "e7e6",
+        "e2e4",
+        "d7d5",
+        "b1c3",
+        "g8f6",
+        "c1g5",
+        "f8b4"
+      ]
+    },
+    {
+      "page": 4,
+      "anchor": "1 R - R 7, K - Kt 1; 2 K - Kt 2.",
+      "start_fen": "7k/8/8/8/8/8/8/R6K w - - 0 1",
+      "moves": [
+        "a1a7",
+        "h8g8",
+        "h1g2"
+      ]
+    },
+    {
+      "page": 4,
+      "anchor": "1 K - K 2, K - Q 4; 2 K - K 3.",
+      "start_fen": "8/8/8/4k3/8/8/8/4K2R w - - 0 1",
+      "moves": [
+        "e1e2",
+        "e5d5",
+        "e2e3"
+      ]
+    },
+    {
+      "page": 4,
+      "anchor": "1 B - Q 3, K - Kt 2; 2 B - K Kt 5, K - B 2; 3 B - B 5,",
+      "start_fen": "7k/8/8/8/8/8/8/2B1KB2 w - - 0 1",
+      "moves": [
+        "f1d3",
+        "h8g7",
+        "c1g5",
+        "g7f7",
+        "d3f5"
+      ]
+    },
+    {
+      "page": 5,
+      "anchor": "1 P - K 3, K - K 4; 2 K - Q 3, K - Q 4.",
+      "start_fen": "8/8/8/8/4k3/8/3KP3/8 w - - 0 1",
+      "moves": [
+        "e2e3",
+        "e4e5",
+        "d2d3",
+        "e5d5"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 5,
+      "anchor": "1. K - K 4, K - K 3.",
+      "start_fen": "8/8/5k2/8/5K2/8/4P3/8 w - - 0 1",
+      "moves": [
+        "f4e4",
+        "f6e6"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    }
+  ],
+  "diagrams": [
+    "7k/8/8/8/8/8/8/R6K w - - 0 1",
+    "8/8/8/4k3/8/8/8/4K2R w - - 0 1",
+    "7k/8/8/8/8/8/8/2B1KB2 w - - 0 1",
+    "8/8/8/4k3/8/8/8/4K2Q w - - 0 1",
+    "8/8/8/8/4k3/8/3KP3/8 w - - 0 1",
+    "8/8/5k2/8/5K2/8/4P3/8 w - - 0 1",
+    "5k2/6p1/4K1P1/5P2/8/8/8/8 w - - 0 1",
+    "8/6p1/3k4/8/3K1PP1/8/8/8 w - - 0 1",
+    "8/6pp/3k4/8/3K1PPP/8/8/8 w - - 0 1",
+    "8/p6p/4k3/8/4K3/8/P5PP/8 w - - 0 1",
+    "5rk1/1b3p1p/ppq3p1/2p5/8/1P1P1R1Q/PBP3PP/7K b - - 0 1",
+    "5rk1/1bQ1bp1p/p1n3p1/1p6/3N4/1P1PR2Q/PBP3PP/7K w - - 0 1",
+    "2q2rk1/1b3ppp/pp6/2p5/2P1N3/PP1Q4/1B3PPP/6K1 w - - 0 1",
+    "2q1rrk1/1bpn1ppp/pp1p4/1B6/4N3/1P1QR3/PBP2PPP/6K1 w - - 0 1",
+    "r3qrk1/1pp2ppp/p1np4/3Q4/8/P2B1N2/1PP2PPP/3R2K1 w - - 0 1"
+  ],
+  "diagram_sources": [
+    {
+      "asset_suffix": "_Fig1.jpg",
+      "fen": "7k/8/8/8/8/8/8/R6K w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig2.jpg",
+      "fen": "8/8/8/4k3/8/8/8/4K2R w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig3.jpg",
+      "fen": "7k/8/8/8/8/8/8/2B1KB2 w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig4.jpg",
+      "fen": "8/8/8/4k3/8/8/8/4K2Q w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig5.jpg",
+      "fen": "8/8/8/8/4k3/8/3KP3/8 w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig6.jpg",
+      "fen": "8/8/5k2/8/5K2/8/4P3/8 w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig7.jpg",
+      "fen": "5k2/6p1/4K1P1/5P2/8/8/8/8 w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig8.jpg",
+      "fen": "8/6p1/3k4/8/3K1PP1/8/8/8 w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig9.jpg",
+      "fen": "8/6pp/3k4/8/3K1PPP/8/8/8 w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig10.jpg",
+      "fen": "8/p6p/4k3/8/4K3/8/P5PP/8 w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig11.jpg",
+      "fen": "5rk1/1b3p1p/ppq3p1/2p5/8/1P1P1R1Q/PBP3PP/7K b - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; Black to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig12.jpg",
+      "fen": "5rk1/1bQ1bp1p/p1n3p1/1p6/3N4/1P1PR2Q/PBP3PP/7K w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig13.jpg",
+      "fen": "2q2rk1/1b3ppp/pp6/2p5/2P1N3/PP1Q4/1B3PPP/6K1 w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig14.jpg",
+      "fen": "2q1rrk1/1bpn1ppp/pp1p4/1B6/4N3/1P1QR3/PBP2PPP/6K1 w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    },
+    {
+      "asset_suffix": "_Fig15.jpg",
+      "fen": "r3qrk1/1pp2ppp/p1np4/3Q4/8/P2B1N2/1PP2PPP/3R2K1 w - - 0 1",
+      "orientation": "White at bottom",
+      "note": "Board manually read from EPUB JPG; White to move as stated in the surrounding example; no castling or en passant. Initial counters for diagram matching."
+    }
+  ]
+}

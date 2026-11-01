@@ -1,0 +1,20 @@
+{
+  "file": "table.epub",
+  "notation": "table",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "White Black 1. e4 e5 2. Nf3 d6",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6"
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

@@ -1,0 +1,16 @@
+{
+  "file": "negative-2.epub",
+  "notation": "negative",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. Bh9 Qz2",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [],
+      "unresolved": true
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

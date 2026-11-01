@@ -1,0 +1,44 @@
+{
+  "file": "prior-ply.epub",
+  "notation": "prior ply analysis",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Qe7 5. d4 Bb6 6. O-O d6 7. h3 Nf6 8. Re1 h6 9. a4 a5 10. Na3 Nd8",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "f1c4",
+        "f8c5",
+        "c2c3",
+        "d8e7",
+        "d2d4",
+        "c5b6",
+        "e1g1",
+        "d7d6",
+        "h2h3",
+        "g8f6",
+        "f1e1",
+        "h7h6",
+        "a2a4",
+        "a7a5",
+        "b1a3",
+        "c6d8"
+      ]
+    },
+    {
+      "page": 0,
+      "anchor": "Returning to the earlier position: 2... a5",
+      "start_fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+      "moves": [
+        "a7a5"
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

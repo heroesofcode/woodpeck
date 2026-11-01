@@ -1,5 +1,6 @@
 //! SQLite repositories. Recording an attempt and changing review membership are atomic.
 mod attempts;
+mod books;
 mod library;
 mod puzzles;
 mod schema;
@@ -8,6 +9,7 @@ mod sync;
 #[cfg(test)]
 mod tests;
 pub use attempts::RecordedAttempt;
+pub use books::ReadingProgress;
 use rusqlite::Connection;
 pub use sets::{CycleRecord, StoredSet};
 use std::path::{Path, PathBuf};

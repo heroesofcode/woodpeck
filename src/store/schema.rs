@@ -1,6 +1,6 @@
 use super::{Result, StoreError};
 use rusqlite::Connection;
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 pub fn migrate(connection: &mut Connection) -> Result<()> {
     migrate_until(connection, VERSION)
 }
@@ -69,6 +69,19 @@ pub(super) fn migrate_until(connection: &mut Connection, target: u32) -> Result<
     }
     if version < 5 && target >= 5 {
         migrate_rating_range(&tx)?;
+    }
+    if version < 6 && target >= 6 {
+        tx.execute_batch(
+            "CREATE TABLE books (
+            id INTEGER PRIMARY KEY,title TEXT NOT NULL,author TEXT NOT NULL,format TEXT NOT NULL,
+            file_hash TEXT NOT NULL UNIQUE,imported_at INTEGER NOT NULL,model BLOB NOT NULL
+        );
+        CREATE TABLE book_progress (
+            book_id INTEGER PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,
+            page_index INTEGER NOT NULL CHECK(page_index>=0),node_id INTEGER,
+            updated_at INTEGER NOT NULL
+        );",
+        )?;
     }
     tx.pragma_update(None, "user_version", target.max(version))?;
     tx.commit()?;

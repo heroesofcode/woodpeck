@@ -144,6 +144,15 @@ The Settings download buttons use the same streaming importer. Imports accept pl
 
 The API fallback is offered explicitly when local generation is short; it makes sequential requests and waits at least 60 seconds after HTTP 429. Requests use the Lichess difficulty levels that overlap your range, and the results are filtered locally to the exact range. The range is never widened silently. If too few puzzles match, the builder shows the shortfall so you can widen the range, change the themes, or fetch more. An incomplete set is never saved.
 
+### Book core (CLI preview)
+
+`woodpeck book import <book.epub|book.pdf>` imports text-layer chess books into a
+separate local store. Book reading screens will follow in a later release. Scanned
+PDFs return a clear unsupported status. `woodpeck book eval <directory>` measures
+annotated books and writes Markdown/JSON reports. See the [core design](docs/books-core.md)
+and [reproducible evaluation corpus](tests/books/README.md) for supported notation,
+known limitations, and the optional Gutenberg benchmark.
+
 ### Desktop integration and local data
 
 The window title, X11 class, and Wayland app ID are `woodpeck`. An optional Hyprland rule for configurations using the classic rule syntax:

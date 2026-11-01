@@ -1,0 +1,29 @@
+{
+  "file": "analysis.epub",
+  "notation": "analysis",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. e4 e5 2. Nf3 d6",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6"
+      ]
+    },
+    {
+      "page": 0,
+      "anchor": "If now 2... Nc6, there follows 3. Bc4",
+      "start_fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+      "moves": [
+        "b8c6",
+        "f1c4"
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

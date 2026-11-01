@@ -2,3 +2,9 @@
 *.db
 *.db-shm
 *.db-wal
+/tests/books/fixtures/metrics.json
+/tests/books/fixtures/report.md
+/tests/books/gutenberg/metrics.json
+/tests/books/gutenberg/report.md
+/tests/books/gutenberg/*.epub
+__pycache__/

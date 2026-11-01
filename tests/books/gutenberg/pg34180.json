@@ -1,0 +1,17 @@
+{
+  "file": "pg34180.epub",
+  "notation": "historical prose",
+  "complete": false,
+  "fragments": [
+    {
+      "page": 29,
+      "anchor": "Pawn to King's Fourth",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4"
+      ],
+      "source_note": "Isolated initial move announced on all boards; no numbered game tables in this edition."
+    }
+  ],
+  "diagrams": []
+}

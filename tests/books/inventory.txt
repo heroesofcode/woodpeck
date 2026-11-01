@@ -1,0 +1,43 @@
+00  69 plies Morphy – De Riviere (Paris)
+01  61 plies Meek – Morphy (New York)
+02  61 plies Morphy – Lowenthal (London)
+03  57 plies Morphy – Bottin (Paris)
+04  56 plies Paulsen – Morphy (New York)
+05  51 plies Morphy – Ayers (Mobile)
+06  49 plies Morphy – Anderssen (Paris)
+07  47 plies Anderssen – Dufresne (Berlin)
+09  46 plies Rosanes – Anderssen (Breslau)
+10  45 plies Anderssen – Kieseritzky (London)
+11  45 plies Anderssen – Kierseritzky (London)
+12  92 plies Steinitz – Zukertort (match)
+13  86 plies Zukertort – Steinitz (World Championship)
+14  74 plies Pillsbury – Steinitz (It)
+15  70 plies Janowsky – Steinitz (Cologne)
+16  63 plies Lasker – Steinitz (St.Petersburg)
+17  61 plies Steinitz – Golmayo (Havana)
+18 163 plies Lasker – Janowsky (New York)
+19 129 plies Lasker – Salwe (St Petersburg)
+20 108 plies Janowsky – Lasker (St.Petersburg)
+21 101 plies Lasker – Dus-Chotimirski (Moscow)
+22  98 plies Tartakower – Lasker (New York)
+23  97 plies Pillsbury – Lasker (Nuremberg)
+24  99 plies Reti – Rubinstein (Karlsbad)
+25  88 plies Rubinstein – Nimzowitsch (Karlsbad)
+26  87 plies Capablanca – Rubinstein (Berlin)
+27  85 plies Rubinstein – Nimzowitsch (Berlin)
+28  83 plies Rubinstein – Capablanca (San Sebastian)
+29  82 plies Thomas – Rubinstein (Hastings <ENG>)
+30 200 plies Capablanca, Jose Raul – Lasker, Emanuel (1914.??.??)
+31 195 plies Spielmann, Rudolf – Capablanca, Jose Raul (1925.??.??)
+32 178 plies Bernstein, Jacob – Capablanca, Jose Raul (1915.??.??)
+33 172 plies Alekhine, Alexander – Capablanca, Jose Raul (1927.??.??)
+34 171 plies Capablanca, Jose Raul – Kostic, Boris (1919.??.??)
+35 165 plies Capablanca, Jose Raul – Janowsky, Dawid Markelowicz (1916.??.??)
+36 160 plies Seeded legal walk 0
+37 160 plies Seeded legal walk 1
+38 160 plies Seeded legal walk 2
+39 160 plies Seeded legal walk 3
+40   2 plies Underpromotion
+41   5 plies En passant
+42   1 plies Rank disambiguation
+43   1 plies Full disambiguation

@@ -1,0 +1,206 @@
+{
+  "file": "pg15201.epub",
+  "notation": "historical algebraic",
+  "complete": false,
+  "fragments": [
+    {
+      "page": 15,
+      "anchor": "(1) Sc3-d5.",
+      "start_fen": "rnb1kb1r/ppp2ppp/5q2/4p3/4P3/2N5/PPP2PPP/R2QKBNR w KQkq - 0 1",
+      "moves": [
+        "c3d5"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 19,
+      "anchor": "(1) e2-e4 e7-e5 (2) Sg1-f3 Sb8-c6 (3) Gf1-b5",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "f1b5"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 19,
+      "anchor": "(1) d2-d4 d7-d5 (2) Sg1-f3 Sg8-f6 (3) c2-c4 e7-e6 (4) Gc1-g5",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "d7d5",
+        "g1f3",
+        "g8f6",
+        "c2c4",
+        "e7e6",
+        "c1g5"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 26,
+      "anchor": "(1) f2-f3, e7-e5; (2) g2-g4.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "f2f3",
+        "e7e5",
+        "g2g4"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 29,
+      "anchor": "(1) e2-e4, e7-e5, grają (2) d2-d4.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "d2d4"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 30,
+      "anchor": "(1) e2-e4 d7-d5",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "d7d5"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 31,
+      "anchor": "(1) d2-d4 d7-d5 (2) Sg1-f3 Sg8-f6 (3) c2-c4 e7-e6 (4) Sb1-c3",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "d7d5",
+        "g1f3",
+        "g8f6",
+        "c2c4",
+        "e7e6",
+        "b1c3"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 32,
+      "anchor": "(1) d2-d4 c7-c5 (2) e2-e3",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "c7c5",
+        "e2e3"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 32,
+      "anchor": "(1) d2-d4 Sg8-f6 (2) Sg1-f3",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "g8f6",
+        "g1f3"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 33,
+      "anchor": "(1) e2-e4, e7-e5; (2) Sg1-f3, Sb8-c6; (3) Sb1-c3, Sg8-f6; (4) Gf1-b5",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "b1c3",
+        "g8f6",
+        "f1b5"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 33,
+      "anchor": "(1) e2-e4, e7-e5; (2) Sg1-f3, Sb8-c6; (3)Gf1-b5, Sg8-f6; (4) o-o, Gf8-e7",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "f1b5",
+        "g8f6",
+        "e1g1",
+        "f8e7"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 33,
+      "anchor": "(1) e2-e4, e7-e5; (2) Sg1-f3, Sb8-c6; (3) Gf1-c4, Sg8-f6",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "f1c4",
+        "g8f6"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 39,
+      "anchor": "(1) e2-e4, e7-e5; (2) Sg1-f3, Sb8-c6; (3) Gf1-c4, Sg8-f6; (4) Sb1-c3, Gf8-c5; (5) d2-d3, d7-d6;",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "f1c4",
+        "g8f6",
+        "b1c3",
+        "f8c5",
+        "d2d3",
+        "d7d6"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 41,
+      "anchor": "(1) e2-e4, e7-e5; (2) Sg1-f3, Sb8-c6; (3) d2-d4, e5:d4; (4) Gf1-c4, Sg8-f6; (5) o-o, Gf8-e7",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "d2d4",
+        "e5d4",
+        "f1c4",
+        "g8f6",
+        "e1g1",
+        "f8e7"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 10,
+      "anchor": "(1) Sa6-c5; Kh2-h1; (2) Sc5-e4.",
+      "start_fen": "8/8/N7/8/8/7p/5K1k/8 w - - 0 1",
+      "moves": [
+        "a6c5",
+        "h2h1",
+        "c5e4"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    }
+  ],
+  "diagrams": []
+}

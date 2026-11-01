@@ -1,0 +1,20 @@
+{
+  "file": "broken.epub",
+  "notation": "broken",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. e4 e5 2. Nf3 Bh9 3. d4",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3"
+      ],
+      "unresolved": true
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

@@ -1,0 +1,60 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 1256 >>
+stream
+BT /F1 11 Tf 40 750 Td (1. e4 e5) Tj ET
+BT /F1 11 Tf 40 722 Td (2. c3 Nf6) Tj ET
+BT /F1 11 Tf 40 694 Td (3. d4 Nxe4) Tj ET
+BT /F1 11 Tf 40 666 Td (4. dxe5 Bc5) Tj ET
+BT /F1 11 Tf 40 638 Td (5. Qg4 Nxf2) Tj ET
+BT /F1 11 Tf 40 610 Td (6. Qxg7 Rf8) Tj ET
+BT /F1 11 Tf 40 582 Td (7. Bg5 f6) Tj ET
+BT /F1 11 Tf 40 554 Td (8. exf6 d5) Tj ET
+BT /F1 11 Tf 40 526 Td (9. Be2 Bg4) Tj ET
+BT /F1 11 Tf 40 498 Td (10. Bxg4 Nxg4) Tj ET
+BT /F1 11 Tf 40 470 Td (11. f7+ Rxf7) Tj ET
+BT /F1 11 Tf 40 442 Td (12. Qxf7+ Kxf7) Tj ET
+BT /F1 11 Tf 40 414 Td (13. Bxd8 Nf2) Tj ET
+BT /F1 11 Tf 40 386 Td (14. Bh4 Nxh1) Tj ET
+BT /F1 11 Tf 40 358 Td (15. Nf3 Nc6) Tj ET
+BT /F1 11 Tf 40 330 Td (16. Nbd2 Rg8) Tj ET
+BT /F1 11 Tf 40 302 Td (17. Kf1 d4) Tj ET
+BT /F1 11 Tf 40 274 Td (18. cxd4 Nxd4) Tj ET
+BT /F1 11 Tf 40 246 Td (19. Nxd4 Bxd4) Tj ET
+BT /F1 11 Tf 40 218 Td (20. Nf3 Bb6) Tj ET
+BT /F1 11 Tf 330 750 Td (21. Re1 h6) Tj ET
+BT /F1 11 Tf 330 722 Td (22. Re7+ Kf8) Tj ET
+BT /F1 11 Tf 330 694 Td (23. Ne5 Rg7) Tj ET
+BT /F1 11 Tf 330 666 Td (24. Nd7+ Kg8) Tj ET
+BT /F1 11 Tf 330 638 Td (25. Rxg7+ Kxg7) Tj ET
+BT /F1 11 Tf 330 610 Td (26. Nxb6 axb6) Tj ET
+BT /F1 11 Tf 330 582 Td (27. g4 Kg6) Tj ET
+BT /F1 11 Tf 330 554 Td (28. Kg2 h5) Tj ET
+BT /F1 11 Tf 330 526 Td (29. h3) Tj ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000185 00000 n 
+0000000311 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1619
+%%EOF

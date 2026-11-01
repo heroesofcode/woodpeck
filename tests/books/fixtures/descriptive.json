@@ -1,0 +1,49 @@
+{
+  "file": "descriptive.epub",
+  "notation": "descriptive",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. P-K4 P-K4 2. Kt-KB3 P-Q3 3. P-Q4 B-KKt5 4. PxK5 BxKB6 5. QxKB3 PxK4 6. B-QB4 Kt-KB3 7. Q-QKt3 Q-K2 8. Kt-QB3 P-QB3 9. B-KKt5 P-QKt4 10. KtxQKt5 PxQKt4 11. BxQKt5 ch QKt-Q2 12. O-O-O R-Q1 13. RxQ7 RxQ2 14. R-Q1 Q-K3 15. BxQ7 ch KtxQ2 16. Q-QKt8 ch KtxQKt1 17. R-Q8 mate",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6",
+        "d2d4",
+        "c8g4",
+        "d4e5",
+        "g4f3",
+        "d1f3",
+        "d6e5",
+        "f1c4",
+        "g8f6",
+        "f3b3",
+        "d8e7",
+        "b1c3",
+        "c7c6",
+        "c1g5",
+        "b7b5",
+        "c3b5",
+        "c6b5",
+        "c4b5",
+        "b8d7",
+        "e1c1",
+        "a8d8",
+        "d1d7",
+        "d8d7",
+        "h1d1",
+        "e7e6",
+        "b5d7",
+        "f6d7",
+        "b3b8",
+        "d7b8",
+        "d1d8"
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

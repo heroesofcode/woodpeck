@@ -1,0 +1,20 @@
+{
+  "file": "comments.epub",
+  "notation": "comments and NAGs",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. e4! an excellent move e5 $1 2. Nf3 text about the centre d6 ±",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6"
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

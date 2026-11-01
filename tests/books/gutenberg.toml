@@ -1,0 +1,35 @@
+# Pinned source editions; never commit the EPUB files.
+[[books]]
+id = 33870
+sha256 = "65ea4233b024d5c1908795acc6cb16ae3ce6d5d2b787a5036c7b642064268385"
+url = "https://www.gutenberg.org/ebooks/33870.epub3.images"
+
+[[books]]
+id = 5614
+sha256 = "bf164a1e72d2510284dfb423710dcc512016aa97717bc3eab7b92e5db4ed85b3"
+url = "https://www.gutenberg.org/ebooks/5614.epub3.images"
+
+[[books]]
+id = 16377
+sha256 = "11c47873b1715ec43a4592bb5abd91fa154691569be5c102c8b9d8e6f8929a49"
+url = "https://www.gutenberg.org/ebooks/16377.epub3.images"
+
+[[books]]
+id = 4913
+sha256 = "a0c5399fcdcd81bec33759813274818205ee4e5953b84111b082722023ae70fb"
+url = "https://www.gutenberg.org/ebooks/4913.epub3.images"
+
+[[books]]
+id = 34180
+sha256 = "7bc0bf70c94860440acfaa06f784cf1ae328807fb044d95e8bb45e145de53660"
+url = "https://www.gutenberg.org/ebooks/34180.epub3.images"
+
+[[books]]
+id = 15201
+sha256 = "031c6369c86937a6d7000f09617a4912ca2500d53811a5a3a48620f405178754"
+url = "https://www.gutenberg.org/ebooks/15201.epub3.images"
+
+[[books]]
+id = 55278
+sha256 = "6042419ea2455c0ab9a85a340a95bd5d6e49afdc25c894a0861fc698c7852851"
+url = "https://www.gutenberg.org/ebooks/55278.epub3.images"
