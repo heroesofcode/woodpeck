@@ -28,7 +28,7 @@ thiserror = "2"
 directories = "6"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 csv = "1"
-zstd = "0.13"
+zstd = "0.14.3"
 
 resvg = { version = "0.47", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }
