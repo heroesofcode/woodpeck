@@ -3,6 +3,8 @@ use crate::source::{LICHESS_DATABASE_URL, LibrarySize};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Start,
+    BookImport(std::path::PathBuf),
+    BookEval(std::path::PathBuf),
     Sync(SyncCommand),
     Screenshot {
         path: std::path::PathBuf,
@@ -24,7 +26,7 @@ pub enum SyncCommand {
     Status,
     Disable,
 }
-pub const HELP: &str = "woodpeck — local Woodpecker Method puzzle training\n\nUsage: woodpeck [--help | --version]\n       woodpeck import <path-or-url>\n       woodpeck import --lichess [--size medium|full] [--limit N]\n       woodpeck import <path-or-url> [--size medium|full] [--limit N]\n       woodpeck sync init <remote-url> | --create\n       woodpeck sync now | status | disable\n\nOpt-in progress sync requires a PRIVATE repository and system git.\nImports plain CSV or zstd CSV into the local database.\n--lichess streams the Lichess puzzle database; default size is full.\n--limit caps accepted puzzles for any source (overrides --size limit).\nScreenshot: --screenshot <out.png> [--screen dashboard|training|training-solved|review|progress|builder|settings|welcome|welcome-progress|welcome-done] [--size WxH]\nData override: $WOODPECK_DATA_DIR\nData: $XDG_DATA_HOME/woodpeck/woodpeck.db (Linux).\nPuzzles from the Lichess puzzle database (CC0).";
+pub const HELP: &str = "woodpeck — local Woodpecker Method puzzle training\n\nUsage: woodpeck [--help | --version]\n       woodpeck book import <path>\n       woodpeck book eval <dir>\n       woodpeck import <path-or-url>\n       woodpeck import --lichess [--size medium|full] [--limit N]\n       woodpeck import <path-or-url> [--size medium|full] [--limit N]\n       woodpeck sync init <remote-url> | --create\n       woodpeck sync now | status | disable\n\nOpt-in progress sync requires a PRIVATE repository and system git.\nImports plain CSV or zstd CSV into the local database.\n--lichess streams the Lichess puzzle database; default size is full.\n--limit caps accepted puzzles for any source (overrides --size limit).\nScreenshot: --screenshot <out.png> [--screen dashboard|training|training-solved|review|progress|builder|settings|welcome|welcome-progress|welcome-done] [--size WxH]\nData override: $WOODPECK_DATA_DIR\nData: $XDG_DATA_HOME/woodpeck/woodpeck.db (Linux).\nPuzzles from the Lichess puzzle database (CC0).";
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let args: Vec<_> = args.into_iter().collect();
     if args.first().is_some_and(|s| s == "--screenshot") {
@@ -36,6 +38,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> 
         return import(&args[1..]);
     }
     match args.as_slice() {
+        [command, flag] if command == "book" && (flag == "--help" || flag == "-h") => Ok(Command::Help),
+        [command, action, flag] if command == "book" && matches!(action.as_str(),"import" | "eval") && (flag == "--help" || flag == "-h") => Ok(Command::Help),
+        [command, action, path] if command == "book" && action == "import" => Ok(Command::BookImport(path.into())),
+        [command, action, path] if command == "book" && action == "eval" => Ok(Command::BookEval(path.into())),
         [] => Ok(Command::Start),
         [flag] if flag == "--help" || flag == "-h" => Ok(Command::Help),
         [flag] if flag == "--version" || flag == "-V" => Ok(Command::Version),
@@ -139,6 +145,24 @@ mod tests {
     use super::*;
     fn args(args: &[&str]) -> Result<Command, String> {
         parse(args.iter().map(|s| (*s).into()))
+    }
+    #[test]
+    fn book_commands() {
+        assert_eq!(
+            args(&["book", "import", "opening.epub"]),
+            Ok(Command::BookImport("opening.epub".into()))
+        );
+        assert_eq!(
+            args(&["book", "eval", "fixtures"]),
+            Ok(Command::BookEval("fixtures".into()))
+        );
+        for invalid in [
+            vec!["book"],
+            vec!["book", "import"],
+            vec!["book", "eval", "fixtures", "extra"],
+        ] {
+            assert!(args(&invalid).is_err());
+        }
     }
     #[test]
     fn library_options() {

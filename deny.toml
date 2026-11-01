@@ -1,5 +1,8 @@
 [advisories]
 yanked = "deny"
+# lopdf 0.42 fixes the nested-object stack overflow. Its font metrics dependency has
+# no replacement release yet; this advisory reports maintenance status, not a vulnerability.
+ignore = [{ id = "RUSTSEC-2026-0192", reason = "lopdf 0.42 requires ttf-parser 0.25 for PDF font metrics; revisit when upstream migrates" }]
 
 [licenses]
 allow = [

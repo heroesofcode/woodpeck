@@ -1,0 +1,260 @@
+{
+  "file": "pg16377.epub",
+  "notation": "historical descriptive",
+  "complete": false,
+  "fragments": [
+    {
+      "page": 21,
+      "anchor": "WHITE. BLACK. 1. P. to K's 4th. 1. P. to K's 4th. 2. K's Kt. to B's 3d. 2. P. to K. B's 3d. 3. Kt. takes K's P. 3. P. takes Kt. 4. Q. to K. R's 5th. (ch.) 4. P. to K. Kt's 3d. 5. Q. takes K's P. (ch.) 5. Q. to K's 2d.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "f7f6",
+        "f3e5",
+        "f6e5",
+        "d1h5",
+        "g7g6",
+        "h5e5",
+        "d8e7"
+      ]
+    },
+    {
+      "page": 21,
+      "anchor": "WHITE. BLACK. 1. P. to K's 4th. 1. P. to K's 4th. 2. K's Kt. to B's 3d. 2. P. to K. B's 3d. 3. K's Kt. takes P. 3. Q. to K's 2d. 4. K. Kt. to B's 3d. (best) 4. P. to Q's 4th. 5. P. to Q's 3d. 5. P. takes K's P.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "f7f6",
+        "f3e5",
+        "d8e7",
+        "e5f3",
+        "d7d5",
+        "d2d3",
+        "d5e4"
+      ]
+    },
+    {
+      "page": 21,
+      "anchor": "WHITE. BLACK. 1. P. to K's 4th. 1. P. to K's 4th. 2. K's Kt. to B's 3d. 2. K's B. to Q's 3d. 3. B. to Q. B's 4th. 3. K. Kt. to B's 3d. 4. P. to Q's 4th. 4. Q. Kt. to B's 3d. 5. P. takes K. P. 5. B. takes P.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "f8d6",
+        "f1c4",
+        "g8f6",
+        "d2d4",
+        "b8c6",
+        "d4e5",
+        "d6e5"
+      ]
+    },
+    {
+      "page": 21,
+      "anchor": "WHITE. BLACK. 1. P. to K's 4th. 1. P. to K's 4th. 2. K. Kt. to B's 3d. 2. Q. to K. B's 3d.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d8f6"
+      ]
+    },
+    {
+      "page": 21,
+      "anchor": "WHITE. BLACK. 1. P. to K's 4th. 1. P. to K's 4th. 2. K. Kt. to B's 3d. 2. P. to Q's 3d. 3. P. to Q's 4th. 3. P. to K. B's 4th. 4. Q. P. takes P. 4. K. B. P. takes P. 5. Kt. to K. Kt's 5th. 5. P. to Q's 4th. 6. P. to K's 6th. 6. Kt. to K. R's 3d. 7. P. to K. B's 3d. 7. Q. Kt. to B's 3d.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6",
+        "d2d4",
+        "f7f5",
+        "d4e5",
+        "f5e4",
+        "f3g5",
+        "d6d5",
+        "e5e6",
+        "g8h6",
+        "f2f3",
+        "b8c6"
+      ]
+    },
+    {
+      "page": 21,
+      "anchor": "WHITE. BLACK. 1. P. to K's 4th. 1. P. to K's 4th. 2. K. Kt. to B's 3d. 2. P. to Q's 3d. 3. P. to Q's 4th. 3. P. to K. B's 4th. 4. Q. P. takes P. 4. K. B. P. takes P. 5. Kt. to K. Kt's 5th. 5. P. to Q's 4th. 6. P. to K's 6th. 6. Kt. to K. R's 3d. 7. Q. Kt. to B's 3d. 7. P. to Q. B's 3d. 8. K. Kt. takes K. R. P. 8. Q. B. takes K. P. (best)",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6",
+        "d2d4",
+        "f7f5",
+        "d4e5",
+        "f5e4",
+        "f3g5",
+        "d6d5",
+        "e5e6",
+        "g8h6",
+        "b1c3",
+        "c7c6",
+        "g5h7",
+        "c8e6"
+      ]
+    },
+    {
+      "page": 22,
+      "anchor": "WHITE. BLACK. 1. P. to K's 4th. 1. P. to K's 4th. 2. K. Kt. to B's 3d. 2. P. to Q's 3d. 3. P. to Q's 4th. 3. P. to K. B's 4th. 4. Q. P. takes P. 4. K. B. P. takes P. 5. Kt. to K. Kt's 5th. 5. P. to Q's 4th. 6. P. to K's 6th. 6. Kt. to K. R's 3d. 7. Q. Kt. to B's 3d. 7. P. to Q. B's 3d. 8. K. Kt. takes K. P. 8. P. takes Kt.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6",
+        "d2d4",
+        "f7f5",
+        "d4e5",
+        "f5e4",
+        "f3g5",
+        "d6d5",
+        "e5e6",
+        "g8h6",
+        "b1c3",
+        "c7c6",
+        "g5e4",
+        "d5e4"
+      ]
+    },
+    {
+      "page": 22,
+      "anchor": "WHITE. BLACK. 1. P. to K's 4th. 1. P. to K's 4th. 2. K. Kt. to B's 3d. 2. P. to Q's 3d. 3. P. to Q's 4th. 3. K. Kt. to B's 3d. 4. Q. B. to K. Kt's 5th. 4. Q. B. to K. Kt's 5th. 5. P. takes K. P. 5. B. takes Kt.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6",
+        "d2d4",
+        "g8f6",
+        "c1g5",
+        "c8g4",
+        "d4e5",
+        "g4f3"
+      ]
+    },
+    {
+      "page": 22,
+      "anchor": "WHITE. BLACK. 1. P. to K's 4th. 1. P. to K's 4th. 2. K. Kt. to B's 3d. 2. P. to Q's 3d. 3. P. to Q's 4th. 3. Q. B. to K. Kt's 5th. 4. P. takes P. 4. B. takes Kt. 5. Q. takes B. 5. P. takes P.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6",
+        "d2d4",
+        "c8g4",
+        "d4e5",
+        "g4f3",
+        "d1f3",
+        "d6e5"
+      ]
+    },
+    {
+      "page": 23,
+      "anchor": "WHITE. (Mr. M.) BLACK. (M. B.) 1. P. to K's 4th. 1. P. to K's 4th. 2. K. Kt. to K. B's 3d. 2. P. to Q's 3d. 3. P. to Q's 4th. 3. P. takes P. 4. Q. takes P. 4. Q. Kt. to Q. B's 3d. 5. K. B. to Q. Kt's 5th. 5. Q. B. to Q's 2d.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6",
+        "d2d4",
+        "e5d4",
+        "d1d4",
+        "b8c6",
+        "f1b5",
+        "c8d7"
+      ]
+    },
+    {
+      "page": 24,
+      "anchor": "1. P. to K's 4th. 1. P. to K's 4th. 2. Kt. to K. B's 3d. 2. P. to Q's 3d. 3. P. to Q's 4th. 3. P. to K. B's 4th. 4. Kt. to Q. B's 3d. 4. K. B. P. takes P.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6",
+        "d2d4",
+        "f7f5",
+        "b1c3",
+        "f5e4"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 25,
+      "anchor": "1. P. to K's 4th. 1. P. to K's 4th. 2. K. Kt. to B's 3d. 2. K. Kt. to B's 3d. 3. K. B. to Q. B's 4th. 3. Kt. takes P. 4. Q. to K's 2d. 4. P. to Q's 4th.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "g8f6",
+        "f1c4",
+        "f6e4",
+        "d1e2",
+        "d7d5"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only.",
+      "occurrence": 0
+    },
+    {
+      "page": 23,
+      "anchor": "6. B. takes Kt. 6. B. takes B.",
+      "start_fen": "r2qkbnr/pppb1ppp/2np4/1B6/3QP3/5N2/PPP2PPP/RNB1K2R w KQkq - 3 6",
+      "moves": [
+        "b5c6",
+        "d7c6"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only.",
+      "occurrence": 0
+    },
+    {
+      "page": 24,
+      "anchor": "5. Q. Kt. takes P. 5. P. to Q's 4th. 6. Kt. to K. Kt's 3d. 6. P. to K's 5th.",
+      "start_fen": "rnbqkbnr/ppp3pp/3p4/4p3/3Pp3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5",
+      "moves": [
+        "c3e4",
+        "d6d5",
+        "e4g3",
+        "e5e4"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 26,
+      "anchor": "1. P. to K's 4th. 1. P. to K's 4th. 2. K. Kt. to K. B's 3d. 2. K. Kt. to K. B's 3d. 3. K. B. to Q. B's 4th. 3. Kt. takes K. P. 4. Q. Kt. to Q. B's 3d. 4. K. Kt. to K. B's 3d.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "g8f6",
+        "f1c4",
+        "f6e4",
+        "b1c3",
+        "e4f6"
+      ],
+      "source_note": "Independently transcribed Petroff line."
+    }
+  ],
+  "diagrams": []
+}

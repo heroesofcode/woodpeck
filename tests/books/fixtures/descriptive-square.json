@@ -1,0 +1,17 @@
+{
+  "file": "descriptive-square.epub",
+  "notation": "descriptive square",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. R-Q sq",
+      "start_fen": "7k/8/8/8/8/8/8/R3K3 w - - 0 1",
+      "moves": [
+        "a1d1"
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

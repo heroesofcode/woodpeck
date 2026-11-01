@@ -21,6 +21,25 @@ fn main() -> ExitCode {
 }
 fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
+        Command::BookImport(path) => {
+            use sha2::{Digest, Sha256};
+            let book = woodpeck::books::import::load(&path)?;
+            let hash = format!("{:x}", Sha256::digest(std::fs::read(&path)?));
+            let database =
+                database_path().ok_or("Could not find the application data directory.")?;
+            let store = Store::open(&database)?;
+            let id = store.save_book(&book, &hash, chrono::Utc::now().timestamp())?;
+            println!(
+                "Imported book {id}: {} pages, {} moves, language {}",
+                book.document.pages.len(),
+                book.nodes.len(),
+                book.language
+            );
+        }
+        Command::BookEval(path) => {
+            let report = woodpeck::books::eval::run(&path)?;
+            println!("{}", report.markdown());
+        }
         Command::Help => println!("{}", cli::HELP),
         Command::Version => println!("woodpeck {}", env!("CARGO_PKG_VERSION")),
         Command::Sync(command) => run_sync(command)?,

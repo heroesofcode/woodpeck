@@ -1,0 +1,189 @@
+{
+  "file": "pg5614.epub",
+  "notation": "historical descriptive",
+  "complete": false,
+  "fragments": [
+    {
+      "page": 13,
+      "anchor": "1. P—K4 P—K4 2. P—Q4 P×P 3. Q×P Kt—QB3 4. Q—K3 Kt—B3 5. P—KR3?",
+      "occurrence": 0,
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "d2d4",
+        "e5d4",
+        "d1d4",
+        "b8c6",
+        "d4e3",
+        "g8f6",
+        "h2h3"
+      ]
+    },
+    {
+      "page": 13,
+      "anchor": "1. P-K4 P-K4 2. Kt-KB3 P-Q3",
+      "occurrence": 0,
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6"
+      ]
+    },
+    {
+      "page": 13,
+      "anchor": "3. P-Q4",
+      "occurrence": 0,
+      "start_fen": "rnbqkbnr/ppp2ppp/3p4/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 3",
+      "moves": [
+        "d2d4"
+      ]
+    },
+    {
+      "page": 13,
+      "anchor": "3. … B-Kt5",
+      "occurrence": 0,
+      "start_fen": "rnbqkbnr/ppp2ppp/3p4/4p3/3PP3/5N2/PPP2PPP/RNBQKB1R b KQkq - 0 3",
+      "moves": [
+        "c8g4"
+      ]
+    },
+    {
+      "page": 13,
+      "anchor": "4. PxP BxKt",
+      "occurrence": 0,
+      "start_fen": "rn1qkbnr/ppp2ppp/3p4/4p3/3PP1b1/5N2/PPP2PPP/RNBQKB1R w KQkq - 1 4",
+      "moves": [
+        "d4e5",
+        "g4f3"
+      ]
+    },
+    {
+      "page": 13,
+      "anchor": "5. QxB PxP 6. B-QB4",
+      "occurrence": 0,
+      "start_fen": "rn1qkbnr/ppp2ppp/3p4/4P3/4P3/5b2/PPP2PPP/RNBQKB1R w KQkq - 0 5",
+      "moves": [
+        "d1f3",
+        "d6e5",
+        "f1c4"
+      ]
+    },
+    {
+      "page": 13,
+      "anchor": "6. … Kt-KB3 7. Q-QKt3 Q-K2",
+      "occurrence": 0,
+      "start_fen": "rn1qkbnr/ppp2ppp/8/4p3/2B1P3/5Q2/PPP2PPP/RNB1K2R b KQkq - 1 6",
+      "moves": [
+        "g8f6",
+        "f3b3",
+        "d8e7"
+      ]
+    },
+    {
+      "page": 13,
+      "anchor": "8. Kt-B3",
+      "occurrence": 0,
+      "start_fen": "rn2kb1r/ppp1qppp/5n2/4p3/2B1P3/1Q6/PPP2PPP/RNB1K2R w KQkq - 4 8",
+      "moves": [
+        "b1c3"
+      ]
+    },
+    {
+      "page": 14,
+      "anchor": "8. … P-B3 9. B-KKt5 P-Kt4",
+      "occurrence": 0,
+      "start_fen": "rn2kb1r/ppp1qppp/5n2/4p3/2B1P3/1QN5/PPP2PPP/R1B1K2R b KQkq - 5 8",
+      "moves": [
+        "c7c6",
+        "c1g5",
+        "b7b5"
+      ]
+    },
+    {
+      "page": 14,
+      "anchor": "10. KtxP PxKt 11. BxKtPch QKt-Q2 12. Castles QR R-Q1",
+      "occurrence": 0,
+      "start_fen": "rn2kb1r/p3qppp/2p2n2/1p2p1B1/2B1P3/1QN5/PPP2PPP/R3K2R w KQkq - 0 10",
+      "moves": [
+        "c3b5",
+        "c6b5",
+        "c4b5",
+        "b8d7",
+        "e1c1",
+        "a8d8"
+      ]
+    },
+    {
+      "page": 15,
+      "anchor": "1. P-Q4 P-Q4 2. P-QB4",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "d2d4",
+        "d7d5",
+        "c2c4"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 16,
+      "anchor": "1. P-K4, P-K4; 2. P-KB4, PxP; 3. Kt-KB3, P-KKt4; 4. P-KR4, P-Kt5; 5. Kt-K5, Kt-KB3;",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "f2f4",
+        "e5f4",
+        "g1f3",
+        "g7g5",
+        "h2h4",
+        "g5g4",
+        "f3e5",
+        "g8f6"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 17,
+      "anchor": "1. P-K4, P-K4; 2. Kt-KB3, Kt-QB3; 3. B-Kt5.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "f1b5"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 16,
+      "anchor": "6. B-B4, P-Q4; 7. PxP, B-Q3; 8. Castles! BxKt;",
+      "start_fen": "rnbqkb1r/pppp1p1p/5n2/4N3/4PppP/8/PPPP2P1/RNBQKB1R w KQkq - 2 6",
+      "moves": [
+        "f1c4",
+        "d7d5",
+        "e4d5",
+        "f8d6",
+        "e1g1",
+        "d6e5"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    },
+    {
+      "page": 16,
+      "anchor": "9. R-K1, Q-K2; 10. P-B3, Kt-R4;",
+      "start_fen": "rnbqk2r/ppp2p1p/5n2/3Pb3/2B2ppP/8/PPPP2P1/RNBQ1RK1 w kq - 0 9",
+      "moves": [
+        "f1e1",
+        "d8e7",
+        "c2c3",
+        "f6h5"
+      ],
+      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+    }
+  ],
+  "diagrams": []
+}

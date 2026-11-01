@@ -1,0 +1,49 @@
+{
+  "file": "lan.epub",
+  "notation": "LAN",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. e2-e4 e7-e5 2. g1-f3 d7-d6 3. d2-d4 c8-g4 4. d4-e5 g4-f3 5. d1-f3 d6-e5 6. f1-c4 g8-f6 7. f3-b3 d8-e7 8. b1-c3 c7-c6 9. c1-g5 b7-b5 10. c3-b5 c6-b5 11. c4-b5 b8-d7 12. e1-c1 a8-d8 13. d1-d7 d8-d7 14. h1-d1 e7-e6 15. b5-d7 f6-d7 16. b3-b8 d7-b8 17. d1-d8",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "d7d6",
+        "d2d4",
+        "c8g4",
+        "d4e5",
+        "g4f3",
+        "d1f3",
+        "d6e5",
+        "f1c4",
+        "g8f6",
+        "f3b3",
+        "d8e7",
+        "b1c3",
+        "c7c6",
+        "c1g5",
+        "b7b5",
+        "c3b5",
+        "c6b5",
+        "c4b5",
+        "b8d7",
+        "e1c1",
+        "a8d8",
+        "d1d7",
+        "d8d7",
+        "h1d1",
+        "e7e6",
+        "b5d7",
+        "f6d7",
+        "b3b8",
+        "d7b8",
+        "d1d8"
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

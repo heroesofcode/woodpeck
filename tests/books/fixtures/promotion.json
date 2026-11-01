@@ -1,0 +1,17 @@
+{
+  "file": "promotion.epub",
+  "notation": "promotion",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. e8Q",
+      "start_fen": "k7/4P3/8/8/8/8/8/4K3 w - - 0 1",
+      "moves": [
+        "e7e8q"
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

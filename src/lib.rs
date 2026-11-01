@@ -8,6 +8,7 @@
 // UI geometry is bounded before pixel conversion.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub mod app;
+pub mod books;
 pub mod cli;
 pub mod layout;
 pub mod motivation;

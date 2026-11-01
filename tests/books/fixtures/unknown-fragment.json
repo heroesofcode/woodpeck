@@ -1,0 +1,16 @@
+{
+  "file": "unknown-fragment.epub",
+  "notation": "broken fragment",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "12. Nf3 Nc6",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [],
+      "unresolved": true
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

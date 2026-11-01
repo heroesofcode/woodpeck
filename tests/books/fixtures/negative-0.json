@@ -1,0 +1,16 @@
+{
+  "file": "negative-0.epub",
+  "notation": "negative",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "Black's King surveys the board; a5 paper; e4 is a good square.",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [],
+      "unresolved": false
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

@@ -1,0 +1,36 @@
+{
+  "file": "variations.epub",
+  "notation": "SAN variations",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. e4! e5 $1 2. Nf3 (2. Bc4 Nf6 [2... Nc6]) d6 3. d4 Bg4",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "f1c4",
+        "g8f6",
+        "b8c6",
+        "d7d6",
+        "d2d4",
+        "c8g4"
+      ],
+      "parents": [
+        null,
+        0,
+        1,
+        1,
+        3,
+        3,
+        2,
+        6,
+        7
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}

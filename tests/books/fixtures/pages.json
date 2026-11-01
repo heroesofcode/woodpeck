@@ -1,0 +1,29 @@
+{
+  "file": "pages.pdf",
+  "notation": "PDF SAN",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "1. e4 e5",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [
+        "e2e4",
+        "e7e5"
+      ]
+    },
+    {
+      "page": 1,
+      "anchor": "2. Nf3 d6 3. d4 Bg4",
+      "start_fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+      "moves": [
+        "g1f3",
+        "d7d6",
+        "d2d4",
+        "c8g4"
+      ]
+    }
+  ],
+  "diagrams": [],
+  "scanned": false
+}
