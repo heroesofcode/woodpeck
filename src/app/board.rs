@@ -5,7 +5,7 @@ use crate::{
     settings::{BoardTheme, PieceRendering},
 };
 use eframe::egui::{
-    self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
+    self, Align2, Color32, FontId, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
 };
 use shakmaty::{Board, Color, Position, Square, uci::UciMove};
 
@@ -39,9 +39,84 @@ fn square_rect(rect: Rect, square: Square, white: bool) -> Rect {
         Vec2::splat(rect.width() / 8.0),
     )
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AnnotationColor {
+    Green,
+    Red,
+    Blue,
+    Yellow,
+}
+impl AnnotationColor {
+    fn from_modifiers(shift: bool, alt: bool, command: bool) -> Self {
+        if shift {
+            Self::Red
+        } else if alt {
+            Self::Blue
+        } else if command {
+            Self::Yellow
+        } else {
+            Self::Green
+        }
+    }
+    fn paint(self) -> Color32 {
+        let [r, g, b] = match self {
+            Self::Green => [21, 157, 62],
+            Self::Red => [220, 50, 47],
+            Self::Blue => [38, 139, 210],
+            Self::Yellow => [218, 180, 20],
+        };
+        Color32::from_rgba_unmultiplied(r, g, b, 165)
+    }
+}
+
+#[derive(Default)]
+struct Annotations {
+    circles: Vec<(Square, AnnotationColor)>,
+    arrows: Vec<((Square, Square), AnnotationColor)>,
+}
+fn toggle<T: PartialEq>(entries: &mut Vec<(T, AnnotationColor)>, key: T, color: AnnotationColor) {
+    if let Some(index) = entries.iter().position(|(entry, _)| *entry == key) {
+        if entries[index].1 == color {
+            entries.remove(index);
+        } else {
+            entries[index].1 = color;
+        }
+    } else {
+        entries.push((key, color));
+    }
+}
+impl Annotations {
+    fn toggle_circle(&mut self, square: Square, color: AnnotationColor) {
+        toggle(&mut self.circles, square, color);
+    }
+    fn toggle_arrow(&mut self, from: Square, to: Square, color: AnnotationColor) {
+        toggle(&mut self.arrows, (from, to), color);
+    }
+    fn clear(&mut self) {
+        self.circles.clear();
+        self.arrows.clear();
+    }
+    fn is_empty(&self) -> bool {
+        self.circles.is_empty() && self.arrows.is_empty()
+    }
+}
+
+// The bend shares the destination coordinate along the longer axis.
+fn knight_bend(from: Square, to: Square) -> Option<Square> {
+    let dx = u32::from(from.file()).abs_diff(u32::from(to.file()));
+    let dy = u32::from(from.rank()).abs_diff(u32::from(to.rank()));
+    match (dx, dy) {
+        (2, 1) => Some(Square::from_coords(to.file(), from.rank())),
+        (1, 2) => Some(Square::from_coords(from.file(), to.rank())),
+        _ => None,
+    }
+}
+
 #[derive(Default)]
 pub struct BoardWidget {
     pieces: Pieces,
+    annotations: Annotations,
+    annotation_origin: Option<Square>,
     selected: Option<Square>,
     rect: Option<Rect>,
     pub promotion: Option<String>,
@@ -69,8 +144,10 @@ impl BoardWidget {
     }
     pub(super) fn player_moved(&mut self) {
         self.snap_next = true;
+        self.clear_annotations();
     }
     pub fn reset(&mut self) {
+        self.clear_annotations();
         self.snap_next = false;
         self.selected = None;
         self.promotion = None;
@@ -107,14 +184,121 @@ impl BoardWidget {
         let now = ui.input(|i| i.time);
         let board = position.board();
         self.update_board(board, engine.state(), now);
+        self.annotation_input(ui, rect, white, &response);
         self.paint_squares(ui, engine, rect, theme, white);
         self.paint_pieces(ui, board, rect, rendering, white, &response);
         self.paint_flash(ui, rect, now);
         let played = self.pointer_move(ui, engine, rect, white, &response);
+        self.paint_annotations(ui, rect, white);
         self.promotion_picker(ui, rect).or(played)
+    }
+    fn clear_annotations(&mut self) {
+        self.annotations.clear();
+        self.annotation_origin = None;
+    }
+    fn annotation_input(&mut self, ui: &Ui, rect: Rect, white: bool, response: &egui::Response) {
+        let hit = |p: Pos2| hit_square([p.x, p.y], [rect.left(), rect.top()], rect.width(), white);
+        ui.input(|i| {
+            // Process events in order, including a press and release within one frame.
+            for event in &i.events {
+                if let egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed,
+                    modifiers,
+                } = event
+                {
+                    if *button == PointerButton::Primary && *pressed && hit(*pos).is_some() {
+                        self.clear_annotations();
+                    }
+                    if *button != PointerButton::Secondary {
+                        continue;
+                    }
+                    if *pressed {
+                        self.annotation_origin =
+                            if response.contains_pointer() && self.promotion.is_none() {
+                                hit(*pos)
+                            } else {
+                                None
+                            };
+                    } else if let Some(from) = self.annotation_origin.take()
+                        && let Some(to) = hit(*pos)
+                    {
+                        let color = AnnotationColor::from_modifiers(
+                            modifiers.shift,
+                            modifiers.alt,
+                            modifiers.ctrl || modifiers.command,
+                        );
+                        if from == to {
+                            self.annotations.toggle_circle(from, color);
+                        } else {
+                            self.annotations.toggle_arrow(from, to, color);
+                        }
+                    }
+                } else if matches!(event, egui::Event::PointerGone) {
+                    self.annotation_origin = None;
+                }
+            }
+        });
+    }
+    fn paint_annotations(&self, ui: &Ui, rect: Rect, white: bool) {
+        if self.annotations.is_empty() && self.annotation_origin.is_none() {
+            return;
+        }
+        let sq = rect.width() / 8.0;
+        for &(square, color) in &self.annotations.circles {
+            ui.painter().circle_stroke(
+                square_rect(rect, square, white).center(),
+                sq * 0.40,
+                Stroke::new(sq * 0.08, color.paint()),
+            );
+        }
+        let arrow = |from, to, color: AnnotationColor| {
+            let start = square_rect(rect, from, white).center();
+            let end = square_rect(rect, to, white).center();
+            let bend = knight_bend(from, to).map(|s| square_rect(rect, s, white).center());
+            let first = bend.unwrap_or(end);
+            let direction = (end - bend.unwrap_or(start)).normalized();
+            let tip = end - direction * sq * 0.08;
+            let base = tip - direction * sq * 0.28;
+            let normal = Vec2::new(-direction.y, direction.x) * sq * 0.17;
+            let mut points = vec![start + (first - start).normalized() * sq * 0.12];
+            if let Some(bend) = bend {
+                points.push(bend);
+            }
+            points.push(base);
+            ui.painter().add(egui::Shape::line(
+                points,
+                Stroke::new(sq * 0.12, color.paint()),
+            ));
+            ui.painter().add(egui::Shape::convex_polygon(
+                vec![tip, base + normal, base - normal],
+                color.paint(),
+                Stroke::NONE,
+            ));
+        };
+        for &((from, to), color) in &self.annotations.arrows {
+            arrow(from, to, color);
+        }
+        if let Some(from) = self.annotation_origin
+            && let Some(to) = ui.input(|i| i.pointer.hover_pos()).and_then(|p| {
+                hit_square([p.x, p.y], [rect.left(), rect.top()], rect.width(), white)
+            })
+            && from != to
+        {
+            let color = ui.input(|i| {
+                AnnotationColor::from_modifiers(
+                    i.modifiers.shift,
+                    i.modifiers.alt,
+                    i.modifiers.ctrl || i.modifiers.command,
+                )
+            });
+            arrow(from, to, color);
+        }
     }
     fn update_board(&mut self, board: &Board, state: State, now: f64) {
         if self.previous.as_ref() != Some(board) {
+            self.clear_annotations();
             self.moving.clear();
             self.last_move.clear();
             if let Some(old) = &self.previous {
@@ -257,7 +441,7 @@ impl BoardWidget {
         let sq = rect.width() / 8.0;
         let painter = ui.painter();
         let fraction = ((now - self.changed) / 0.14).clamp(0.0, 1.0) as f32;
-        let dragging = response.dragged() && self.selected.is_some();
+        let dragging = response.dragged_by(PointerButton::Primary) && self.selected.is_some();
         for square in Square::ALL {
             if dragging && self.selected == Some(square) {
                 continue;
@@ -344,7 +528,7 @@ impl BoardWidget {
         let hit = |p: Pos2| hit_square([p.x, p.y], [rect.left(), rect.top()], size, white);
         let interactive = engine.state() == State::PlayerTurn && self.promotion.is_none();
         if interactive
-            && response.drag_started()
+            && response.drag_started_by(PointerButton::Primary)
             && let Some(origin) = ui.input(|i| i.pointer.press_origin())
             && let Some(square) = hit(origin)
             && board.color_at(square) == Some(position.turn())
@@ -353,7 +537,8 @@ impl BoardWidget {
         }
         let mut played = None;
         if interactive
-            && (response.clicked() || response.drag_stopped())
+            && (response.clicked_by(PointerButton::Primary)
+                || response.drag_stopped_by(PointerButton::Primary))
             && let Some(to) = response.interact_pointer_pos().and_then(hit)
         {
             if let Some(from) = self.selected
@@ -414,6 +599,135 @@ impl BoardWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn annotation_toggles_replace_and_clear() {
+        let mut annotations = Annotations::default();
+        assert!(annotations.is_empty());
+        annotations.toggle_circle(Square::E4, AnnotationColor::Green);
+        assert_eq!(annotations.circles, [(Square::E4, AnnotationColor::Green)]);
+        annotations.toggle_circle(Square::E4, AnnotationColor::Green);
+        assert!(annotations.is_empty());
+        annotations.toggle_circle(Square::E4, AnnotationColor::Green);
+        annotations.toggle_circle(Square::E4, AnnotationColor::Red);
+        assert_eq!(annotations.circles, [(Square::E4, AnnotationColor::Red)]);
+        annotations.toggle_arrow(Square::A1, Square::B3, AnnotationColor::Green);
+        annotations.toggle_arrow(Square::A1, Square::B3, AnnotationColor::Green);
+        assert_eq!(annotations.arrows.len(), 0);
+        annotations.toggle_arrow(Square::A1, Square::B3, AnnotationColor::Green);
+        annotations.toggle_arrow(Square::A1, Square::B3, AnnotationColor::Blue);
+        assert_eq!(
+            annotations.arrows,
+            [((Square::A1, Square::B3), AnnotationColor::Blue)]
+        );
+        annotations.toggle_arrow(Square::B3, Square::A1, AnnotationColor::Yellow);
+        assert_eq!(annotations.arrows.len(), 2);
+        annotations.clear();
+        assert!(annotations.is_empty());
+    }
+    #[test]
+    fn annotation_colors_and_knight_paths() {
+        use AnnotationColor::{Blue, Green, Red, Yellow};
+        assert_eq!(AnnotationColor::from_modifiers(false, false, false), Green);
+        assert_eq!(AnnotationColor::from_modifiers(true, false, false), Red);
+        assert_eq!(AnnotationColor::from_modifiers(false, true, false), Blue);
+        assert_eq!(AnnotationColor::from_modifiers(false, false, true), Yellow);
+        assert_eq!(AnnotationColor::from_modifiers(true, true, true), Red);
+        assert_eq!(AnnotationColor::from_modifiers(false, true, true), Blue);
+        assert_eq!(knight_bend(Square::A1, Square::B3), Some(Square::A3));
+        assert_eq!(knight_bend(Square::D4, Square::B3), Some(Square::B4));
+        assert_eq!(knight_bend(Square::B3, Square::A1), Some(Square::B1));
+        for to in [Square::A1, Square::A8, Square::H8, Square::B2] {
+            assert_eq!(knight_bend(Square::A1, to), None);
+        }
+    }
+    #[test]
+    fn annotations_clear_with_position_changes_and_reset() {
+        let mut widget = BoardWidget::default();
+        widget
+            .annotations
+            .toggle_circle(Square::E4, AnnotationColor::Green);
+        widget.update_board(&Board::default(), State::PlayerTurn, 0.0);
+        assert!(widget.annotations.is_empty());
+        widget
+            .annotations
+            .toggle_circle(Square::E4, AnnotationColor::Green);
+        widget.annotation_origin = Some(Square::E4);
+        let mut changed = Board::default();
+        changed.discard_piece_at(Square::E2);
+        widget.update_board(&changed, State::PlayerTurn, 1.0);
+        assert!(widget.annotations.is_empty());
+        assert!(widget.annotation_origin.is_none());
+        widget
+            .annotations
+            .toggle_circle(Square::E4, AnnotationColor::Green);
+        widget.player_moved();
+        assert!(widget.annotations.is_empty());
+        widget
+            .annotations
+            .toggle_circle(Square::E4, AnnotationColor::Green);
+        widget.annotation_origin = Some(Square::E4);
+        widget.reset();
+        assert!(widget.annotations.is_empty());
+        assert!(widget.annotation_origin.is_none());
+    }
+    #[test]
+    fn secondary_input_preserves_selection_and_uses_release_modifiers() {
+        let ctx = egui::Context::default();
+        let mut engine = Engine::new(&crate::puzzle::fixture(), std::time::Duration::ZERO, false);
+        engine.update(std::time::Duration::from_millis(220));
+        assert_eq!(engine.state(), State::PlayerTurn);
+        let mut widget = BoardWidget {
+            selected: Some(Square::H5),
+            ..Default::default()
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0));
+        let from = square_rect(rect, Square::H5, true).center();
+        let to = square_rect(rect, Square::G3, true).center();
+        let mut frame = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = ui.interact(
+                        rect,
+                        ui.scope_id().with("annotation-test"),
+                        Sense::click_and_drag(),
+                    );
+                    widget.annotation_input(ui, rect, true, &response);
+                    assert!(
+                        widget
+                            .pointer_move(ui, &engine, rect, true, &response)
+                            .is_none()
+                    );
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        frame(vec![]);
+        frame(vec![
+            egui::Event::PointerMoved(from),
+            egui::Event::PointerButton {
+                pos: from,
+                button: PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        frame(vec![egui::Event::PointerMoved(to)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: to,
+            button: PointerButton::Secondary,
+            pressed: false,
+            modifiers: egui::Modifiers::SHIFT,
+        }]);
+        assert_eq!(widget.selected, Some(Square::H5));
+        assert_eq!(
+            widget.annotations.arrows,
+            [((Square::H5, Square::G3), AnnotationColor::Red)]
+        );
+    }
     #[test]
     fn orientation_edges_and_scaling() {
         assert_eq!(

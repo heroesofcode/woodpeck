@@ -97,6 +97,8 @@ Weakness presets start with their theme included, and you can add more from ther
 
 Shortcuts pause while typing, while a menu/dialog or promotion picker is open, or while modifiers are held. Promote using the on-screen Q/R/B/N picker.
 
+Right-click a square to toggle a circle, or right-drag to draw an arrow. Hold Shift for red, Alt for blue, or Ctrl/Cmd for yellow; the default is green. Repeat a mark to remove it. Left-clicking the board or changing the position clears annotations.
+
 ### Import puzzles
 
 ```sh
