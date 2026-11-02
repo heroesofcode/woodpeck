@@ -3,7 +3,7 @@ use super::{Screen, Woodpeck, reader::Reader, widgets};
 use crate::{
     books::{
         import::{ImportError, PageSource, TextImporter},
-        model::{Book, Status},
+        model::Book,
     },
     source::CancelFlag,
     store::ReadingProgress,
@@ -108,7 +108,11 @@ impl Woodpeck {
                                 app.books.entries = entries;
                                 app.books.choosing = false;
                                 if let Some(entry) = entry {
+                                    let summary = entry.1.summary();
                                     app.open_book(entry);
+                                    if let Some(reader) = &mut app.books.reader {
+                                        reader.notice = Some(import_summary(summary));
+                                    }
                                 }
                             }
                             Err(error) => app.books.message = error.to_string(),
@@ -289,22 +293,12 @@ impl Woodpeck {
                 }
             });
         }
-        let total = book.fragments.len();
-        let resolved = book
-            .fragments
-            .iter()
-            .filter(|f| f.status == Status::Resolved)
-            .count();
         ui.small(format!(
-            "{} · {} pages · {:.0}% positions",
+            "{} · {} pages",
             book.document.format.to_uppercase(),
             book.document.pages.len(),
-            if total == 0 {
-                0.0
-            } else {
-                resolved as f32 / total as f32 * 100.0
-            }
         ));
+        ui.small(card_summary(book.summary()));
         let pages = book.document.pages.len().max(1) as f32;
         let (fraction, status) = progress
             .as_ref()
@@ -405,9 +399,62 @@ impl Woodpeck {
     }
 }
 
+fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+/// The short line on a library card: what the board can show and what is left unchecked.
+fn card_summary(summary: crate::books::model::Summary) -> String {
+    let positions = count(summary.positions, "position", "positions");
+    if summary.unresolved == 0 {
+        positions
+    } else {
+        format!("{positions} · {} unresolved", summary.unresolved)
+    }
+}
+/// What an import found, in plain words, shown when the new book opens.
+pub(super) fn import_summary(summary: crate::books::model::Summary) -> String {
+    let positions = count(summary.positions, "position", "positions");
+    let unresolved = count(summary.unresolved, "passage", "passages");
+    match (summary.positions, summary.unresolved) {
+        (0, 0) => "No chess moves or diagrams were found in this book.".to_owned(),
+        (_, 0) => {
+            format!("Found {positions}, all checked. Click any move or diagram to set the board.")
+        }
+        (0, _) => format!(
+            "No position could be checked. {unresolved} with moves are marked ··· in the text; they never move the board."
+        ),
+        _ => format!(
+            "Found {positions}. {unresolved} could not be checked: they are marked ··· in the text and never move the board."
+        ),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn import_summaries_read_plainly() {
+        use crate::books::model::Summary;
+        let found = |positions, unresolved| Summary {
+            positions,
+            passages: 10,
+            unresolved,
+        };
+        assert_eq!(
+            import_summary(found(312, 14)),
+            "Found 312 positions. 14 passages could not be checked: they are marked ··· in the text and never move the board."
+        );
+        assert_eq!(
+            import_summary(found(1, 0)),
+            "Found 1 position, all checked. Click any move or diagram to set the board."
+        );
+        assert!(import_summary(found(0, 0)).starts_with("No chess moves"));
+        assert!(import_summary(found(0, 1)).contains("1 passage with moves"));
+        assert_eq!(
+            card_summary(found(312, 14)),
+            "312 positions · 14 unresolved"
+        );
+        assert_eq!(card_summary(found(5, 0)), "5 positions");
+    }
     #[test]
     fn readable_import_errors() {
         assert_eq!(

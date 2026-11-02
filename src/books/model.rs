@@ -1,4 +1,4 @@
-use super::document::Document;
+use super::document::{BlockKind, Document};
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
@@ -46,6 +46,15 @@ pub struct Book {
     pub sections: Vec<Section>,
 }
 
+/// What an import found: positions the board can show, the passages of moves and diagrams,
+/// and how many of those could not be fully checked (partial or unresolved).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Summary {
+    pub positions: usize,
+    pub passages: usize,
+    pub unresolved: usize,
+}
+
 /// A reader can render these runs directly and make `node_id` runs clickable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextRun<'a> {
@@ -54,6 +63,31 @@ pub struct TextRun<'a> {
     pub node_id: Option<NodeId>,
 }
 impl Book {
+    /// Every validated move is a position, and so is every checked diagram (a FEN, a text
+    /// diagram, or a diagram image read from its pixels); diagrams are blocks, not fragments.
+    pub fn summary(&self) -> Summary {
+        let diagrams = self
+            .document
+            .pages
+            .iter()
+            .flat_map(|page| &page.blocks)
+            .filter(|b| {
+                matches!(
+                    b.kind,
+                    BlockKind::Diagram { .. } | BlockKind::RecognizedDiagram { .. }
+                )
+            })
+            .count();
+        Summary {
+            positions: self.nodes.len() + diagrams,
+            passages: self.fragments.len() + diagrams,
+            unresolved: self
+                .fragments
+                .iter()
+                .filter(|f| f.status != Status::Resolved)
+                .count(),
+        }
+    }
     pub fn text_runs(&self, page_index: usize) -> Option<Vec<TextRun<'_>>> {
         let page = self.document.pages.get(page_index)?;
         let mut moves: Vec<_> = self.nodes.iter().filter(|n| n.page == page_index).collect();
