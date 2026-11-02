@@ -21,16 +21,20 @@ use std::{
 /// Asks the system file chooser for a book: the XDG desktop portal on Linux (Hyprland, GNOME,
 /// KDE…), with zenity as a fallback, and the native dialogs on macOS and Windows. `None` means
 /// cancelled or no chooser available; the path field stays as the fallback either way.
+///
+/// The dialog is created on the UI thread (macOS requires it) but awaited on a worker, so no
+/// modal loop ever runs inside the window's event handling.
 #[cfg(not(test))]
-fn pick_book() -> Option<PathBuf> {
-    rfd::FileDialog::new()
+fn pick_book() -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
+    let chosen = rfd::AsyncFileDialog::new()
         .set_title("Import a chess book")
         .add_filter("EPUB or PDF", &["epub", "pdf", "EPUB", "PDF"])
-        .pick_file()
+        .pick_file();
+    async move { chosen.await.map(|file| file.path().to_path_buf()) }
 }
 #[cfg(test)]
-fn pick_book() -> Option<PathBuf> {
-    None
+fn pick_book() -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
+    std::future::ready(None)
 }
 
 struct ImportTask {
@@ -158,16 +162,11 @@ impl Woodpeck {
         }
         let (send, receive) = mpsc::channel();
         let ctx = ctx.clone();
-        let pick = move || {
-            let _ = send.send(pick_book());
+        let chosen = pick_book();
+        std::thread::spawn(move || {
+            let _ = send.send(pollster::block_on(chosen));
             ctx.request_repaint();
-        };
-        // macOS dialogs must run on the main thread; elsewhere the chooser runs beside the UI.
-        if cfg!(target_os = "macos") {
-            pick();
-        } else {
-            std::thread::spawn(pick);
-        }
+        });
         self.books.picking = Some(receive);
     }
     fn start_import(&mut self, ctx: &egui::Context, path: PathBuf) {
