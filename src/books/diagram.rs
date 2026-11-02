@@ -7,6 +7,11 @@
 pub trait DiagramRecognizer: Sync {
     /// FEN piece placement (White at the bottom), or `None` to abstain.
     fn placement(&self, image: &[u8]) -> Option<String>;
+    /// Best guess for all 64 squares (row 0 = rank 8, '.' empty) without the confidence gates.
+    /// It may only confirm a position the moves already reached, never seed one.
+    fn reading(&self, _image: &[u8]) -> Option<String> {
+        None
+    }
 }
 
 /// Built-in nearest-prototype recognizer.
@@ -619,5 +624,13 @@ pub fn placement(squares: &[Square]) -> Option<String> {
 impl DiagramRecognizer for Prototypes {
     fn placement(&self, image: &[u8]) -> Option<String> {
         placement(&self.squares(image)?)
+    }
+    fn reading(&self, image: &[u8]) -> Option<String> {
+        Some(
+            self.squares(image)?
+                .iter()
+                .map(|s| char::from(s.label))
+                .collect(),
+        )
     }
 }

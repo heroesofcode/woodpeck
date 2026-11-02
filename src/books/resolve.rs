@@ -35,6 +35,8 @@ struct Context {
     invalid_start: bool,
     explicit_start: bool,
     unrecognized_image: bool,
+    /// After a board that resembles the current position: only its next move may follow.
+    resume: bool,
     /// A position read from an image has no move number until the text gives one.
     floating: bool,
     /// The last block ended in PGN tag pairs, so tags that follow belong to the same header.
@@ -69,6 +71,13 @@ impl Context {
     ) -> Result<(), Miss> {
         if self.invalid_start {
             return Err(Miss::Unknown);
+        }
+        if self.resume {
+            if target != ply(&self.pos) {
+                return Err(Miss::Unknown);
+            }
+            self.resume = false;
+            self.unrecognized_image = false;
         }
         if self.floating {
             let pos = (target % 2 == u32::from(self.pos.turn().is_black()))
@@ -237,6 +246,7 @@ pub fn resolve(document: Document) -> Book {
 pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramRecognizer>) -> Book {
     let assets = std::mem::take(&mut document.assets);
     let mut placements = HashMap::new();
+    let mut readings = HashMap::new();
     if let Some(recognizer) = recognizer {
         let mut paths: Vec<&String> = Vec::new();
         for block in document.pages.iter().flat_map(|p| &p.blocks) {
@@ -249,13 +259,17 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
         // Images are independent; spread them over a few threads (one decoded image each).
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
         let chunk = paths.len().div_ceil(threads).max(1);
+        // An image the gates reject still gets an ungated reading for confirmation.
         let read = |path: &String| {
             assets
                 .iter()
                 .find(|a| &a.path == path)
-                .and_then(|a| recognizer.placement(&a.bytes))
+                .map_or((None, None), |a| match recognizer.placement(&a.bytes) {
+                    Some(p) => (Some(p), None),
+                    None => (None, recognizer.reading(&a.bytes)),
+                })
         };
-        let results: Vec<Option<String>> = std::thread::scope(|scope| {
+        let results: Vec<(Option<String>, Option<String>)> = std::thread::scope(|scope| {
             let handles: Vec<_> = paths
                 .chunks(chunk)
                 .map(|part| {
@@ -267,17 +281,20 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             // A failed worker abstains for its own images and keeps the rest aligned.
             handles
                 .into_iter()
-                .flat_map(|(n, h)| h.join().unwrap_or_else(|_| vec![None; n]))
+                .flat_map(|(n, h)| h.join().unwrap_or_else(|_| vec![(None, None); n]))
                 .collect()
         });
-        for (path, placement) in paths.into_iter().zip(results) {
+        for (path, (placement, reading)) in paths.into_iter().zip(results) {
+            if let Some(reading) = reading {
+                readings.insert(path.clone(), reading);
+            }
             placements.insert(path.clone(), placement);
         }
     }
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let mut best = None;
     for (name, alphabet) in notation::ALPHABETS {
-        let candidate = resolve_with(document.clone(), name, alphabet, &placements);
+        let candidate = resolve_with(document.clone(), name, alphabet, &placements, &readings);
         if best
             .as_ref()
             .is_none_or(|b: &Book| candidate.nodes.len() > b.nodes.len())
@@ -295,6 +312,7 @@ fn resolve_with(
     language: &str,
     alphabet: &str,
     placements: &HashMap<String, Option<String>>,
+    readings: &HashMap<String, String>,
 ) -> Book {
     let recognized = recognized_positions(&document, alphabet, placements);
     let mut book = Book {
@@ -365,6 +383,38 @@ fn resolve_with(
                     invalid_start: true,
                     ..Context::default()
                 };
+                continue;
+            }
+            if let BlockKind::Image { path, alt } = &block.kind
+                && !context.invalid_start
+                && readings
+                    .get(path)
+                    .and_then(|r| differences(r, &context.pos))
+                    .is_some_and(|d| d <= CONFIRM_MAX_DIFFERENCES)
+            {
+                block.kind = BlockKind::RecognizedDiagram {
+                    path: path.clone(),
+                    alt: alt.clone(),
+                    fen: fen(&context.pos),
+                };
+                continue;
+            }
+            // A board close to the replayed position but not read exactly: the game may go on
+            // from its next move only, never from an earlier branch point.
+            if let BlockKind::Image { path, .. } = &block.kind
+                && !context.invalid_start
+                && !context.floating
+                && readings
+                    .get(path)
+                    .and_then(|r| differences(r, &context.pos))
+                    .is_some_and(|d| d <= RESUME_MAX_DIFFERENCES)
+            {
+                context.known = BTreeMap::from([(
+                    ply(&context.pos),
+                    vec![(context.pos.clone(), context.parent)],
+                )]);
+                context.resume = true;
+                context.unrecognized_image = true;
                 continue;
             }
             if matches!(block.kind, BlockKind::Image { .. }) {
@@ -791,6 +841,29 @@ fn stated_turn(text: &str) -> Option<Color> {
         _ => None,
     }
 }
+/// Every move changes at least two squares, so an ungated reading within this many squares of
+/// the replayed position shows that position and not one a move before or after it.
+const CONFIRM_MAX_DIFFERENCES: usize = 1;
+/// An ungated reading this close to the replayed position is a board of the same game, which
+/// the text may resume at exactly the next move.
+const RESUME_MAX_DIFFERENCES: usize = 12;
+
+/// Squares where an ungated image reading differs from a position, if it is a full reading.
+fn differences(reading: &str, pos: &Chess) -> Option<usize> {
+    let board = pos.board();
+    let squares: Vec<char> = (0..64)
+        .map(|i| {
+            let square = shakmaty::Square::from_coords(
+                shakmaty::File::new(i % 8),
+                shakmaty::Rank::new(7 - i / 8),
+            );
+            board.piece_at(square).map_or('.', shakmaty::Piece::char)
+        })
+        .collect();
+    (reading.chars().count() == 64)
+        .then(|| reading.chars().zip(squares).filter(|(a, b)| a != b).count())
+}
+
 /// Diagram images the recognizer read, keyed by page and block. The side to move comes from the
 /// text ("Black to play", "1. ..."); when moves follow, the first one must be legal for that side,
 /// otherwise the image stays unrecognized rather than seeding a doubtful position.
@@ -1366,6 +1439,99 @@ mod image_tests {
             }],
         };
         resolve_using(document, Some(&Fixed(PLACEMENT)))
+    }
+    /// Rejects every image but still reports a fixed ungated reading.
+    struct Reads(String);
+    impl DiagramRecognizer for Reads {
+        fn placement(&self, _: &[u8]) -> Option<String> {
+            None
+        }
+        fn reading(&self, _: &[u8]) -> Option<String> {
+            Some(self.0.clone())
+        }
+    }
+    /// Squares of `fen`'s placement with `changes` squares altered, as a reading.
+    fn reading_of(placement: &str, changes: &[usize]) -> String {
+        let mut squares: Vec<char> = placement
+            .chars()
+            .filter(|c| *c != '/')
+            .flat_map(|c| match c.to_digit(10) {
+                Some(n) => vec!['.'; n as usize],
+                None => vec![c],
+            })
+            .collect();
+        for &i in changes {
+            squares[i] = if squares[i] == '.' { 'q' } else { '.' };
+        }
+        squares.into_iter().collect()
+    }
+    /// Moves, an image read as `reading`, then more moves.
+    fn around_image(before: &str, reading: String, after: &str) -> Book {
+        let mut page = Page::default();
+        page.push(before, BlockKind::Paragraph);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        page.push(after, BlockKind::Paragraph);
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes: vec![0],
+            }],
+        };
+        resolve_using(document, Some(&Reads(reading)))
+    }
+    const AFTER_NF3: &str = "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R";
+    #[test]
+    fn a_near_reading_lets_the_game_resume_at_its_next_move() {
+        let b = around_image(
+            "1. e4 e5 2. Nf3",
+            reading_of(AFTER_NF3, &[0, 9, 20, 33, 63]),
+            "2... Nc6 3. Bb5",
+        );
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"]
+        );
+        assert_eq!(b.nodes[3].parent, Some(2));
+        // Not read exactly, so the image is not shown as a position.
+        assert_eq!(recognized(&b), None);
+    }
+    #[test]
+    fn a_near_reading_cannot_resume_from_an_earlier_move() {
+        let b = around_image(
+            "1. e4 e5 2. Nf3",
+            reading_of(AFTER_NF3, &[0, 9]),
+            "2. d4 exd4",
+        );
+        assert_eq!(b.nodes.len(), 3);
+        assert!(matches!(b.fragments[1].status, Status::Unresolved(_)));
+    }
+    #[test]
+    fn a_distant_reading_is_a_new_position() {
+        let far: Vec<usize> = (0..16).collect();
+        let b = around_image("1. e4 e5 2. Nf3", reading_of(AFTER_NF3, &far), "2... Nc6");
+        assert_eq!(b.nodes.len(), 3);
+        assert!(matches!(b.fragments[1].status, Status::Unresolved(_)));
+    }
+    #[test]
+    fn a_reading_one_square_off_confirms_the_replayed_position() {
+        let b = around_image("1. e4 e5 2. Nf3", reading_of(AFTER_NF3, &[4]), "2... Nc6");
+        assert_eq!(
+            recognized(&b),
+            Some("rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2")
+        );
+        assert_eq!(b.nodes.len(), 4);
     }
     fn recognized(b: &Book) -> Option<&str> {
         b.document.pages[0]

@@ -286,11 +286,54 @@ pub fn parse(pos: &Chess, text: &str, alphabet: &str) -> Result<Move, MatchError
         _ => Err(MatchError::Ambiguous),
     }
 }
-/// Every legal move a descriptive text could mean ("B-Kt2" may name either bishop).
+/// Every legal move a descriptive text could mean ("B-Kt2" may name either bishop), or failing
+/// that, every piece move an unmapped figurine could mean.
 pub fn candidates(pos: &Chess, text: &str) -> Vec<Move> {
-    pos.legal_moves()
+    let moves: Vec<Move> = pos
+        .legal_moves()
         .into_iter()
         .filter(|m| descriptive(pos, *m, text))
+        .collect();
+    if moves.is_empty() {
+        unmapped_piece(pos, text)
+    } else {
+        moves
+    }
+}
+/// A figurine font without a Unicode mapping turns the piece into stray glyphs ("lbxe4",
+/// "'ii'd8+"). Such a token is a piece move (never a pawn) to the square that ends it; the
+/// caller still needs it to be the only legal reading or to be settled by the moves after it.
+fn unmapped_piece(pos: &Chess, text: &str) -> Vec<Move> {
+    let text = text.trim_end_matches(['+', '#', '!', '?']);
+    let bytes = text.as_bytes();
+    let n = bytes.len();
+    if n < 3 || !(b'a'..=b'h').contains(&bytes[n - 2]) || !(b'1'..=b'8').contains(&bytes[n - 1]) {
+        return vec![];
+    }
+    let prefix = &text[..n - 2];
+    let (glyphs, capture) = match prefix.strip_suffix('x') {
+        Some(g) => (g, true),
+        None => (prefix, false),
+    };
+    // Piece letters, files and ranks are ordinary notation, which a failed parse already
+    // rejected.
+    let ordinary = glyphs.is_empty()
+        || glyphs
+            .chars()
+            .all(|c| "KQRBNP".contains(c) || ('a'..='h').contains(&c) || ('1'..='8').contains(&c))
+        || glyphs.chars().count() > 6
+        || glyphs.contains(char::is_whitespace);
+    if ordinary {
+        return vec![];
+    }
+    let Ok(to) = text[n - 2..].parse::<shakmaty::Square>() else {
+        return vec![];
+    };
+    pos.legal_moves()
+        .into_iter()
+        .filter(|m| {
+            m.to() == to && m.role() != Role::Pawn && !m.is_castle() && (!capture || m.is_capture())
+        })
         .collect()
 }
 fn desc_role(s: &str) -> Option<Role> {
@@ -466,6 +509,32 @@ mod tests {
                 uci
             );
         }
+    }
+    #[test]
+    fn unmapped_figurines_name_some_piece_on_the_square() {
+        let mut p = Chess::default();
+        for uci in ["e2e4", "e7e5"] {
+            let m = uci.parse::<UciMove>().unwrap().to_move(&p).unwrap();
+            p.play_unchecked(m);
+        }
+        let only = |text: &str| -> Vec<String> {
+            candidates(&p, text)
+                .iter()
+                .map(|m| m.to_uci(shakmaty::CastlingMode::Standard).to_string())
+                .collect()
+        };
+        assert_eq!(only("lbc3"), ["b1c3"]);
+        assert_eq!(only("lbf3"), ["g1f3", "d1f3"]);
+        assert_eq!(only("'ii'h5+"), ["d1h5"]);
+        assert_eq!(only("..tc4"), ["f1c4"]);
+        // King, queen, bishop and knight all reach e2; the moves after it have to settle it.
+        assert_eq!(only("lDe2").len(), 4);
+        // Files, ranks and piece letters are ordinary notation; a capture needs a capture.
+        assert_eq!(only("bf3"), Vec::<String>::new());
+        assert_eq!(only("lbxf3"), Vec::<String>::new());
+        assert_eq!(only("lbf3extra"), Vec::<String>::new());
+        // Pawns are never the hidden piece.
+        assert_eq!(only("lbd4"), Vec::<String>::new());
     }
     #[test]
     fn descriptive_matches_from_movers_side_and_rejects_ambiguity() {

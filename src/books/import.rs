@@ -8,6 +8,7 @@ use std::{
 };
 use thiserror::Error;
 mod pdf;
+mod picture;
 
 #[derive(Debug, Error)]
 pub enum ImportError {
@@ -48,6 +49,7 @@ impl PageSource for TextImporter {
                 return Err(ImportError::NoTextLayer);
             }
             let body = body_size(texts);
+            let mut assets = Vec::new();
             let pages = extracted
                 .pages
                 .iter()
@@ -62,7 +64,20 @@ impl PageSource for TextImporter {
                         .iter()
                         .filter(|(_, _, p)| *p == i)
                         .collect();
-                    pdf_page(&mut page, lines, body, &outline);
+                    let mut pictures = Vec::new();
+                    for (k, placed) in extracted.pictures.get(i).into_iter().flatten().enumerate() {
+                        // The cover is kept once, as the cover.
+                        if extracted.cover.as_ref() == Some(&placed.bytes) {
+                            continue;
+                        }
+                        let path = format!("page{}-{k}.png", i + 1);
+                        pictures.push((placed.top, path.clone()));
+                        assets.push(Asset {
+                            path,
+                            bytes: placed.bytes.clone(),
+                        });
+                    }
+                    pdf_page_with(&mut page, lines, body, &outline, &pictures);
                     page
                 })
                 .collect();
@@ -87,14 +102,16 @@ impl PageSource for TextImporter {
                     path: "cover".into(),
                     bytes,
                 });
+            let cover_path = cover.as_ref().map(|c| c.path.clone());
+            assets.extend(cover);
             return Ok(Document {
-                cover: cover.as_ref().map(|c| c.path.clone()),
+                cover: cover_path,
                 isbn,
                 title,
                 author: extracted.author.clone().unwrap_or_default(),
                 format: "pdf".into(),
                 pages,
-                assets: cover.into_iter().collect(),
+                assets,
             });
         }
         if !bytes.starts_with(b"PK") {
@@ -284,10 +301,24 @@ fn printed_titles(
     }
     printed
 }
+/// One PDF page without pictures, as [`pdf_page_with`] builds it.
+#[cfg(test)]
+fn pdf_page(page: &mut Page, lines: &[pdf::Line], body: f64, outline: &[&(u8, String, usize)]) {
+    pdf_page_with(page, lines, body, outline, &[]);
+}
 /// Builds blocks for one PDF page: outline entries and larger type become headings, text
 /// diagrams stay intact, and wrapped lines of the same paragraph are joined (with hyphenated
-/// words rejoined) so the reader can reflow them.
-fn pdf_page(page: &mut Page, lines: &[pdf::Line], body: f64, outline: &[&(u8, String, usize)]) {
+/// words rejoined) so the reader can reflow them. `pictures` are (top edge, asset path), top
+/// to bottom, and are placed before the first line below their top edge.
+#[allow(clippy::too_many_lines)] // Pictures, headings and paragraphs interleave in page order.
+fn pdf_page_with(
+    page: &mut Page,
+    lines: &[pdf::Line],
+    body: f64,
+    outline: &[&(u8, String, usize)],
+    pictures: &[(f64, String)],
+) {
+    let mut pictures = pictures.iter().peekable();
     let lines: Vec<_> = lines.iter().filter(|l| !l.text.trim().is_empty()).collect();
     let printed = printed_titles(page, &lines, outline);
     let mut widths: Vec<usize> = lines.iter().map(|l| l.text.chars().count()).collect();
@@ -310,8 +341,25 @@ fn pdf_page(page: &mut Page, lines: &[pdf::Line], body: f64, outline: &[&(u8, St
             paragraph.clear();
         }
     };
+    let image = |page: &mut Page, path: &String| {
+        page.push(
+            "",
+            BlockKind::Image {
+                path: path.clone(),
+                alt: String::new(),
+            },
+        );
+    };
     let mut i = 0;
     while i < lines.len() {
+        if pictures.peek().is_some_and(|(top, _)| *top >= lines[i].y) {
+            flush(page, &mut paragraph);
+            while let Some((_, path)) = pictures.next_if(|(top, _)| *top >= lines[i].y) {
+                image(page, path);
+            }
+            last = None;
+            scoring = false;
+        }
         let group: Vec<&str> = lines
             .get(i..i + 9)
             .map(|g| g.iter().map(|l| l.text.as_str()).collect())
@@ -384,6 +432,9 @@ fn pdf_page(page: &mut Page, lines: &[pdf::Line], body: f64, outline: &[&(u8, St
         i += 1;
     }
     flush(page, &mut paragraph);
+    for (_, path) in pictures {
+        image(page, path);
+    }
 }
 pub fn load(path: &Path) -> Result<super::model::Book, ImportError> {
     Ok(super::resolve::resolve(TextImporter.document(path)?))
