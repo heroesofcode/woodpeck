@@ -583,12 +583,22 @@ pub fn placement(squares: &[Square]) -> Option<String> {
     {
         return None;
     }
-    let count = |c: u8| squares.iter().filter(|s| s.label == c).count();
-    let pieces = squares.iter().filter(|s| s.label != b'.').count();
-    let back_rank_pawn = squares
+    let labels: Vec<u8> = squares.iter().map(|s| s.label).collect();
+    placement_of(&labels)
+}
+
+/// FEN placement of 64 square labels (row 0 = rank 8, `b'.'` empty) when the material is
+/// plausible: one king each, at most eight pawns a side, none on a back rank, 32 pieces.
+pub fn placement_of(labels: &[u8]) -> Option<String> {
+    if labels.len() != 64 || !labels.iter().all(|l| LABELS.as_bytes().contains(l)) {
+        return None;
+    }
+    let count = |c: u8| labels.iter().filter(|l| **l == c).count();
+    let pieces = labels.iter().filter(|l| **l != b'.').count();
+    let back_rank_pawn = labels
         .iter()
         .enumerate()
-        .any(|(i, s)| !(8..56).contains(&i) && matches!(s.label, b'P' | b'p'));
+        .any(|(i, l)| !(8..56).contains(&i) && matches!(l, b'P' | b'p'));
     if count(b'K') != 1
         || count(b'k') != 1
         || count(b'P') > 8
@@ -599,18 +609,18 @@ pub fn placement(squares: &[Square]) -> Option<String> {
         return None;
     }
     let mut rows = Vec::with_capacity(8);
-    for rank in squares.chunks(8) {
+    for rank in labels.chunks(8) {
         let mut row = String::new();
         let mut empty = 0u8;
-        for s in rank {
-            if s.label == b'.' {
+        for l in rank {
+            if *l == b'.' {
                 empty += 1;
             } else {
                 if empty > 0 {
                     row.push(char::from(b'0' + empty));
                     empty = 0;
                 }
-                row.push(char::from(s.label));
+                row.push(char::from(*l));
             }
         }
         if empty > 0 {
@@ -632,5 +642,86 @@ impl DiagramRecognizer for Prototypes {
                 .map(|s| char::from(s.label))
                 .collect(),
         )
+    }
+}
+
+/// Two recognizers that must not contradict each other: a placement is returned when one
+/// abstains and the other reads the board, or when both agree; any disagreement abstains.
+/// The ungated reading used for confirmation is the second recognizer's, or the first's when
+/// the second has none, so adding a recognizer in front never changes existing confirmations.
+pub struct Agreeing<'a> {
+    pub first: &'a dyn DiagramRecognizer,
+    pub second: &'a dyn DiagramRecognizer,
+}
+
+impl DiagramRecognizer for Agreeing<'_> {
+    fn placement(&self, image: &[u8]) -> Option<String> {
+        match (self.first.placement(image), self.second.placement(image)) {
+            (Some(a), Some(b)) => (a == b).then_some(a),
+            (a, b) => a.or(b),
+        }
+    }
+    fn reading(&self, image: &[u8]) -> Option<String> {
+        self.second
+            .reading(image)
+            .or_else(|| self.first.reading(image))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Fixed(Option<&'static str>);
+    impl DiagramRecognizer for Fixed {
+        fn placement(&self, _: &[u8]) -> Option<String> {
+            self.0.map(str::to_owned)
+        }
+        fn reading(&self, _: &[u8]) -> Option<String> {
+            self.0.map(|p| p.replace('/', ""))
+        }
+    }
+
+    #[test]
+    fn placement_of_checks_material() {
+        let mut labels = [b'.'; 64];
+        labels[4] = b'k';
+        labels[60] = b'K';
+        labels[52] = b'P';
+        assert_eq!(
+            placement_of(&labels).as_deref(),
+            Some("4k3/8/8/8/8/8/4P3/4K3")
+        );
+        labels[59] = b'K';
+        assert_eq!(placement_of(&labels), None, "two white kings");
+        labels[59] = b'P';
+        assert_eq!(placement_of(&labels), None, "back-rank pawn");
+        assert_eq!(placement_of(&labels[..63]), None);
+    }
+
+    fn both(first: &dyn DiagramRecognizer, second: &dyn DiagramRecognizer) -> Option<String> {
+        Agreeing { first, second }.placement(&[])
+    }
+
+    fn read(first: &dyn DiagramRecognizer, second: &dyn DiagramRecognizer) -> Option<String> {
+        Agreeing { first, second }.reading(&[])
+    }
+
+    #[test]
+    fn agreeing_recognizers_abstain_on_conflict() {
+        let a = Fixed(Some("8/8/8/8/8/8/8/K6k"));
+        let b = Fixed(Some("8/8/8/8/8/8/8/k6K"));
+        let none = Fixed(None);
+        assert_eq!(both(&a, &a).as_deref(), Some("8/8/8/8/8/8/8/K6k"));
+        assert_eq!(both(&a, &b), None);
+        assert_eq!(both(&none, &b).as_deref(), Some("8/8/8/8/8/8/8/k6K"));
+        assert_eq!(both(&a, &none).as_deref(), Some("8/8/8/8/8/8/8/K6k"));
+        assert_eq!(both(&none, &none), None);
+        assert_eq!(
+            read(&a, &b).as_deref(),
+            Some("8888888k6K"),
+            "second reading first"
+        );
+        assert_eq!(read(&a, &none).as_deref(), Some("8888888K6k"));
     }
 }
