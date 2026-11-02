@@ -1,7 +1,7 @@
 //! Small convolutional square classifier for printed and screen diagram images.
 //!
 //! Each of the 64 located squares is classified independently by three 3x3 convolution,
-//! ReLU and 2x2 max-pool stages followed by two dense layers. Besides the twelve pieces and
+//! `ReLU` and 2x2 max-pool stages followed by two dense layers. Besides the twelve pieces and
 //! the empty square there is a "junk" class, trained on squares cut by a misplaced frame, so
 //! a board whose grid was found in the wrong place abstains instead of being misread.
 //! Two networks of different widths were trained only on synthetic boards drawn with freely
@@ -82,8 +82,10 @@ impl Reader<'_> {
         let (head, tail) = self.bytes.split_at(len);
         self.bytes = tail;
         Some(
-            head.chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            head.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
                 .collect(),
         )
     }
@@ -98,7 +100,7 @@ struct Scratch {
 }
 
 impl Conv {
-    /// 3x3 convolution with zero padding, ReLU and 2x2 max pooling of a `side` x `side` input.
+    /// 3x3 convolution with zero padding, `ReLU` and 2x2 max pooling of a `side` x `side` input.
     fn forward(&self, input: &[f32], side: usize, out: &mut Vec<f32>, s: &mut Scratch) {
         let p = side + 2;
         s.padded.clear();
@@ -121,7 +123,7 @@ impl Conv {
             for c in 0..self.cin {
                 let plane = &s.padded[c * p * p..][..p * p];
                 let kernel = &self.weight[(o * self.cin + c) * 9..][..9];
-                for (ky, k) in kernel.chunks_exact(3).enumerate() {
+                for (ky, k) in kernel.as_chunks::<3>().0.iter().enumerate() {
                     let row = &plane[ky * p..][..span + 2];
                     let taps = row.iter().zip(&row[1..]).zip(&row[2..]);
                     for (a, ((v0, v1), v2)) in s.acc.iter_mut().zip(taps) {
@@ -249,7 +251,9 @@ impl Network {
     fn classify(&self, input: &[f32], s: &mut Scratch) -> Vec<Square> {
         let mut logits = Vec::with_capacity(CLASSES);
         input
-            .chunks_exact(CELL * CELL)
+            .as_chunks::<{ CELL * CELL }>()
+            .0
+            .iter()
             .map(|cell| {
                 self.logits(cell, s, &mut logits);
                 let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);

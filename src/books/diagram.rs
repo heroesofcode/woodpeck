@@ -593,7 +593,11 @@ pub fn placement_of(labels: &[u8]) -> Option<String> {
     if labels.len() != 64 || !labels.iter().all(|l| LABELS.as_bytes().contains(l)) {
         return None;
     }
-    let count = |c: u8| labels.iter().filter(|l| **l == c).count();
+    let mut counts = [0usize; 256];
+    for l in labels {
+        counts[usize::from(*l)] += 1;
+    }
+    let count = |c: u8| counts[usize::from(c)];
     let pieces = labels.iter().filter(|l| **l != b'.').count();
     let back_rank_pawn = labels
         .iter()
