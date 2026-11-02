@@ -292,8 +292,10 @@ The code separates the puzzle engine, injected timer, set generation, review rul
 
 ### Chess book Library
 
-Open **Library** to import an EPUB or a PDF with a text layer. Enter the file path
-under **Import book…**; extraction and move resolution run in the background, with
+Open **Library** to import an EPUB or a PDF with a text layer. **Import book…** opens
+the system file chooser (the XDG desktop portal on Linux, with zenity as a fallback;
+the native dialog on macOS and Windows). If no chooser is available, type the file
+path in the field below it. Extraction and move resolution run in the background, with
 stage progress and cancellation. Duplicate imports resume the existing book.
 Scanned and DRM-protected books are not supported.
 
