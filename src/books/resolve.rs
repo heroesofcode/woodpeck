@@ -239,10 +239,14 @@ fn renumber(pos: &Chess, fullmoves: u32) -> Option<Chess> {
     setup.position(CastlingMode::Standard).ok()
 }
 pub fn resolve(document: Document) -> Book {
-    resolve_using(
-        document,
-        super::diagram::builtin().map(|p| p as &dyn DiagramRecognizer),
-    )
+    let network = super::cnn::builtin().map(|n| n as &dyn DiagramRecognizer);
+    let prototypes = super::diagram::builtin().map(|p| p as &dyn DiagramRecognizer);
+    match (network, prototypes) {
+        (Some(first), Some(second)) => {
+            resolve_using(document, Some(&super::diagram::Agreeing { first, second }))
+        }
+        (network, prototypes) => resolve_using(document, network.or(prototypes)),
+    }
 }
 /// Expand a gated placement for comparison when its following moves cannot seed a position.
 fn reading_of_placement(placement: &str) -> Option<String> {
