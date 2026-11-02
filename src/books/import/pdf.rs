@@ -55,13 +55,238 @@ impl OutputDev for Layout {
         Ok(())
     }
 }
-pub(super) fn extract(bytes: &[u8]) -> Result<Vec<String>, OutputError> {
+/// One reconstructed text line with its dominant glyph size and baseline height.
+pub(super) struct Line {
+    pub text: String,
+    pub size: f64,
+    pub y: f64,
+    /// Number of separately spaced cells on the row (tables, side-by-side columns).
+    pub cells: usize,
+}
+/// Text lines per page, plus the outline (level, title, 0-based page) and Info title/author.
+pub(super) struct Extracted {
+    pub pages: Vec<Vec<Line>>,
+    pub outline: Vec<(u8, String, usize)>,
+    pub title: Option<String>,
+    pub author: Option<String>,
+}
+pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
     let doc = lopdf::Document::load_mem(bytes)?;
     let mut layout = Layout::default();
     pdf_extract::output_doc(&doc, &mut layout)?;
-    Ok(layout.pages.into_iter().map(order).collect())
+    let outline = doc
+        .get_toc()
+        .map(|toc| {
+            toc.toc
+                .into_iter()
+                .filter(|t| t.page > 0 && !t.title.trim().is_empty())
+                .map(|t| {
+                    (
+                        u8::try_from(t.level.clamp(1, 6)).unwrap_or(6),
+                        t.title.split_whitespace().collect::<Vec<_>>().join(" "),
+                        t.page - 1,
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let info = |key: &[u8]| {
+        let info = doc.trailer.get(b"Info").ok()?;
+        let info = match info {
+            lopdf::Object::Reference(id) => doc.get_object(*id).ok()?,
+            other => other,
+        };
+        let value = lopdf::decode_text_string(info.as_dict().ok()?.get(key).ok()?).ok()?;
+        let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!value.is_empty()).then_some(value)
+    };
+    let pages: Vec<_> = layout.pages.into_iter().map(order).collect();
+    Ok(Extracted {
+        outline: chapters(outline, pages.len()),
+        pages,
+        title: info(b"Title"),
+        author: info(b"Author"),
+    })
 }
-fn order(mut glyphs: Vec<Glyph>) -> String {
+/// The glyph size most characters are set in, so one bold move does not make a row a title.
+fn dominant(sizes: &[(f64, usize)]) -> f64 {
+    sizes
+        .iter()
+        .max_by_key(|(_, chars)| *chars)
+        .map_or(0.0, |(size, _)| *size)
+}
+/// Scanner and converter outlines often bookmark every page ("Image 0026", "Page 12");
+/// those are not chapters.
+fn chapters(outline: Vec<(u8, String, usize)>, pages: usize) -> Vec<(u8, String, usize)> {
+    let pattern = |t: &str| {
+        t.chars()
+            .filter(|c| !c.is_ascii_digit())
+            .collect::<String>()
+    };
+    let mut counts = std::collections::HashMap::new();
+    for (_, title, _) in &outline {
+        *counts.entry(pattern(title)).or_insert(0_usize) += 1;
+    }
+    // Scanner bookmarks repeat one placeholder ("Image 0001", "Page 2", "12"); numbered
+    // chapters or games ("Game 1", "Chapter 8") are real contents.
+    let placeholder = |p: &str| {
+        let words = p
+            .chars()
+            .filter(char::is_ascii_alphabetic)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        [
+            "", "image", "img", "page", "pg", "p", "scan", "bookmark", "untitled",
+        ]
+        .contains(&words.as_str())
+    };
+    // A numbered series ("Game 1" ... "Game 90") may well have a bookmark on every page.
+    let series = counts
+        .iter()
+        .filter(|(p, _)| !placeholder(p))
+        .map(|(_, n)| *n)
+        .max()
+        .unwrap_or(0);
+    if outline.len() * 5 > pages * 4 && series * 2 < outline.len() {
+        return Vec::new();
+    }
+    // Repeated placeholders are scanner stubs; real titles beside them stay.
+    outline
+        .into_iter()
+        .filter(|(_, title, _)| {
+            let p = pattern(title);
+            !(placeholder(&p) && counts[&p] > 3)
+        })
+        .collect()
+}
+/// The x of a gutter between two prose columns: a gap wider than a word space that lines up
+/// on at least a quarter of the lines, with sentence-length text on both sides (so tab-stop
+/// tables such as "12. Nf3   Nc6" are not taken for columns).
+fn gutter(lines: &[Vec<Glyph>]) -> Option<f64> {
+    let mut gaps = Vec::new();
+    for line in lines {
+        let mut line: Vec<&Glyph> = line.iter().collect();
+        line.sort_by(|a, b| a.x.total_cmp(&b.x));
+        for pair in line.windows(2) {
+            let gap = pair[1].x - pair[0].end;
+            if gap > pair[1].size.max(6.0) * 0.9 {
+                gaps.push(f64::midpoint(pair[0].end, pair[1].x));
+            }
+        }
+    }
+    let mut best: Option<(usize, f64)> = None;
+    for &x in &gaps {
+        let near: Vec<f64> = gaps
+            .iter()
+            .copied()
+            .filter(|g| (g - x).abs() < 6.0)
+            .collect();
+        #[allow(clippy::cast_precision_loss)]
+        let mean = near.iter().sum::<f64>() / near.len() as f64;
+        if best.is_none_or(|(n, _)| near.len() > n) {
+            best = Some((near.len(), mean));
+        }
+    }
+    let (count, x) = best?;
+    if count < 3 || count * 4 < lines.len() {
+        return None;
+    }
+    let mut sides = [Vec::new(), Vec::new()];
+    for line in lines {
+        if line.iter().any(|g| g.x < x && g.end > x) {
+            continue;
+        }
+        for (side, chars) in sides.iter_mut().zip([
+            line.iter()
+                .filter(|g| g.x < x)
+                .map(|g| g.text.chars().count())
+                .sum::<usize>(),
+            line.iter()
+                .filter(|g| g.x >= x)
+                .map(|g| g.text.chars().count())
+                .sum(),
+        ]) {
+            if chars > 0 {
+                side.push(chars);
+            }
+        }
+    }
+    let median = |v: &mut Vec<usize>| {
+        v.sort_unstable();
+        v.get(v.len() / 2).copied().unwrap_or(0)
+    };
+    let [mut l, mut r] = sides;
+    (median(&mut l) >= 15 && median(&mut r) >= 15).then_some(x)
+}
+/// Splits one baseline into cells at wide gaps, each with its dominant glyph size.
+fn cells(mut line: Vec<Glyph>) -> Vec<Line> {
+    line.sort_by(|a, b| a.x.total_cmp(&b.x));
+    let y = line[0].y;
+    // Parts split at wide gaps: (text, characters per glyph size).
+    let mut parts = vec![(String::new(), Vec::<(f64, usize)>::new())];
+    let mut end = None;
+    for glyph in line {
+        if let Some(last) = end {
+            let gap = glyph.x - last;
+            if gap > 48.0 {
+                parts.push((String::new(), Vec::new()));
+            } else if gap > glyph.size * 0.15 {
+                parts.last_mut().expect("text part").0.push(' ');
+            }
+        }
+        let part = parts.last_mut().expect("text part");
+        part.0.push_str(&glyph.text);
+        let chars = glyph.text.trim().chars().count();
+        if chars > 0 {
+            if let Some(entry) = part
+                .1
+                .iter_mut()
+                .find(|(size, _)| (size - glyph.size).abs() < 0.05)
+            {
+                entry.1 += chars;
+            } else {
+                part.1.push((glyph.size, chars));
+            }
+        }
+        end = Some(glyph.end);
+    }
+    parts
+        .into_iter()
+        .map(|(s, sizes)| {
+            (
+                s.split_whitespace().collect::<Vec<_>>().join(" "),
+                dominant(&sizes),
+            )
+        })
+        .filter(|(s, _)| !s.is_empty())
+        .map(|(text, size)| Line {
+            text,
+            size,
+            y,
+            cells: 1,
+        })
+        .collect()
+}
+/// Whether a line is one run of text across the gutter: a glyph covers it, or the text on
+/// both sides is only a word space apart (an empty gutter is narrower than the column gap).
+fn spans(line: &[Glyph], gutter: f64) -> bool {
+    if line.iter().any(|g| g.x < gutter && g.end > gutter) {
+        return true;
+    }
+    let before = line
+        .iter()
+        .filter(|g| g.x < gutter)
+        .max_by(|a, b| a.end.total_cmp(&b.end));
+    let after = line
+        .iter()
+        .filter(|g| g.x >= gutter)
+        .min_by(|a, b| a.x.total_cmp(&b.x));
+    match (before, after) {
+        (Some(a), Some(b)) => b.x - a.end <= b.size.max(6.0) * 0.9,
+        _ => false,
+    }
+}
+fn order(mut glyphs: Vec<Glyph>) -> Vec<Line> {
     glyphs.sort_by(|a, b| b.y.total_cmp(&a.y).then(a.x.total_cmp(&b.x)));
     let mut lines: Vec<Vec<Glyph>> = Vec::new();
     for glyph in glyphs {
@@ -74,55 +299,144 @@ fn order(mut glyphs: Vec<Glyph>) -> String {
             lines.push(vec![glyph]);
         }
     }
-    let mut rows = Vec::new();
-    for mut line in lines {
-        line.sort_by(|a, b| a.x.total_cmp(&b.x));
-        let mut parts = vec![String::new()];
-        let mut end = None;
-        for glyph in line {
-            if let Some(last) = end {
-                let gap = glyph.x - last;
-                if gap > 48.0 {
-                    parts.push(String::new());
-                } else if gap > glyph.size * 0.15 {
-                    parts.last_mut().expect("text part").push(' ');
-                }
+    if let Some(gutter) = gutter(&lines) {
+        // Two text columns: read the left column down, then the right one. A line that
+        // runs across the gutter (running head, wide title) ends the block above it.
+        let mut out = Vec::new();
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for line in lines {
+            if spans(&line, gutter) {
+                out.append(&mut left);
+                out.append(&mut right);
+                out.extend(cells(line));
+                continue;
             }
-            parts.last_mut().expect("text part").push_str(&glyph.text);
-            end = Some(glyph.end);
+            let (l, r): (Vec<_>, Vec<_>) = line.into_iter().partition(|g| g.x < gutter);
+            if !l.is_empty() {
+                left.extend(cells(l));
+            }
+            if !r.is_empty() {
+                right.extend(cells(r));
+            }
         }
-        let parts: Vec<_> = parts
-            .into_iter()
-            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
-            .filter(|s| !s.is_empty())
-            .collect();
+        out.append(&mut left);
+        out.append(&mut right);
+        return out;
+    }
+    let mut rows = Vec::new();
+    for line in lines {
+        let parts = cells(line);
         if !parts.is_empty() {
             rows.push(parts);
         }
     }
+    let joined = |r: &[Line]| {
+        r.iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     let split = rows.iter().filter(|r| r.len() == 2).count();
-    let table = rows
-        .iter()
-        .any(|r| r.join(" ").contains("White") && r.join(" ").contains("Black"))
-        || rows
-            .iter()
-            .filter(|r| r.len() == 2)
-            .all(|r| r[1].len() < 12 && !r[1].starts_with(|c: char| c.is_ascii_digit()));
+    let table =
+        rows.iter()
+            .any(|r| joined(r).contains("White") && joined(r).contains("Black"))
+            || rows.iter().filter(|r| r.len() == 2).all(|r| {
+                r[1].text.len() < 12 && !r[1].text.starts_with(|c: char| c.is_ascii_digit())
+            });
     let columns = split >= 2 && split * 2 >= rows.len() && !table;
-    let mut text = Vec::new();
     if columns {
-        for row in &rows {
-            text.push(row[0].clone());
-        }
-        for row in &rows {
-            if let Some(right) = row.get(1) {
-                text.push(right.clone());
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for mut row in rows {
+            if row.len() > 1 {
+                right.extend(row.drain(1..));
             }
+            left.extend(row.drain(..1));
         }
+        left.extend(right);
+        left
     } else {
-        for row in rows {
-            text.push(row.join(" "));
+        rows.into_iter()
+            .map(|row| Line {
+                text: joined(&row),
+                size: dominant(
+                    &row.iter()
+                        .map(|l| (l.size, l.text.chars().count()))
+                        .collect::<Vec<_>>(),
+                ),
+                y: row[0].y,
+                cells: row.len(),
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_by_page_bookmarks_are_not_chapters() {
+        let every_page: Vec<_> = (0..40).map(|i| (1, format!("Image {i:04}"), i)).collect();
+        assert_eq!(chapters(every_page, 40), Vec::<(u8, String, usize)>::new());
+        let real = vec![
+            (1, "Introduction".to_string(), 2),
+            (1, "Openings".to_string(), 10),
+            (2, "Endings".to_string(), 30),
+        ];
+        assert_eq!(chapters(real.clone(), 40), real);
+        let games: Vec<_> = (1..=8).map(|i| (1, format!("Game {i}"), i * 4)).collect();
+        assert_eq!(chapters(games.clone(), 40), games);
+        let dense_games: Vec<_> = (1..=40).map(|i| (1, format!("Game {i}"), i - 1)).collect();
+        assert_eq!(chapters(dense_games.clone(), 40), dense_games);
+        let mut half: Vec<_> = (1..=20).map(|i| (1, format!("Game {i}"), i - 1)).collect();
+        half.extend((1..=20).map(|i| (1, format!("Scan note {i}"), i + 19)));
+        assert_eq!(chapters(half.clone(), 40), half);
+        let pages: Vec<_> = (1..=8).map(|i| (1, format!("Page {i}"), i * 4)).collect();
+        assert_eq!(chapters(pages, 40), Vec::<(u8, String, usize)>::new());
+        let mut mixed: Vec<_> = (1..=10).map(|i| (1, format!("Page {i}"), i * 3)).collect();
+        mixed.extend(real.clone());
+        assert_eq!(chapters(mixed, 40), real);
+    }
+
+    fn word(x: f64, y: f64, text: &str) -> Glyph {
+        Glyph {
+            x,
+            y,
+            end: x + 5.0 * text.len() as f64,
+            size: 10.0,
+            text: text.to_string(),
         }
     }
-    text.join("\n")
+
+    #[test]
+    fn a_title_across_an_empty_gutter_stays_whole_and_in_place() {
+        let mut glyphs = vec![word(197.0, 800.0, "MODERN"), word(231.0, 800.0, "IDEAS")];
+        for row in 0..6 {
+            let y = 780.0 - f64::from(row) * 12.0;
+            glyphs.push(word(
+                50.0,
+                y,
+                &format!("left column sentence {row} goes on"),
+            ));
+            glyphs.push(word(
+                260.0,
+                y,
+                &format!("right column sentence {row} goes on"),
+            ));
+        }
+        glyphs.push(word(197.0, 690.0, "SECOND"));
+        glyphs.push(word(231.0, 690.0, "PART"));
+        let text: Vec<_> = order(glyphs).into_iter().map(|l| l.text).collect();
+        assert_eq!(text[0], "MODERN IDEAS");
+        assert_eq!(text[1], "left column sentence 0 goes on");
+        assert_eq!(text[7], "right column sentence 0 goes on");
+        assert_eq!(text[13], "SECOND PART");
+    }
+
+    #[test]
+    fn dominant_size_ignores_a_few_bold_glyphs() {
+        assert!((dominant(&[(14.0, 3), (10.0, 40)]) - 10.0).abs() < f64::EPSILON);
+    }
 }
