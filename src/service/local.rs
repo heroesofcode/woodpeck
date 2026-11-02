@@ -72,6 +72,42 @@ pub(super) fn start(local: LocalService) -> Result<(mpsc::Sender<Task>, Shutdown
     Ok((sender, shutdown))
 }
 impl LocalService {
+    pub fn books(
+        &self,
+    ) -> Result<
+        Vec<(
+            i64,
+            crate::books::model::Book,
+            Option<crate::store::ReadingProgress>,
+        )>,
+    > {
+        let store = lock(&self.store)?;
+        store
+            .book_ids()?
+            .into_iter()
+            .map(|id| {
+                Ok((
+                    id,
+                    store.book(id)?.ok_or(StoreError::NotFound)?,
+                    store.reading_progress(id)?,
+                ))
+            })
+            .collect()
+    }
+    pub fn save_book(&self, book: &crate::books::model::Book, hash: &str) -> Result<i64> {
+        Ok(lock(&self.store)?.save_book(book, hash, chrono::Utc::now().timestamp())?)
+    }
+    pub fn delete_book(&self, id: i64) -> Result<()> {
+        Ok(lock(&self.store)?.delete_book(id)?)
+    }
+    pub fn save_reading_progress(
+        &self,
+        id: i64,
+        progress: &crate::store::ReadingProgress,
+    ) -> Result<()> {
+        Ok(lock(&self.store)?.save_reading_progress(id, progress)?)
+    }
+
     pub fn configure_sync(&self, remote: &str, enabled: bool) -> Result<crate::sync::Config> {
         Ok(crate::sync::configure(
             &*lock(&self.store)?,

@@ -3,11 +3,13 @@ mod background;
 #[doc(hidden)]
 pub mod bench_support;
 mod board;
+mod books;
 mod charts;
 mod demo;
 mod frame_stats;
 mod library;
 mod pieces;
+mod reader;
 mod screens;
 mod shell;
 mod shortcuts;
@@ -35,6 +37,9 @@ use std::{
 pub enum Screen {
     #[default]
     Dashboard,
+    Books,
+    Reader,
+    ReaderVariations,
     Training,
     TrainingSolved,
     Review,
@@ -48,6 +53,9 @@ pub enum Screen {
 impl Screen {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
+            "library" => Some(Self::Books),
+            "reader" => Some(Self::Reader),
+            "reader-variations" => Some(Self::ReaderVariations),
             "dashboard" => Some(Self::Dashboard),
             "training" => Some(Self::Training),
             "training-solved" => Some(Self::TrainingSolved),
@@ -61,13 +69,14 @@ impl Screen {
             _ => None,
         }
     }
-    const ALL: [(Self, &'static str); 6] = [
+    const ALL: [(Self, &'static str); 7] = [
         (Self::Dashboard, "Dashboard"),
         (Self::Training, "Train"),
         (Self::Review, "Review"),
         (Self::Progress, "Progress"),
         (Self::Builder, "New set"),
         (Self::Settings, "Settings"),
+        (Self::Books, "Library"),
     ];
 }
 #[derive(Clone, Debug)]
@@ -93,6 +102,7 @@ struct Session {
     finished_at: Option<Duration>,
 }
 pub struct Woodpeck {
+    books: books::Library,
     service: AppService,
     ctx: egui::Context,
     background: Vec<background::Pending>,
@@ -162,10 +172,16 @@ impl Woodpeck {
         style::fonts(ctx);
         style::apply(ctx, &palette);
         let clock = FrameClock(Rc::new(Cell::new(Duration::ZERO)));
-        let screen = screenshot.as_ref().map_or(Screen::Dashboard, |s| s.screen);
+        let screen = screenshot
+            .as_ref()
+            .map_or(Screen::Dashboard, |s| match s.screen {
+                Screen::ReaderVariations => Screen::Reader,
+                screen => screen,
+            });
         let mut builder = crate::sets::PRESETS[0].builder(settings.user_rating);
         builder.shuffle_each_cycle = settings.shuffle_each_cycle;
         let mut app = Self {
+            books: books::Library::default(),
             service,
             ctx: ctx.clone(),
             background: vec![],
@@ -226,6 +242,7 @@ impl Woodpeck {
             clearing_card: None,
         };
         app.initialize();
+        app.refresh_books(matches!(screen, Screen::Reader));
         if app.screenshot.is_some() {
             demo::welcome(&mut app, screen);
         }
@@ -256,6 +273,12 @@ impl Woodpeck {
             self.loading = false;
         }
         self.screen = screen;
+        if screen != Screen::Reader {
+            self.save_reader();
+        }
+        if screen == Screen::Books {
+            self.refresh_books(false);
+        }
         if screen == Screen::Training && self.session.as_ref().is_none_or(|s| s.cycle_id.is_none())
         {
             self.resume_selected();
@@ -617,6 +640,9 @@ impl Woodpeck {
     }
     fn keyboard(&mut self, ctx: &egui::Context) {
         use shortcuts::Key;
+        if self.screen == Screen::Reader {
+            return;
+        }
         let keys = [
             (egui::Key::S, Key::S),
             (egui::Key::T, Key::T),

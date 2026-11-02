@@ -290,6 +290,15 @@ pub fn nav_icon(painter: &egui::Painter, rect: egui::Rect, index: usize, color: 
             painter.line_segment([point(-7.0, 0.0), point(7.0, 0.0)], stroke);
             painter.line_segment([point(0.0, -7.0), point(0.0, 7.0)], stroke);
         }
+        6 => {
+            painter.rect_stroke(
+                egui::Rect::from_min_max(point(-8.0, -7.0), point(8.0, 7.0)),
+                1,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.line_segment([point(0.0, -7.0), point(0.0, 7.0)], stroke);
+        }
         _ => {
             painter.circle_stroke(center, 6.0, stroke);
             painter.circle_stroke(center, 2.0, stroke);

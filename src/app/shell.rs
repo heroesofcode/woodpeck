@@ -47,6 +47,8 @@ impl Woodpeck {
     pub(super) fn draw(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.keyboard(&ctx);
+        self.save_reader();
+        self.poll_books();
         let window = ui.max_rect().size();
         let mut layout = layout::calculate(window.x, window.y);
         if self.collapsed && layout.navigation == Navigation::Sidebar {
@@ -88,7 +90,9 @@ impl Woodpeck {
                     egui::vec2(width, ui.available_height()),
                 );
                 ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
-                    if matches!(self.screen, Screen::Training | Screen::Review) {
+                    if self.screen == Screen::Reader {
+                        self.reader_screen(ui, layout.mode);
+                    } else if matches!(self.screen, Screen::Training | Screen::Review) {
                         self.solving(ui, layout.mode, layout.panel_width);
                     } else {
                         let mut scroll =
@@ -98,6 +102,7 @@ impl Woodpeck {
                         }
                         scroll.show(ui, |ui| match self.screen {
                             Screen::Welcome => self.welcome(ui),
+                            Screen::Books => self.books_screen(ui),
                             Screen::Dashboard => self.dashboard(ui),
                             Screen::Builder => self.builder_screen(ui),
                             Screen::Progress => self.progress_screen(ui),
@@ -153,7 +158,8 @@ impl Woodpeck {
                 });
                 ui.horizontal(|ui| {
                     for (index, (screen, label)) in Screen::ALL.into_iter().enumerate() {
-                        let selected = self.screen == screen;
+                        let selected = self.screen == screen
+                            || (screen == Screen::Books && self.screen == Screen::Reader);
                         let color = if selected || screen == Screen::Review {
                             accent
                         } else {
@@ -180,7 +186,8 @@ impl Woodpeck {
     fn side_navigation_entries(&mut self, ui: &mut Ui, expanded: bool) {
         let accent = style::color(self.palette.semantic().accent);
         for (index, (screen, label)) in Screen::ALL.into_iter().enumerate() {
-            let selected = self.screen == screen;
+            let selected =
+                self.screen == screen || (screen == Screen::Books && self.screen == Screen::Reader);
             let color = if selected || screen == Screen::Review {
                 accent
             } else {

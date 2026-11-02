@@ -120,6 +120,7 @@ pub struct BoardWidget {
     selected: Option<Square>,
     rect: Option<Rect>,
     pub promotion: Option<String>,
+    pub reader_orientation: Option<bool>,
     previous: Option<Board>,
     moving: Vec<(Square, Square)>,
     last_move: Vec<Square>,
@@ -146,6 +147,14 @@ impl BoardWidget {
         self.snap_next = true;
         self.clear_annotations();
     }
+    pub(super) fn clicked(&self, ui: &Ui) -> bool {
+        self.rect.is_some_and(|rect| {
+            ui.input(|i| {
+                i.pointer.primary_clicked()
+                    && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))
+            })
+        })
+    }
     pub fn reset(&mut self) {
         self.clear_annotations();
         self.snap_next = false;
@@ -169,7 +178,9 @@ impl BoardWidget {
         rendering: PieceRendering,
     ) -> Option<String> {
         let position = engine.position()?;
-        let white = engine.orientation() != Some(Color::Black);
+        let white = self
+            .reader_orientation
+            .unwrap_or(engine.orientation() != Some(Color::Black));
         let size = size
             .min(ui.available_width())
             .min(ui.available_height())
@@ -188,7 +199,11 @@ impl BoardWidget {
         self.paint_squares(ui, engine, rect, theme, white);
         self.paint_pieces(ui, board, rect, rendering, white, &response);
         self.paint_flash(ui, rect, now);
-        let played = self.pointer_move(ui, engine, rect, white, &response);
+        let played = if self.reader_orientation.is_some() {
+            None
+        } else {
+            self.pointer_move(ui, engine, rect, white, &response)
+        };
         self.paint_annotations(ui, rect, white);
         self.promotion_picker(ui, rect).or(played)
     }

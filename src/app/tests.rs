@@ -951,3 +951,67 @@ fn solving_actions_are_visible_in_the_viewport_for_every_size_and_feedback_state
         }
     }
 }
+
+#[test]
+fn book_library_and_reader_fit_responsive_windows() {
+    let ctx = egui::Context::default();
+    let mut app = Woodpeck::new(
+        &ctx,
+        demo::service().unwrap(),
+        PathBuf::from("demo.db"),
+        None,
+    );
+    settle(&mut app);
+    for (width, height) in [(360.0, 640.0), (900.0, 1000.0), (1920.0, 1080.0)] {
+        for screen in [Screen::Books, Screen::Reader] {
+            if screen == Screen::Reader {
+                app.refresh_books(true);
+                settle(&mut app);
+            } else {
+                app.navigate(screen);
+                settle(&mut app);
+            }
+            for _ in 0..3 {
+                let viewport =
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(viewport),
+                        ..Default::default()
+                    },
+                    |ui| app.draw(ui),
+                );
+                let expected = if screen == Screen::Books {
+                    vec!["Import book…", "Open book >"]
+                } else if width >= 900.0 {
+                    vec![
+                        "< Library",
+                        "Flip board",
+                        "Next page >",
+                        "1 · The open game",
+                        "A small guide to active pieces",
+                    ]
+                } else {
+                    vec!["< Library", "Flip board", "Next page >"]
+                };
+                let mut found = Vec::new();
+                for shape in &output.shapes {
+                    check_visible_action_text(
+                        &shape.shape,
+                        shape.clip_rect,
+                        viewport,
+                        &expected,
+                        &mut found,
+                    );
+                }
+                for text in expected {
+                    assert!(
+                        found.iter().any(|s| s == text),
+                        "missing {text} at {width}x{height}"
+                    );
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+}
