@@ -69,6 +69,8 @@ pub(super) struct Extracted {
     pub outline: Vec<(u8, String, usize)>,
     pub title: Option<String>,
     pub author: Option<String>,
+    /// The largest picture on the first page (a scanned or printed cover), as image bytes.
+    pub cover: Option<Vec<u8>>,
 }
 pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
     let doc = lopdf::Document::load_mem(bytes)?;
@@ -106,6 +108,47 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
         pages,
         title: info(b"Title"),
         author: info(b"Author"),
+        cover: first_page_picture(&doc),
+    })
+}
+/// The largest image on page 1 when it is big enough to be a cover: JPEG streams as they
+/// are, 8-bit gray or RGB streams re-encoded as PNG. Other encodings are skipped.
+fn first_page_picture(doc: &lopdf::Document) -> Option<Vec<u8>> {
+    let (_, page) = doc.get_pages().into_iter().next()?;
+    let mut images = doc.get_page_images(page).ok()?;
+    images.retain(|i| i.width >= 200 && i.height >= 200);
+    images.sort_by_key(|i| std::cmp::Reverse(i.width * i.height));
+    images.into_iter().find_map(|image| {
+        let filters = image.filters.clone().unwrap_or_default();
+        if filters.iter().any(|f| f == "DCTDecode") && filters.len() == 1 {
+            return Some(image.content.to_vec());
+        }
+        if image.bits_per_component != Some(8) || !filters.iter().all(|f| f == "FlateDecode") {
+            return None;
+        }
+        let pixels = doc
+            .get_object(image.id)
+            .ok()?
+            .as_stream()
+            .ok()?
+            .decompressed_content()
+            .ok()?;
+        let (width, height) = (
+            u32::try_from(image.width).ok()?,
+            u32::try_from(image.height).ok()?,
+        );
+        let picture = match image.color_space.as_deref() {
+            Some("DeviceGray") => {
+                image::DynamicImage::ImageLuma8(image::GrayImage::from_raw(width, height, pixels)?)
+            }
+            Some("DeviceRGB") => {
+                image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(width, height, pixels)?)
+            }
+            _ => return None,
+        };
+        let mut png = std::io::Cursor::new(Vec::new());
+        picture.write_to(&mut png, image::ImageFormat::Png).ok()?;
+        Some(png.into_inner())
     })
 }
 /// The glyph size most characters are set in, so one bold move does not make a row a title.
@@ -433,6 +476,44 @@ mod tests {
         assert_eq!(text[1], "left column sentence 0 goes on");
         assert_eq!(text[7], "right column sentence 0 goes on");
         assert_eq!(text[13], "SECOND PART");
+    }
+
+    #[test]
+    fn a_large_first_page_picture_is_the_cover() {
+        use lopdf::{Object, Stream, dictionary};
+        let mut jpeg = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(240, 360, image::Rgb([120, 30, 30]))
+            .write_to(&mut jpeg, image::ImageFormat::Jpeg)
+            .unwrap();
+        let jpeg = jpeg.into_inner();
+        let mut doc = lopdf::Document::with_version("1.5");
+        let pages = doc.new_object_id();
+        let mut image = |width: i64, height: i64, data: Vec<u8>| {
+            doc.add_object(Stream::new(
+                dictionary! {
+                    "Type" => "XObject", "Subtype" => "Image", "Width" => width,
+                    "Height" => height, "ColorSpace" => "DeviceRGB",
+                    "BitsPerComponent" => 8, "Filter" => "DCTDecode",
+                },
+                data,
+            ))
+        };
+        let cover = image(240, 360, jpeg.clone());
+        let icon = image(20, 20, jpeg.clone());
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages,
+            "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => icon, "Im1" => cover } },
+            "MediaBox" => vec![0.into(), 0.into(), 300.into(), 450.into()],
+        });
+        doc.objects.insert(
+            pages,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1,
+            }),
+        );
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+        doc.trailer.set("Root", catalog);
+        assert_eq!(first_page_picture(&doc), Some(jpeg));
     }
 
     #[test]

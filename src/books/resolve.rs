@@ -685,6 +685,8 @@ mod tests {
         let mut page = Page::default();
         page.push(text, BlockKind::Paragraph);
         resolve(Document {
+            cover: None,
+            isbn: None,
             title: String::new(),
             author: String::new(),
             format: "test".into(),
@@ -739,6 +741,8 @@ mod image_tests {
             page.push(text, BlockKind::Paragraph);
         }
         let document = Document {
+            cover: None,
+            isbn: None,
             title: String::new(),
             author: String::new(),
             format: "test".into(),
@@ -822,6 +826,8 @@ mod image_tests {
         second.push("23... e5 24. Ra8+", BlockKind::Paragraph);
         let b = resolve_using(
             Document {
+                cover: None,
+                isbn: None,
                 title: String::new(),
                 author: String::new(),
                 format: "test".into(),
@@ -902,6 +908,8 @@ mod safety_tests {
             page.push("1. e4", BlockKind::Paragraph);
             page.push("1. e3", BlockKind::Paragraph);
             let book = resolve(Document {
+                cover: None,
+                isbn: None,
                 title: String::new(),
                 author: String::new(),
                 format: "test".into(),
@@ -920,6 +928,8 @@ mod safety_tests {
         page.push("4k3/8/8/8/8/8/4P3/4K3 w - - 0 12", BlockKind::Paragraph);
         page.push("1. e4", BlockKind::Paragraph);
         let book = resolve(Document {
+            cover: None,
+            isbn: None,
             title: String::new(),
             author: String::new(),
             format: "test".into(),
@@ -935,6 +945,8 @@ mod safety_tests {
         page.push("8/8/8/8/8/8/8/8 w - - 0 1", BlockKind::Paragraph);
         page.push("1. e4 e5", BlockKind::Paragraph);
         let book = resolve(Document {
+            cover: None,
+            isbn: None,
             title: String::new(),
             author: String::new(),
             format: "epub".into(),
@@ -960,6 +972,8 @@ mod safety_tests {
         );
         page.push("1 P - K 3, K - K 4", BlockKind::Paragraph);
         let book = resolve(Document {
+            cover: None,
+            isbn: None,
             title: String::new(),
             author: String::new(),
             format: "epub".into(),
@@ -974,6 +988,8 @@ mod safety_tests {
         let mut page = Page::default();
         page.push("1. P - K4 P - K4 2. Kt - B3 Kt - QB3", BlockKind::Paragraph);
         let book = resolve(Document {
+            cover: None,
+            isbn: None,
             title: String::new(),
             author: String::new(),
             format: "epub".into(),
@@ -991,6 +1007,8 @@ mod safety_tests {
             BlockKind::Paragraph,
         );
         let book = resolve(Document {
+            cover: None,
+            isbn: None,
             title: String::new(),
             author: String::new(),
             format: "epub".into(),

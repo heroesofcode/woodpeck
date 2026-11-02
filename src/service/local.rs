@@ -97,6 +97,12 @@ impl LocalService {
     pub fn save_book(&self, book: &crate::books::model::Book, hash: &str) -> Result<i64> {
         Ok(lock(&self.store)?.save_book(book, hash, chrono::Utc::now().timestamp())?)
     }
+    pub fn book_covers(&self) -> Result<Vec<(i64, Vec<u8>, i64)>> {
+        Ok(lock(&self.store)?.book_covers()?)
+    }
+    pub fn save_book_cover(&self, id: i64, image: &[u8]) -> Result<()> {
+        Ok(lock(&self.store)?.save_book_cover(id, image, chrono::Utc::now().timestamp())?)
+    }
     pub fn delete_book(&self, id: i64) -> Result<()> {
         Ok(lock(&self.store)?.delete_book(id)?)
     }

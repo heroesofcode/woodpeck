@@ -54,6 +54,7 @@ pub(super) struct Library {
     deleting: Option<i64>,
     import: Option<ImportTask>,
     message: String,
+    pub covers: super::covers::Covers,
 }
 pub(super) fn import_error(error: &ImportError) -> String {
     match error {
@@ -248,6 +249,93 @@ impl Woodpeck {
             }
         }
     }
+    /// One book on the shelf: cover, title, author, what was found in it and reading
+    /// progress. Returns true when the reader should open it.
+    fn book_card(&mut self, ui: &mut Ui, entry: &Entry, compact: bool) -> bool {
+        if !compact {
+            let open = self
+                .books
+                .covers
+                .show(ui, entry.0, &entry.1, super::covers::COVER)
+                .on_hover_text("Open book")
+                .clicked();
+            ui.add_space(8.0);
+            return self.book_details(ui, entry, false) | open;
+        }
+        // Narrow windows: a small cover beside the details keeps the actions in view.
+        ui.horizontal_top(|ui| {
+            let open = self
+                .books
+                .covers
+                .show(ui, entry.0, &entry.1, super::covers::COVER * 0.5)
+                .on_hover_text("Open book")
+                .clicked();
+            ui.vertical(|ui| self.book_details(ui, entry, true)).inner | open
+        })
+        .inner
+    }
+    fn book_details(&mut self, ui: &mut Ui, (id, book, progress): &Entry, compact: bool) -> bool {
+        let mut open = false;
+        ui.add(egui::Label::new(egui::RichText::new(&book.document.title).strong()).truncate())
+            .on_hover_text(&book.document.title);
+        if !book.document.author.is_empty() {
+            ui.add(egui::Label::new(egui::RichText::new(&book.document.author).weak()).truncate());
+        }
+        if compact {
+            ui.horizontal(|ui| {
+                open |= ui.button("Open book >").clicked();
+                if ui.small_button("Delete…").clicked() {
+                    self.books.deleting = Some(*id);
+                }
+            });
+        }
+        let total = book.fragments.len();
+        let resolved = book
+            .fragments
+            .iter()
+            .filter(|f| f.status == Status::Resolved)
+            .count();
+        ui.small(format!(
+            "{} · {} pages · {:.0}% positions",
+            book.document.format.to_uppercase(),
+            book.document.pages.len(),
+            if total == 0 {
+                0.0
+            } else {
+                resolved as f32 / total as f32 * 100.0
+            }
+        ));
+        let pages = book.document.pages.len().max(1) as f32;
+        let (fraction, status) = progress
+            .as_ref()
+            .map_or((0.0, "Ready to read".to_owned()), |p| {
+                (
+                    (p.page_index + 1) as f32 / pages,
+                    format!(
+                        "Page {} of {} · {}",
+                        p.page_index + 1,
+                        book.document.pages.len(),
+                        chrono::DateTime::from_timestamp(p.updated_at, 0)
+                            .map_or_else(String::new, |d| d.format("%b %d").to_string())
+                    ),
+                )
+            });
+        ui.small(status);
+        ui.add(
+            egui::ProgressBar::new(fraction)
+                .desired_width(ui.available_width())
+                .desired_height(4.0),
+        );
+        if !compact {
+            ui.horizontal(|ui| {
+                open |= ui.button("Open book >").clicked();
+                if ui.small_button("Delete…").clicked() {
+                    self.books.deleting = Some(*id);
+                }
+            });
+        }
+        open
+    }
     pub(super) fn books_screen(&mut self, ui: &mut Ui) {
         widgets::caption(ui, "LIBRARY / READ & EXPLORE");
         ui.heading("Your chess bookshelf");
@@ -261,64 +349,34 @@ impl Woodpeck {
         if self.books.entries.is_empty() {
             ui.label("Your books will appear here after importing.");
         }
+        self.update_covers(ui.ctx());
         let mut open = None;
-        let card_width = ui.available_width();
-        for entry in &self.books.entries {
-            let (id, book, progress) = entry;
-            widgets::card(ui).show(ui, |ui| {
-                ui.set_width((card_width - 42.0).max(0.0));
-                ui.heading(&book.document.title);
-                ui.label(&book.document.author);
-                let total = book.fragments.len();
-                let resolved = book
-                    .fragments
-                    .iter()
-                    .filter(|f| f.status == Status::Resolved)
-                    .count();
-                ui.small(format!(
-                    "{} · {} pages · {:.0}% positions resolved",
-                    book.document.format.to_uppercase(),
-                    book.document.pages.len(),
-                    if total == 0 {
-                        0.0
-                    } else {
-                        resolved as f32 / total as f32 * 100.0
-                    }
-                ));
-                if let Some(p) = progress {
-                    ui.label(format!(
-                        "Page {} of {} · last read {}",
-                        p.page_index + 1,
-                        book.document.pages.len(),
-                        chrono::DateTime::from_timestamp(p.updated_at, 0)
-                            .map_or_else(String::new, |d| d.format("%b %d, %Y").to_string())
-                    ));
-                    ui.add(
-                        egui::ProgressBar::new(
-                            (p.page_index + 1) as f32 / book.document.pages.len().max(1) as f32,
-                        )
-                        .desired_width(ui.available_width())
-                        .desired_height(4.0),
-                    );
-                } else {
-                    ui.small("Ready to read");
-                    ui.add(
-                        egui::ProgressBar::new(0.0)
-                            .desired_width(ui.available_width())
-                            .desired_height(4.0),
+        // A grid of book cards: as many columns as fit, each a cover with its details.
+        let gap = 18.0;
+        let width = super::covers::COVER.x + 24.0;
+        let columns = (((ui.available_width() + gap) / (width + gap)).floor() as usize).max(1);
+        let compact = columns < 2;
+        let width = if compact { ui.available_width() } else { width };
+        let entries = std::mem::take(&mut self.books.entries);
+        for row in entries.chunks(columns) {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for entry in row {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(width, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(width);
+                            if self.book_card(ui, entry, compact) {
+                                open = Some(entry.clone());
+                            }
+                        },
                     );
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("Open book >").clicked() {
-                        open = Some(entry.clone());
-                    }
-                    if ui.small_button("Delete…").clicked() {
-                        self.books.deleting = Some(*id);
-                    }
-                });
             });
-            ui.add_space(12.0);
+            ui.add_space(gap);
         }
+        self.books.entries = entries;
         if let Some(entry) = open {
             self.open_book(entry);
         }
@@ -332,6 +390,7 @@ impl Woodpeck {
                     }
                     if ui.button("Delete book").clicked() {
                         self.books.deleting = None;
+                        self.books.covers.forget(id);
                         self.background(
                             move |s| s.delete_book(id),
                             |app, result| match result {

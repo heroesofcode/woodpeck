@@ -58,6 +58,22 @@ impl Store {
         })
         .transpose()
     }
+    /// Cached online covers by book: image bytes (empty after a lookup found nothing) and
+    /// when the lookup ran.
+    pub fn book_covers(&self) -> Result<Vec<(i64, Vec<u8>, i64)>> {
+        Ok(self
+            .connection
+            .prepare("SELECT book_id,image,checked_at FROM book_covers")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<std::result::Result<_, _>>()?)
+    }
+    pub fn save_book_cover(&self, id: i64, image: &[u8], checked_at: i64) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO book_covers(book_id,image,checked_at) SELECT ?1,?2,?3 WHERE EXISTS(SELECT 1 FROM books WHERE id=?1) ON CONFLICT(book_id) DO UPDATE SET image=excluded.image,checked_at=excluded.checked_at",
+            params![id, image, checked_at],
+        )?;
+        Ok(())
+    }
     pub fn save_reading_progress(&self, id: i64, progress: &ReadingProgress) -> Result<()> {
         let book = self.book(id)?.ok_or(StoreError::NotFound)?;
         if u64::from(progress.page_index) >= book.document.pages.len() as u64
@@ -102,9 +118,14 @@ mod tests {
             .execute("INSERT INTO settings VALUES('sentinel','kept')", [])
             .unwrap();
         let store = Store::from_connection(connection).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 6);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            super::super::schema::VERSION
+        );
         assert_eq!(store.setting("sentinel").unwrap().as_deref(), Some("kept"));
         let book = crate::books::resolve::resolve(crate::books::document::Document {
+            cover: None,
+            isbn: None,
             title: "Test".into(),
             author: String::new(),
             format: "epub".into(),
@@ -143,6 +164,8 @@ mod collection_tests {
     fn duplicate_preserves_progress_and_delete_removes_location() {
         let store = Store::memory().unwrap();
         let book = crate::books::resolve::resolve(crate::books::document::Document {
+            cover: None,
+            isbn: None,
             title: "Collection".into(),
             author: String::new(),
             format: "epub".into(),
@@ -162,5 +185,33 @@ mod collection_tests {
         store.delete_book(id).unwrap();
         assert_eq!(store.book_ids().unwrap(), Vec::<i64>::new());
         assert!(store.reading_progress(id).unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::*;
+    #[test]
+    fn online_covers_upsert_and_go_with_their_book() {
+        let store = Store::memory().unwrap();
+        let book = crate::books::resolve::resolve(crate::books::document::Document {
+            cover: None,
+            isbn: None,
+            title: "Covers".into(),
+            author: String::new(),
+            format: "epub".into(),
+            pages: vec![crate::books::document::Page::default()],
+            assets: vec![],
+        });
+        let id = store.save_book(&book, "covers", 1).unwrap();
+        store.save_book_cover(id, &[], 10).unwrap();
+        store.save_book_cover(id, b"jpeg", 20).unwrap();
+        store.save_book_cover(id + 1, b"orphan", 20).unwrap();
+        assert_eq!(
+            store.book_covers().unwrap(),
+            vec![(id, b"jpeg".to_vec(), 20)]
+        );
+        store.delete_book(id).unwrap();
+        assert_eq!(store.book_covers().unwrap(), vec![]);
     }
 }

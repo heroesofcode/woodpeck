@@ -78,6 +78,8 @@ pub fn service() -> Result<AppService, Box<dyn std::error::Error>> {
         );
         page.push(text, BlockKind::Paragraph);
         let book = crate::books::resolve::resolve(Document {
+            cover: None,
+            isbn: None,
             title: title.into(),
             author: "Woodpeck study notes".into(),
             format: "epub".into(),
@@ -157,6 +159,8 @@ fn book() -> crate::books::model::Book {
     second.push("5. d3 d6 6. O-O O-O", BlockKind::Paragraph);
     second.push("Both kings are safe. Now improve the least active piece and watch for a chance to open the centre.", BlockKind::Paragraph);
     crate::books::resolve::resolve(Document {
+        cover: None,
+        isbn: None,
         title: "First Steps in the Open Game".into(),
         author: "Woodpeck study notes".into(),
         format: "epub".into(),
