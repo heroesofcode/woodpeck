@@ -7,3 +7,4 @@ pub mod notation;
 pub mod resolve;
 
 pub mod coverage;
+pub mod diagram;
