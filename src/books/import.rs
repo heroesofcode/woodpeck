@@ -180,63 +180,145 @@ fn epub(bytes: &[u8]) -> Result<Document, ImportError> {
             ..Page::default()
         };
         for el in content.select(&selector("h1,h2,h3,h4,h5,h6,p,table,pre,img")) {
-            if el.value().name() != "img"
-                && el
-                    .ancestors()
-                    .skip(1)
-                    .filter_map(scraper::ElementRef::wrap)
-                    .any(|p| matches!(p.value().name(), "table" | "p" | "pre"))
+            if el
+                .ancestors()
+                .filter_map(scraper::ElementRef::wrap)
+                .any(|p| {
+                    matches!(
+                        p.value().name(),
+                        "table" | "p" | "pre" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                    )
+                })
             {
                 continue;
             }
-            let name = el.value().name();
-            let text = if name == "pre" {
-                el.text().collect::<String>()
-            } else {
-                el.text()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            };
-            if !page.blocks.is_empty()
-                && (page.text.len() + text.len() > 6000 || name == "h1" || name == "h2")
-            {
-                doc.pages.push(page);
-                page = Page {
-                    source: source.clone(),
-                    ..Page::default()
-                };
-            }
-            let kind = match name {
-                "img" => {
-                    let path = joined(
-                        Path::new(&source).parent().unwrap_or(base),
-                        el.attr("src").unwrap_or(""),
-                    );
-                    if let Some(bytes) = files.get(&path)
-                        && !doc.assets.iter().any(|a| a.path == path)
-                    {
-                        doc.assets.push(Asset {
-                            path: path.clone(),
-                            bytes: bytes.clone(),
-                        });
+            // Split containers around images so their text cannot run ahead of an
+            // intervening diagram. Nested images are emitted here exactly once.
+            let mut pieces = Vec::new();
+            let mut text = String::new();
+            for node in el.descendants() {
+                if let Some(image) = scraper::ElementRef::wrap(node)
+                    && image.value().name() == "img"
+                {
+                    if !text.is_empty() {
+                        pieces.push((el, std::mem::take(&mut text)));
                     }
-                    BlockKind::Image {
-                        path,
-                        alt: el.attr("alt").unwrap_or("").into(),
+                    pieces.push((image, String::new()));
+                } else if let scraper::node::Node::Text(value) = node.value() {
+                    if el.value().name() != "pre" && !text.is_empty() {
+                        text.push(' ');
                     }
+                    text.push_str(value);
                 }
-                "table" => BlockKind::Table,
-                "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
-                _ => BlockKind::Paragraph,
-            };
-            page.push(&text, kind);
+            }
+            if !text.is_empty() {
+                pieces.push((el, text));
+            }
+            for (el, text) in pieces {
+                let name = el.value().name();
+                let text = if name == "pre" {
+                    text
+                } else {
+                    text.split_whitespace().collect::<Vec<_>>().join(" ")
+                };
+                if !page.blocks.is_empty()
+                    && (page.text.len() + text.len() > 6000 || name == "h1" || name == "h2")
+                {
+                    doc.pages.push(page);
+                    page = Page {
+                        source: source.clone(),
+                        ..Page::default()
+                    };
+                }
+                let kind = match name {
+                    "img" => {
+                        let path = joined(
+                            Path::new(&source).parent().unwrap_or(base),
+                            el.attr("src").unwrap_or(""),
+                        );
+                        if let Some(bytes) = files.get(&path)
+                            && !doc.assets.iter().any(|a| a.path == path)
+                        {
+                            doc.assets.push(Asset {
+                                path: path.clone(),
+                                bytes: bytes.clone(),
+                            });
+                        }
+                        BlockKind::Image {
+                            path,
+                            alt: el.attr("alt").unwrap_or("").into(),
+                        }
+                    }
+                    "table" => BlockKind::Table,
+                    "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
+                    _ => BlockKind::Paragraph,
+                };
+                page.push(&text, kind);
+            }
         }
         if !page.blocks.is_empty() {
             doc.pages.push(page);
         }
     }
     Ok(doc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn nested_images_invalidate_moves_in_source_order() {
+        for body in [
+            "<p><img src='diagram.png'/>1. e4 e5</p>",
+            "<table><tr><td><img src='diagram.png'/>1. e4 e5</td></tr></table>",
+            "<pre><img src='diagram.png'/>1. e4 e5</pre>",
+            "<p>1. d4 d5 <span><img src='diagram.png'/></span>2. Nf3 Nf6</p>",
+        ] {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            for (name, data) in [
+                (
+                    "META-INF/container.xml",
+                    "<container><rootfile full-path='book.opf'/></container>",
+                ),
+                (
+                    "book.opf",
+                    "<package><manifest><item id='chapter' href='chapter.html'/></manifest><spine><itemref idref='chapter'/></spine></package>",
+                ),
+                ("chapter.html", body),
+                ("diagram.png", "image bytes"),
+            ] {
+                zip.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            let document = epub(&zip.finish().unwrap().into_inner()).unwrap();
+            assert_eq!(document.assets.len(), 1);
+            assert_eq!(
+                document
+                    .pages
+                    .iter()
+                    .flat_map(|p| &p.blocks)
+                    .filter(|b| matches!(b.kind, BlockKind::Image { .. }))
+                    .count(),
+                1
+            );
+            let book = super::super::resolve::resolve(document);
+            let expected = if body.contains("d4") {
+                vec!["d2d4", "d7d5"]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                book.nodes
+                    .iter()
+                    .map(|n| n.uci.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{body}"
+            );
+            assert!(book.fragments.iter().any(|f| matches!(&f.status, super::super::model::Status::Unresolved(reason) if reason.contains("Unrecognized image"))));
+        }
+    }
 }
