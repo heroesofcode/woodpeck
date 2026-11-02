@@ -71,6 +71,8 @@ pub(super) struct Extracted {
     pub author: Option<String>,
     /// The largest picture on the first page (a scanned or printed cover), as image bytes.
     pub cover: Option<Vec<u8>>,
+    /// Pictures per page, top to bottom.
+    pub pictures: Vec<Vec<super::picture::Placed>>,
 }
 pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
     let doc = lopdf::Document::load_mem(bytes)?;
@@ -109,6 +111,11 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
         title: info(b"Title"),
         author: info(b"Author"),
         cover: first_page_picture(&doc),
+        pictures: doc
+            .get_pages()
+            .values()
+            .map(|&page| super::picture::pictures(&doc, page))
+            .collect(),
     })
 }
 /// The largest image on page 1 when it is big enough to be a cover: JPEG streams as they
