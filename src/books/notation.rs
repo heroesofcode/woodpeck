@@ -143,6 +143,7 @@ pub fn tokens(text: &str) -> Vec<Token> {
             // A printed ellipsis is its own token, also in "30…e5" and "…e5".
             '\u{2026}' => Kind::Word,
             _ => {
+                i += spaced_move_tail(c, &text[i..]);
                 while i < text.len() {
                     let next = text[i..].chars().next().expect("character boundary");
                     if next.is_whitespace()
@@ -174,6 +175,31 @@ pub fn tokens(text: &str) -> Vec<Token> {
         });
     }
     result
+}
+/// The spaces to skip after a figurine when the next word completes a move: some books print
+/// "♖ af8" or "♘ xe5" for one move.
+fn spaced_move_tail(figurine: char, rest: &str) -> usize {
+    if !('\u{2654}'..='\u{265f}').contains(&figurine) {
+        return 0;
+    }
+    let word = rest.trim_start_matches([' ', '\u{a0}', '\u{2009}', '\u{202f}']);
+    let gap = rest.len() - word.len();
+    let end = word
+        .find(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | ',' | ';' | '|'))
+        .unwrap_or(word.len());
+    let tail = word[..end].trim_end_matches(['+', '#', '!', '?', '.', ':']);
+    let bytes: Vec<char> = tail
+        .chars()
+        .filter(|c| !matches!(c, 'x' | '×' | ':' | '-'))
+        .collect();
+    let square = |f: char, r: char| ('a'..='h').contains(&f) && ('1'..='8').contains(&r);
+    let fits = match bytes.as_slice() {
+        [f, r] => square(*f, *r),
+        [d, f, r] => (('a'..='h').contains(d) || ('1'..='8').contains(d)) && square(*f, *r),
+        [df, dr, f, r] => square(*df, *dr) && square(*f, *r),
+        _ => false,
+    };
+    if gap > 0 && fits { gap } else { 0 }
 }
 /// What a labelled number names, from the word printed before it ("Example 8", "Game No. 2").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -495,6 +521,28 @@ fn descriptive(pos: &Chess, m: Move, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_spaced_figurine_joins_the_move_it_starts() {
+        let text = "30\u{2026} \u{2656} af8 31. \u{2658} xe5+ the \u{2656} on a1 \u{2655} d1 and";
+        let words: Vec<&str> = tokens(text).iter().map(|t| &text[t.span.clone()]).collect();
+        assert_eq!(
+            words,
+            [
+                "30",
+                "\u{2026}",
+                "\u{2656} af8",
+                "31.",
+                "\u{2658} xe5+",
+                "the",
+                "\u{2656}",
+                "on",
+                "a1",
+                "\u{2655} d1",
+                "and"
+            ]
+        );
+        assert_eq!(normalize("\u{2656} af8", ""), "Raf8");
+    }
     #[test]
     fn a_printed_ellipsis_splits_from_numbers_and_moves() {
         let text = "30\u{2026}e5 31\u{2026} \u{2026}Nf6 1...d5";

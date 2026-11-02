@@ -1347,6 +1347,14 @@ mod tests {
         );
     }
     #[test]
+    fn spaced_figurines_are_read_as_moves() {
+        let b = book("1. e4 e5 2. \u{2658} f3 \u{265e} c6 3. \u{2657} b5");
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"]
+        );
+    }
+    #[test]
     fn pgn_headers_start_a_new_game_and_are_not_moves() {
         let b = book(
             "[Event \"?\"] [PlyCount \"39\"] 1. e4 e5 2. Nf3 1-0 \
