@@ -9,6 +9,18 @@ pub struct ReadingProgress {
     pub updated_at: i64,
 }
 impl Store {
+    pub fn book_ids(&self) -> Result<Vec<i64>> {
+        Ok(self
+            .connection
+            .prepare("SELECT id FROM books ORDER BY imported_at DESC, id DESC")?
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?)
+    }
+    pub fn delete_book(&self, id: i64) -> Result<()> {
+        self.connection
+            .execute("DELETE FROM books WHERE id=?1", [id])?;
+        Ok(())
+    }
     /// Duplicate file hashes return the existing book without replacing progress or node IDs.
     pub fn save_book(&self, book: &Book, hash: &str, imported_at: i64) -> Result<i64> {
         let json = serde_json::to_vec(book)?;
@@ -121,5 +133,34 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod collection_tests {
+    use super::*;
+    #[test]
+    fn duplicate_preserves_progress_and_delete_removes_location() {
+        let store = Store::memory().unwrap();
+        let book = crate::books::resolve::resolve(crate::books::document::Document {
+            title: "Collection".into(),
+            author: String::new(),
+            format: "epub".into(),
+            pages: vec![crate::books::document::Page::default()],
+            assets: vec![],
+        });
+        let id = store.save_book(&book, "collection", 1).unwrap();
+        let progress = ReadingProgress {
+            page_index: 0,
+            node_id: None,
+            updated_at: 3,
+        };
+        store.save_reading_progress(id, &progress).unwrap();
+        assert_eq!(store.save_book(&book, "collection", 4).unwrap(), id);
+        assert_eq!(store.book_ids().unwrap(), vec![id]);
+        assert_eq!(store.reading_progress(id).unwrap(), Some(progress));
+        store.delete_book(id).unwrap();
+        assert_eq!(store.book_ids().unwrap(), Vec::<i64>::new());
+        assert!(store.reading_progress(id).unwrap().is_none());
     }
 }

@@ -65,6 +65,21 @@ pub struct Engine {
     sounds: Vec<crate::sound::Event>,
 }
 impl Engine {
+    pub(crate) fn reading(position: Chess) -> Self {
+        Self {
+            state: State::Loading,
+            line: None,
+            position: Some(position),
+            index: 0,
+            deadline: Duration::ZERO,
+            opponent_applied: false,
+            error: None,
+            walkthrough: None,
+            moves_played: vec![],
+            allow_any_final_checkmate: false,
+            sounds: vec![],
+        }
+    }
     pub fn new(puzzle: &Puzzle, now: Duration, allow_any_final_checkmate: bool) -> Self {
         let (line, error) = match puzzle.validate() {
             Ok(line) => (Some(line), None),

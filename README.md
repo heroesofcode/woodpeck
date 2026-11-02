@@ -274,7 +274,7 @@ Validate every screen at common tiling sizes:
 
 ```sh
 mkdir -p /tmp/woodpeck-screenshots
-for screen in dashboard training training-solved review progress builder settings welcome welcome-progress welcome-done; do
+for screen in dashboard training training-solved review progress builder settings welcome welcome-progress welcome-done library reader reader-variations; do
   for size in 360x640 960x1080 1920x1080; do
     xvfb-run -a -s '-screen 0 1920x1080x24' \
       target/release/woodpeck --screenshot "/tmp/woodpeck-screenshots/$screen-$size.png" \
@@ -283,9 +283,29 @@ for screen in dashboard training training-solved review progress builder setting
 done
 ```
 
+`library` and `reader` use original built-in study notes and saved reading progress.
+`reader-variations` captures a position with several next-move choices.
+
 `training-solved` captures the solved-feedback controls. The three welcome screenshot screens use deterministic offline demo data, with animations settled for the capture.
 
 The code separates the puzzle engine, injected timer, set generation, review rules, progress calculations, streaming sources, SQLite repositories, and background application service from the native UI in `src/app/`.
+
+### Chess book Library
+
+Open **Library** to import an EPUB or a PDF with a text layer. Enter the file path
+under **Import book…**; extraction and move resolution run in the background, with
+stage progress and cancellation. Duplicate imports resume the existing book.
+Scanned and DRM-protected books are not supported.
+
+Select moves in the text or move list to explore them on the board. Use Left/Right
+to step, Up/Down to choose a continuation, Home/End for the line, and
+PageUp/PageDown for pages. Right-click board annotations work as in training.
+Reading progress is saved locally and restored when you reopen a book.
+
+| Library | Reader |
+| --- | --- |
+| ![Imported chess books and reading progress](docs/screenshots/library-wide.png) | ![Book text and interactive board](docs/screenshots/reader-wide.png) |
+
 
 ## Credits and licenses
 

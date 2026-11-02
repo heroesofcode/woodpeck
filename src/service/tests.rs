@@ -830,6 +830,11 @@ fn worker_library_job_obeys_limit_and_records_local_markers() {
     service
         .set_local_setting("library_imported_at", "1")
         .unwrap();
+    // Hold the worker at a store operation until the queued import is cancelled.
+    // Cancelling immediately after submit alone races a small successful import.
+    let shared = service.store.clone();
+    let guard = lock(&shared).unwrap();
+    service.submit(Job::ImportStarter { force: false }).unwrap();
     let handle = service
         .submit(Job::ImportLibrary {
             location: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/lichess.csv").into(),
@@ -838,6 +843,7 @@ fn worker_library_job_obeys_limit_and_records_local_markers() {
         })
         .unwrap();
     handle.cancel.cancel();
+    drop(guard);
     assert!(finish(&mut service, handle.id).is_err());
     assert_eq!(
         service.local_setting("library_size").unwrap().as_deref(),

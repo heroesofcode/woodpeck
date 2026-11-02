@@ -1,7 +1,9 @@
 # Book core
 
 Books use `crate::books` and independent SQLite tables. The puzzle library and its
-sync format are unchanged. No book screens or background import service are added.
+sync format are unchanged. The desktop Library and reader are implemented in `src/app/books.rs` and
+`src/app/reader.rs`. Imports extract and resolve on a dedicated thread; storage
+operations use the serial local worker.
 
 `document` retains page text, block kinds, source spine paths, and embedded image
 assets. Spans are half-open UTF-8 byte ranges into the page's stored text. EPUB
@@ -62,3 +64,16 @@ position context: an apparently legal `1 P-K3` must not silently become an initi
 opening when the source supplies an unread diagram. Parenthesized move numbers and
 older algebraic piece/pawn prefixes are accepted, and a failed spaced descriptive
 phrase cannot skip its piece name and reinterpret a later word as another move.
+
+The reader uses source-order children for mainline and variation choices and follows
+node page references when stepping. Reading locations are debounced for 450 ms,
+flushed when leaving the reader and queued on shutdown. The puzzle database
+onboarding remains in `app/library.rs`; the book collection is separate. Screenshots
+`library` and `reader` use original in-memory study notes in the isolated demo store.
+
+Native file selection was evaluated with `rfd` 0.15.4, default features disabled,
+and `xdg-portal` plus `async-std` (the pure Rust Linux portal backend). Its
+`ashpd` / `zbus` dependency chain fails the advisory policy on
+RUSTSEC-2026-0370, RUSTSEC-2026-0371, and RUSTSEC-2026-0372. The path input
+remains available; no dependency or advisory exception was added. Revisit when
+a pure Rust portal release removes those deprecated dependencies.
