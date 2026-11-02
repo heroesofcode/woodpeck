@@ -4,6 +4,7 @@ use super::{
     diagram::DiagramRecognizer,
     document::{Block, BlockKind, Document, Page},
     model::{Book, Fragment, Node, Section, Status},
+    notation::LabelKind,
     notation::{self, Kind, Token},
 };
 use shakmaty::{CastlingMode, Chess, Color, EnPassantMode, Position, fen::Fen, san::SanPlus};
@@ -28,44 +29,159 @@ fn ply(pos: &Chess) -> u32 {
 struct Context {
     pos: Chess,
     parent: Option<usize>,
-    known: BTreeMap<u32, (Chess, Option<usize>)>,
+    /// Every position the current game reached at each ply, with the node that reached it.
+    /// Analysis can reach a ply in several ways; a fragment resuming there must fit one only.
+    known: BTreeMap<u32, Vec<(Chess, Option<usize>)>>,
     invalid_start: bool,
     explicit_start: bool,
     unrecognized_image: bool,
     /// A position read from an image has no move number until the text gives one.
     floating: bool,
 }
+/// Why a move number could not be placed.
+enum Miss {
+    Unknown,
+    Ambiguous(usize),
+}
+/// Plies of lookahead used to tell apart lines that reach the same move number.
+const LOOKAHEAD: usize = 8;
 impl Context {
-    fn seek(&mut self, target: u32) -> bool {
+    fn known(pos: Chess) -> BTreeMap<u32, Vec<(Chess, Option<usize>)>> {
+        BTreeMap::from([(ply(&pos), vec![(pos, None)])])
+    }
+    /// Records the current position; a transposition keeps the latest node that reached it.
+    fn remember(&mut self) {
+        let entries = self.known.entry(ply(&self.pos)).or_default();
+        let key = fen(&self.pos);
+        entries.retain(|(pos, _)| fen(pos) != key);
+        entries.push((self.pos.clone(), self.parent));
+    }
+    /// Moves to the position before `target`. Inside a line the current position wins; a
+    /// fragment that starts afresh must fit exactly one known position: when several do,
+    /// the one whose following moves stay legal longest is taken, and a tie abstains.
+    fn seek(
+        &mut self,
+        target: u32,
+        fresh: bool,
+        fit: &dyn Fn(&Chess) -> usize,
+    ) -> Result<(), Miss> {
         if self.invalid_start {
-            return false;
+            return Err(Miss::Unknown);
         }
         if self.floating {
             if target % 2 != u32::from(self.pos.turn().is_black()) {
-                return false;
+                return Err(Miss::Unknown);
             }
             let Some(pos) = renumber(&self.pos, target / 2 + 1) else {
-                return false;
+                return Err(Miss::Unknown);
             };
+            // "Reached after (1) P-K4, P-Q4": a game from move one leading up to the diagram
+            // starts from the opening position when only that one keeps the moves legal.
+            if target == 0 && fit(&Chess::default()) > fit(&pos) {
+                *self = Self::default();
+                return Ok(());
+            }
             self.pos = pos;
             self.floating = false;
-            self.known = BTreeMap::from([(target, (self.pos.clone(), None))]);
-            return true;
+            self.known = Self::known(self.pos.clone());
+            return Ok(());
         }
+        if target == ply(&self.pos) && !fresh {
+            return Ok(());
+        }
+        let mut candidates = self.known.get(&target).cloned().unwrap_or_default();
         if target == ply(&self.pos) {
-            return true;
+            let key = fen(&self.pos);
+            candidates.retain(|(pos, _)| fen(pos) != key);
+            candidates.push((self.pos.clone(), self.parent));
         }
-        if let Some((pos, parent)) = self.known.get(&target) {
-            self.pos = pos.clone();
-            self.parent = *parent;
-            true
-        } else if target == 0 && !self.explicit_start {
+        let chosen = match candidates.len() {
+            0 if target == 0 && !self.explicit_start => {
+                *self = Self::default();
+                return Ok(());
+            }
+            0 => return Err(Miss::Unknown),
+            1 => candidates.pop(),
+            n => {
+                let scores: Vec<usize> = candidates.iter().map(|(pos, _)| fit(pos)).collect();
+                let best = scores.iter().copied().max().unwrap_or(0);
+                if best == 0 || scores.iter().filter(|s| **s == best).count() > 1 {
+                    return Err(Miss::Ambiguous(n));
+                }
+                scores
+                    .iter()
+                    .position(|s| *s == best)
+                    .map(|i| candidates.swap_remove(i))
+            }
+        };
+        let (pos, parent) = chosen.expect("a candidate");
+        // A game from move one after a diagram ("after 1. e2-e4 e7-e5 2. d2-d4") is played from
+        // the opening position when only that one keeps more of the moves legal.
+        if target == 0 && fresh && fit(&Chess::default()) > fit(&pos) {
             *self = Self::default();
-            true
-        } else {
-            false
+            return Ok(());
+        }
+        self.pos = pos;
+        self.parent = parent;
+        Ok(())
+    }
+}
+/// What a labelled number starts: "Game 3", "Example 8", or a Roman numeral heading a line
+/// that begins at move one ("II. 1. e4").
+fn label(ts: &[Token], i: usize, text: &str) -> Option<LabelKind> {
+    match ts[i].kind {
+        Kind::Label => notation::label_kind(&text[ts[i.checked_sub(1)?].span.clone()]),
+        Kind::Word
+            if ts.get(i + 1).is_some_and(|t| t.kind == Kind::Number(1))
+                && text[ts[i].span.clone()]
+                    .strip_suffix('.')
+                    .is_some_and(|r| !r.is_empty() && r.chars().all(|c| "IVXL".contains(c))) =>
+        {
+            Some(LabelKind::Game)
+        }
+        _ => None,
+    }
+}
+/// How many moves after token `i` stay legal from `pos` (move numbers and remarks skipped).
+fn legal_run(pos: &Chess, ts: &[Token], mut i: usize, text: &str, alphabet: &str) -> usize {
+    let mut pos = pos.clone();
+    let mut run = 0;
+    while i < ts.len() && run < LOOKAHEAD {
+        match ts[i].kind {
+            Kind::Number(_) | Kind::Nag | Kind::Comment => i += 1,
+            Kind::Word if noise(&text[ts[i].span.clone()]) => i += 1,
+            Kind::Word => {
+                let Some((m, _, count)) = parse_move(&pos, ts, i, text, alphabet) else {
+                    break;
+                };
+                pos.play_unchecked(m);
+                run += 1;
+                i += count;
+            }
+            _ => break,
         }
     }
+    run
+}
+/// Check marks and evaluation signs that sit between moves.
+fn noise(raw: &str) -> bool {
+    matches!(
+        raw.to_lowercase().as_str(),
+        "ch" | "dbl"
+            | "dis"
+            | "mate"
+            | "e.p."
+            | "+-"
+            | "-+"
+            | "="
+            | "+/-"
+            | "±"
+            | "∓"
+            | "⩲"
+            | "⩱"
+            | "..."
+            | "…"
+    )
 }
 fn renumber(pos: &Chess, fullmoves: u32) -> Option<Chess> {
     let mut setup = pos.to_setup(EnPassantMode::Legal);
@@ -159,7 +275,10 @@ fn resolve_with(
     for (page_index, page) in document.pages.iter_mut().enumerate() {
         for (block_index, block) in page.blocks.iter_mut().enumerate() {
             if block.kind == BlockKind::Heading {
-                context = Context::default();
+                // "DIAGRAM 1" under a board names it; the position stays in force.
+                if !(context.floating && caption(&page.text[block.span.clone()])) {
+                    context = Context::default();
+                }
                 book.sections.push(Section {
                     title: page.text[block.span.clone()].to_owned(),
                     page: page_index,
@@ -186,6 +305,29 @@ fn resolve_with(
                 };
                 continue;
             }
+            if block.kind == BlockKind::Paragraph
+                && let Some(pos) = recognized.get(&(page_index, block_index))
+            {
+                block.kind = BlockKind::Diagram { fen: fen(pos) };
+                context = Context {
+                    pos: pos.clone(),
+                    explicit_start: true,
+                    floating: true,
+                    ..Context::default()
+                };
+                continue;
+            }
+            // A text board that cannot be placed still starts a new position; its rank digits
+            // are not move numbers.
+            if block.kind == BlockKind::Paragraph
+                && grid(&page.text[block.span.clone()], alphabet).is_some()
+            {
+                context = Context {
+                    invalid_start: true,
+                    ..Context::default()
+                };
+                continue;
+            }
             if matches!(block.kind, BlockKind::Image { .. }) {
                 context.invalid_start = true;
                 context.unrecognized_image = true;
@@ -196,7 +338,7 @@ fn resolve_with(
             if let Some(pos) = find_fen(text).or_else(|| diagram(text)) {
                 block.kind = BlockKind::Diagram { fen: fen(&pos) };
                 context = Context {
-                    known: BTreeMap::from([(ply(&pos), (pos.clone(), None))]),
+                    known: Context::known(pos.clone()),
                     pos,
                     explicit_start: true,
                     ..Context::default()
@@ -224,7 +366,10 @@ fn resolve_with(
                 continue;
             }
             let ts = notation::tokens(text);
-            if !ts.iter().any(|t| matches!(t.kind, Kind::Number(_))) {
+            if !ts
+                .iter()
+                .any(|t| matches!(t.kind, Kind::Number(_) | Kind::Label))
+            {
                 continue;
             }
             let start = fen(&context.pos);
@@ -302,6 +447,27 @@ fn resolve_tokens(
     while i < ts.len() {
         let t = &ts[i];
         let raw = &text[t.span.clone()];
+        if let Some(kind) = label(ts, i, text)
+            && stack.is_empty()
+            // A caption under a diagram names the position just shown: keep it.
+            && !(context.floating || (context.explicit_start && context.parent.is_none()))
+        {
+            *context = match kind {
+                // A new game starts from the initial position; nothing earlier carries over.
+                LabelKind::Game => Context::default(),
+                // A new example has its own position, which the text has not given yet.
+                LabelKind::Example => Context {
+                    invalid_start: true,
+                    ..Context::default()
+                },
+                LabelKind::Reference => context.clone(),
+            };
+            if kind != LabelKind::Reference {
+                before = context.clone();
+                active = false;
+                blocked = false;
+            }
+        }
         match t.kind {
             Kind::Number(n) => {
                 let mut black = raw.ends_with("...");
@@ -318,13 +484,28 @@ fn resolve_tokens(
                     target += 1;
                 }
                 let floating = context.floating;
+                let fresh = fragment.nodes.is_empty() && !active;
+                let fit = |pos: &Chess| legal_run(pos, ts, i + 1, text, alphabet);
+                let sought = if n == 0 {
+                    Err(Miss::Unknown)
+                } else if floating && blocked {
+                    Ok(())
+                } else {
+                    context.seek(target, fresh, &fit)
+                };
                 if floating && blocked {
                     // An earlier number already failed: a later one must not pin the image's ply.
-                } else if n == 0 || !context.seek(target) {
-                    let reason = if context.unrecognized_image {
-                        format!("Unrecognized image: no verified starting position at move {raw}")
-                    } else {
-                        format!("No known position at move {raw}")
+                } else if let Err(miss) = sought {
+                    let reason = match miss {
+                        Miss::Ambiguous(lines) => format!(
+                            "Ambiguous continuation: {lines} earlier lines reach move {raw}"
+                        ),
+                        Miss::Unknown if context.unrecognized_image => {
+                            format!(
+                                "Unrecognized image: no verified starting position at move {raw}"
+                            )
+                        }
+                        Miss::Unknown => format!("No known position at move {raw}"),
                     };
                     fail(fragment, reason);
                     blocked = true;
@@ -370,31 +551,13 @@ fn resolve_tokens(
             }
             // An image position gets its move number from the text before any move is read.
             Kind::Word if active && !blocked && !context.floating => {
-                if matches!(
-                    raw.to_lowercase().as_str(),
-                    "ch" | "dbl"
-                        | "dis"
-                        | "mate"
-                        | "e.p."
-                        | "+-"
-                        | "-+"
-                        | "="
-                        | "+/-"
-                        | "±"
-                        | "∓"
-                        | "⩲"
-                        | "⩱"
-                        | "..."
-                        | "…"
-                ) {
+                if noise(raw) {
                     i += 1;
                     continue;
                 }
                 if let Some((m, span, count)) = parse_move(&context.pos, ts, i, text, alphabet) {
                     before = context.clone();
-                    context
-                        .known
-                        .insert(ply(&context.pos), (context.pos.clone(), context.parent));
+                    context.remember();
                     let san = SanPlus::from_move(context.pos.clone(), m).to_string();
                     context.pos.play_unchecked(m);
                     let id = book.nodes.len();
@@ -410,9 +573,7 @@ fn resolve_tokens(
                         comment: String::new(),
                     });
                     context.parent = Some(id);
-                    context
-                        .known
-                        .insert(ply(&context.pos), (context.pos.clone(), context.parent));
+                    context.remember();
                     fragment.nodes.push(id);
                     i += count - 1;
                 } else if looks_like_move(raw)
@@ -437,7 +598,8 @@ fn resolve_tokens(
                     comment.push_str(raw);
                 }
             }
-            Kind::Word => {}
+            // Labels were handled before the match.
+            Kind::Word | Kind::Label => {}
         }
         i += 1;
     }
@@ -463,6 +625,14 @@ fn parse_move(
         let span = ts[i].span.start..group.last().expect("nonempty group").span.end;
         if let Ok(m) = notation::parse(pos, &text[span.clone()], alphabet) {
             return Some((m, span, count));
+        }
+        // A move closing a sentence: "(2) P-g4."
+        let raw = &text[span.clone()];
+        if raw.ends_with('.')
+            && !raw.ends_with("..")
+            && let Ok(m) = notation::parse(pos, &raw[..raw.len() - 1], alphabet)
+        {
+            return Some((m, span.start..span.end - 1, count));
         }
     }
     None
@@ -491,10 +661,19 @@ fn recognized_positions(
     let mut out = HashMap::new();
     for (p, page) in document.pages.iter().enumerate() {
         for (b, block) in page.blocks.iter().enumerate() {
-            if let BlockKind::Image { path, alt } = &block.kind
-                && let Some(Some(placement)) = placements.get(path)
-                && let Some(pos) = image_position(
-                    page.blocks[b + 1..]
+            let (placement, alt) = match &block.kind {
+                BlockKind::Image { path, alt } => match placements.get(path) {
+                    Some(Some(placement)) => (placement.clone(), alt.as_str()),
+                    _ => continue,
+                },
+                BlockKind::Paragraph => match grid(&page.text[block.span.clone()], alphabet) {
+                    Some(placement) => (placement, ""),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            if let Some(pos) = image_position(
+                page.blocks[b + 1..]
                         .iter()
                         .map(|block| (page, block))
                         // Pagination can put the commentary on the next page.
@@ -502,11 +681,10 @@ fn recognized_positions(
                             next.blocks.iter().map(move |block| (next, block))
                         }))
                         .take(4),
-                    alt,
-                    alphabet,
-                    placement,
-                )
-            {
+                alt,
+                alphabet,
+                &placement,
+            ) {
                 out.insert((p, b), pos);
             }
         }
@@ -521,10 +699,13 @@ fn image_position<'a>(
 ) -> Option<Chess> {
     let mut stated = stated_turn(alt);
     for (page, block) in following {
+        let text = &page.text[block.span.clone()];
+        if block.kind == BlockKind::Heading && caption(text) {
+            continue;
+        }
         if !matches!(block.kind, BlockKind::Paragraph | BlockKind::Table) {
             break;
         }
-        let text = &page.text[block.span.clone()];
         if find_fen(text).is_some() || diagram(text).is_some() {
             break;
         }
@@ -590,6 +771,105 @@ fn image_position<'a>(
     }
     // Without a stated side or a move number the side to move is unknown: abstain.
     placed(placement, stated?)
+}
+/// A heading that only names a diagram or figure ("DIAGRAM 1", "Fig. 12").
+fn caption(text: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    words.len() <= 3
+        && words.first().is_some_and(|w| {
+            notation::label_kind(w) == Some(LabelKind::Reference)
+                && w.trim_end_matches('.').len() > 2
+        })
+        && words[1..].iter().all(|w| {
+            w.trim_end_matches(['.', ':'])
+                .chars()
+                .all(|c| c.is_ascii_digit())
+        })
+}
+/// A board printed as text rows, "8 | #R | #Kt| ... |" down to rank 1: '#' marks black men,
+/// '^' white ones, letters follow the book's alphabet ("Kt" is a knight) and a bare mark is a
+/// pawn. Returns the piece placement; the side to move comes from the text around it.
+fn grid(text: &str, alphabet: &str) -> Option<String> {
+    if !text.contains('|') {
+        return None;
+    }
+    let parts: Vec<&str> = text.split('|').collect();
+    let mut rows: [Option<String>; 8] = Default::default();
+    let mut k = 0;
+    while k + 8 < parts.len() {
+        let rank = parts[k]
+            .split_whitespace()
+            .last()
+            .and_then(|w| w.parse::<usize>().ok())
+            .filter(|r| (1..=8).contains(r));
+        let Some(rank) = rank else {
+            k += 1;
+            continue;
+        };
+        let mut row = String::new();
+        let mut empty = 0u8;
+        for cell in &parts[k + 1..k + 9] {
+            match grid_cell(cell.trim(), alphabet)? {
+                Cell::Man(piece) => {
+                    if empty > 0 {
+                        row.push(char::from(b'0' + empty));
+                        empty = 0;
+                    }
+                    row.push(piece);
+                }
+                Cell::Empty => empty += 1,
+            }
+        }
+        if empty > 0 {
+            row.push(char::from(b'0' + empty));
+        }
+        let slot = &mut rows[8 - rank];
+        if slot.is_some() {
+            return None;
+        }
+        *slot = Some(row);
+        k += 9;
+    }
+    let rows: Option<Vec<String>> = rows.into_iter().collect();
+    Some(rows?.join("/"))
+}
+/// One square of a text board.
+#[derive(Debug, PartialEq)]
+enum Cell {
+    Empty,
+    Man(char),
+}
+/// Reads one grid cell; `None` when it is neither empty nor a chess man.
+fn grid_cell(cell: &str, alphabet: &str) -> Option<Cell> {
+    if cell.is_empty() {
+        return Some(Cell::Empty);
+    }
+    let (white, name) = if let Some(name) = cell.strip_prefix('^') {
+        (true, name)
+    } else {
+        (false, cell.strip_prefix('#')?)
+    };
+    let role = match name {
+        "" => 'P',
+        "Kt" => 'N',
+        _ => {
+            let mut chars = name.chars();
+            let letter = chars.next()?;
+            if chars.next().is_some() {
+                return None;
+            }
+            match alphabet.chars().position(|c| c == letter) {
+                Some(i) => "KQRBN".chars().nth(i)?,
+                None if letter == 'P' => 'P',
+                None => return None,
+            }
+        }
+    };
+    Some(Cell::Man(if white {
+        role
+    } else {
+        role.to_ascii_lowercase()
+    }))
 }
 fn placed(placement: &str, side: Color) -> Option<Chess> {
     position(&format!("{placement} {} - - 0 1", side.char()))
@@ -719,6 +999,116 @@ mod tests {
         let b = book("12. e4 e5");
         assert!(b.nodes.is_empty());
         assert!(matches!(b.fragments[0].status, Status::Unresolved(_)));
+    }
+    fn blocks(blocks: &[(&str, BlockKind)]) -> Book {
+        let mut page = Page::default();
+        for (text, kind) in blocks {
+            page.push(text, kind.clone());
+        }
+        resolve(Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![],
+        })
+    }
+    use std::fmt::Write as _;
+    const SEP: &str = "|------------------------|";
+    fn board(rows: [&str; 8]) -> String {
+        let mut out = String::from("+------------------------+ ");
+        for (i, row) in rows.iter().enumerate() {
+            write!(out, "{} {row} {SEP} ", 8 - i).unwrap();
+        }
+        out
+    }
+    const EMPTY: &str = "|    |    |    |    |    |    |    |    |";
+    fn grid_board() -> String {
+        board([
+            "|    |    |    |    | #K |    |    |    |",
+            "|    |    |    |    | #  |    |    |    |",
+            EMPTY,
+            EMPTY,
+            EMPTY,
+            EMPTY,
+            "|    |    |    |    | ^P |    |    |    |",
+            "| ^R |    |    |    | ^K |    |    |    |",
+        ])
+    }
+    #[test]
+    fn a_text_grid_seeds_the_moves_after_its_caption() {
+        let b = blocks(&[
+            (&grid_board(), BlockKind::Paragraph),
+            ("DIAGRAM 1", BlockKind::Heading),
+            ("White to play wins. 1. Ra8+", BlockKind::Paragraph),
+        ]);
+        assert!(b.document.pages[0].blocks.iter().any(|block| matches!(
+            &block.kind,
+            BlockKind::Diagram { fen } if fen.starts_with("4k3/4p3/8/8/8/8/4P3/R3K3 w")
+        )));
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            ["a1a8"]
+        );
+    }
+    #[test]
+    fn a_grid_that_is_not_a_legal_board_is_not_shown() {
+        let text = grid_board().replace("^K", "^Q");
+        let b = blocks(&[
+            (&text, BlockKind::Paragraph),
+            ("White to play. 1. Ra8+", BlockKind::Paragraph),
+        ]);
+        assert!(
+            !b.document.pages[0]
+                .blocks
+                .iter()
+                .any(|block| matches!(block.kind, BlockKind::Diagram { .. }))
+        );
+        assert!(b.nodes.is_empty());
+    }
+    #[test]
+    fn moves_leading_up_to_a_grid_start_from_the_opening() {
+        let b = blocks(&[
+            (&grid_board(), BlockKind::Paragraph),
+            ("DIAGRAM 2", BlockKind::Heading),
+            (
+                "White to move. This is reached by (1) P-e4, P-e5; (2) B-c4.",
+                BlockKind::Paragraph,
+            ),
+        ]);
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            ["e2e4", "e7e5", "f1c4"]
+        );
+    }
+    #[test]
+    fn a_move_may_end_its_sentence() {
+        let b = book("(1) P-e4, P-e5; (2) B-c4. Then 1. e4 e5 2. Bc4.");
+        assert_eq!(b.nodes.len(), 6);
+        assert!(b.fragments.iter().all(|f| f.status == Status::Resolved));
+    }
+    #[test]
+    fn grid_cells_follow_the_book_alphabet() {
+        assert_eq!(grid_cell("#Kt", "KQRBN"), Some(Cell::Man('n')));
+        assert_eq!(grid_cell("^", "KQRBN"), Some(Cell::Man('P')));
+        assert_eq!(grid_cell("#D", "KDTLS"), Some(Cell::Man('q')));
+        assert_eq!(grid_cell("x", "KQRBN"), None);
+    }
+    #[test]
+    fn only_short_numbered_labels_are_captions() {
+        assert!(caption("DIAGRAM 12"));
+        assert!(caption("Fig. 3."));
+        assert!(!caption("Diagrams of the opening"));
+        assert!(!caption("No. 4"));
+    }
+    #[test]
+    fn a_roman_numeral_starts_a_new_line_from_move_one() {
+        let b = book("I. 1. e4 e5 2. Nf3 Nc6 II. 1. d4 d5 2. c4");
+        let d4 = b.nodes.iter().position(|n| n.uci == "d2d4").unwrap();
+        assert_eq!(b.nodes[d4].parent, None);
+        assert_eq!(b.nodes.last().unwrap().uci, "c2c4");
     }
 }
 
@@ -928,6 +1318,34 @@ mod safety_tests {
             assert_eq!(book.fragments[1].start_fen, book.fragments[0].start_fen);
             assert_eq!(book.nodes[1].fen, "4k3/8/8/8/8/4P3/8/4K3 b - - 0 1");
         }
+    }
+    #[test]
+    fn a_game_from_move_one_after_a_diagram_starts_from_the_opening() {
+        let resolve_after_diagram = |moves: &str| {
+            let mut page = Page::default();
+            page.push("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1", BlockKind::Paragraph);
+            page.push(moves, BlockKind::Paragraph);
+            resolve(Document {
+                cover: None,
+                isbn: None,
+                title: String::new(),
+                author: String::new(),
+                format: "test".into(),
+                pages: vec![page],
+                assets: vec![],
+            })
+        };
+        let book = resolve_after_diagram("Suppose that after 1. e2-e4 e7-e5 White plays 2. d2-d4.");
+        assert_eq!(book.nodes.len(), 3);
+        let game = book.fragments.last().expect("the game");
+        assert_eq!(game.start_fen, fen(&Chess::default()), "{:?}", game.status);
+        // Moves that fit the diagram as well stay on the diagram.
+        let book = resolve_after_diagram("1. d2-d4 Ke8-d7");
+        assert_eq!(book.nodes.len(), 2);
+        assert_eq!(
+            book.fragments.last().expect("the moves").start_fen,
+            "4k3/8/8/8/8/8/3P4/4K3 w - - 0 1"
+        );
     }
     #[test]
     fn explicit_midgame_cannot_restart_from_standard_board() {

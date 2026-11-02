@@ -1,0 +1,20 @@
+{
+  "file": "text-grid.epub",
+  "notation": "text grid",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "11. Bxb5+ Nbd7",
+      "start_fen": "rn2kb1r/p3qppp/5n2/1p2p1B1/2B1P3/1Q6/PPP2PPP/R3K2R w - - 0 11",
+      "moves": [
+        "c4b5",
+        "b8d7"
+      ]
+    }
+  ],
+  "diagrams": [
+    "rn2kb1r/p3qppp/5n2/1p2p1B1/2B1P3/1Q6/PPP2PPP/R3K2R w - - 0 1"
+  ],
+  "scanned": false
+}
