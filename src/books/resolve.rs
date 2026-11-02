@@ -610,6 +610,7 @@ fn resolve_tokens(
                 let floating = context.floating;
                 let fresh = fragment.nodes.is_empty() && !active;
                 let fit = |pos: &Chess| legal_run(pos, ts, i + 1, text, alphabet);
+                let rewound_from_a_move = context.parent.is_some();
                 let sought = if n == 0 {
                     Err(Miss::Unknown)
                 } else if floating && blocked {
@@ -632,6 +633,15 @@ fn resolve_tokens(
                         Miss::Unknown => format!("No known position at move {raw}"),
                     };
                     fail(fragment, reason);
+                    blocked = true;
+                } else if rewound_from_a_move
+                    && !fragment.nodes.is_empty()
+                    && context.parent.is_none()
+                    && fen(&context.pos) != fragment.start_fen
+                {
+                    // An earlier root (a previous diagram or fragment start) has no node to hang
+                    // these moves from, and this fragment already started elsewhere.
+                    fail(fragment, format!("No known position at move {raw}"));
                     blocked = true;
                 } else if !blocked {
                     if floating {
@@ -1637,6 +1647,53 @@ mod image_tests {
                 ["e7e5", "a1a8"]
             );
         }
+    }
+    #[test]
+    fn moves_from_an_earlier_root_do_not_hang_from_a_later_start() {
+        let mut page = Page::default();
+        page.push("1. e4 e5 2. Nf3", BlockKind::Paragraph);
+        page.push(
+            "2... Nc6 3. Bb5, but 1. d4 d5 was also good.",
+            BlockKind::Paragraph,
+        );
+        let b = resolve_using(
+            Document {
+                cover: None,
+                isbn: None,
+                title: String::new(),
+                author: String::new(),
+                format: "test".into(),
+                pages: vec![page],
+                assets: Vec::new(),
+            },
+            None,
+        );
+        for node in &b.nodes {
+            let before = node.parent.map_or_else(
+                || {
+                    b.fragments
+                        .iter()
+                        .find(|f| f.nodes.contains(&node.id))
+                        .map(|f| f.start_fen.clone())
+                        .unwrap()
+                },
+                |p| b.nodes[p].fen.clone(),
+            );
+            let pos = position(&before).unwrap();
+            assert!(
+                node.uci
+                    .parse::<shakmaty::uci::UciMove>()
+                    .unwrap()
+                    .to_move(&pos)
+                    .is_ok(),
+                "{} from {before}",
+                node.uci
+            );
+        }
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"]
+        );
     }
     #[test]
     fn variations_keep_the_image_move_number() {
