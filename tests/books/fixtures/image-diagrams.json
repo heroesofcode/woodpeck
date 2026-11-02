@@ -1,0 +1,179 @@
+{
+  "file": "image-diagrams.epub",
+  "notation": "image diagrams",
+  "complete": true,
+  "fragments": [
+    {
+      "page": 0,
+      "anchor": "8. Re1 h6 9. a4 a5",
+      "start_fen": "r1b1k2r/ppp1qppp/1bnp1n2/4p3/2BPP3/2P2N1P/PP3PP1/RNBQ1RK1 w - - 0 8",
+      "moves": [
+        "f1e1",
+        "h7h6",
+        "a2a4",
+        "a7a5"
+      ]
+    },
+    {
+      "page": 1,
+      "anchor": "9. d5 Ne5 10. Nxe5 dxe5",
+      "start_fen": "r1bqk1nr/ppp2ppp/1bnp4/8/2BPP3/5N2/P4PPP/RNBQ1RK1 w - - 0 9",
+      "moves": [
+        "d4d5",
+        "c6e5",
+        "f3e5",
+        "d6e5"
+      ]
+    },
+    {
+      "page": 2,
+      "anchor": "9... Bg4 10. Bxg4 Nxg4 11. f7+",
+      "start_fen": "rnbqkr2/ppp3Qp/5P2/2bp2B1/8/2P5/PP2BnPP/RN2K1NR b - - 0 9",
+      "moves": [
+        "c8g4",
+        "e2g4",
+        "f2g4",
+        "f6f7"
+      ]
+    },
+    {
+      "page": 3,
+      "anchor": "10. Nxe4 Rxe4 11. Bf3 Re6",
+      "start_fen": "r1bqr1k1/p1p2ppp/2p5/1pb5/4n3/2N5/PPPPBPPP/R1BQ1RK1 w - - 0 10",
+      "moves": [
+        "c3e4",
+        "e8e4",
+        "e2f3",
+        "e4e6"
+      ]
+    },
+    {
+      "page": 4,
+      "anchor": "10... exd4 11. dxc6 Qxe4+ 12. Kd1",
+      "start_fen": "r1b1k1nr/pp2qppp/2pp4/bB1Pp3/3NP3/1QP5/P4PPP/RNB1K2R b - - 0 10",
+      "moves": [
+        "e5d4",
+        "d5c6",
+        "e7e4",
+        "e1d1"
+      ]
+    },
+    {
+      "page": 5,
+      "anchor": "11... b5 12. Qxb5 Rb8 13. Qa4",
+      "start_fen": "r1b1k2r/ppppnppp/2n3q1/b3P3/2B5/BQPp1N2/P4PPP/RN2R1K1 b - - 0 11",
+      "moves": [
+        "b7b5",
+        "b3b5",
+        "a8b8",
+        "b5a4"
+      ]
+    },
+    {
+      "page": 6,
+      "anchor": "12. Qxb5 Rb8 13. Qa4 Bb6",
+      "start_fen": "r1b1k2r/p1ppnppp/2n3q1/bp2P3/2B5/BQPp1N2/P4PPP/RN2R1K1 w - - 0 12",
+      "moves": [
+        "b3b5",
+        "a8b8",
+        "b5a4",
+        "a5b6"
+      ]
+    },
+    {
+      "page": 7,
+      "anchor": "8. d4 Nh5 9. Bb5+ c6",
+      "start_fen": "rnbqk2r/ppp2p1p/3b1n2/3PN3/2B2ppP/8/PPPP2P1/RNBQK2R w - - 0 8",
+      "moves": [
+        "d2d4",
+        "f6h5",
+        "c4b5",
+        "c7c6"
+      ]
+    },
+    {
+      "page": 8,
+      "anchor": "8... Qg5 9. Nf5 c6 10. g4",
+      "start_fen": "rnb1kb1r/p1pp1ppp/7q/1B5n/4Pp1N/3P4/PPP3PP/RNBQ1K1R b - - 0 8",
+      "moves": [
+        "h6g5",
+        "h4f5",
+        "c7c6",
+        "g2g4"
+      ]
+    },
+    {
+      "page": 9,
+      "anchor": "10. Be3 Bd7 11. Qd3 Rc8",
+      "start_fen": "r1bq1rk1/pp2bppp/2n1pn2/8/2BP4/P1N2N2/1P3PPP/R1BQ1RK1 w - - 0 10",
+      "moves": [
+        "c1e3",
+        "c8d7",
+        "d1d3",
+        "a8c8"
+      ]
+    },
+    {
+      "page": 10,
+      "anchor": "1. e4 e5",
+      "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "moves": [],
+      "unresolved": true
+    }
+  ],
+  "diagrams": [
+    "r1b1k2r/ppp1qppp/1bnp1n2/4p3/2BPP3/2P2N1P/PP3PP1/RNBQ1RK1 w - - 0 1",
+    "r1bqk1nr/ppp2ppp/1bnp4/8/2BPP3/5N2/P4PPP/RNBQ1RK1 w - - 0 1",
+    "rnbqkr2/ppp3Qp/5P2/2bp2B1/8/2P5/PP2BnPP/RN2K1NR b - - 0 1",
+    "r1bqr1k1/p1p2ppp/2p5/1pb5/4n3/2N5/PPPPBPPP/R1BQ1RK1 w - - 0 1",
+    "r1b1k1nr/pp2qppp/2pp4/bB1Pp3/3NP3/1QP5/P4PPP/RNB1K2R b - - 0 1",
+    "r1b1k2r/ppppnppp/2n3q1/b3P3/2B5/BQPp1N2/P4PPP/RN2R1K1 b - - 0 1",
+    "r1b1k2r/p1ppnppp/2n3q1/bp2P3/2B5/BQPp1N2/P4PPP/RN2R1K1 w - - 0 1",
+    "rnbqk2r/ppp2p1p/3b1n2/3PN3/2B2ppP/8/PPPP2P1/RNBQK2R w - - 0 1",
+    "rnb1kb1r/p1pp1ppp/7q/1B5n/4Pp1N/3P4/PPP3PP/RNBQ1K1R b - - 0 1",
+    "r1bq1rk1/pp2bppp/2n1pn2/8/2BP4/P1N2N2/1P3PPP/R1BQ1RK1 w - - 0 1"
+  ],
+  "scanned": false,
+  "diagram_sources": [
+    {
+      "asset_suffix": "/diagram-00.png",
+      "fen": "r1b1k2r/ppp1qppp/1bnp1n2/4p3/2BPP3/2P2N1P/PP3PP1/RNBQ1RK1 w - - 0 1"
+    },
+    {
+      "asset_suffix": "/diagram-01.jpg",
+      "fen": "r1bqk1nr/ppp2ppp/1bnp4/8/2BPP3/5N2/P4PPP/RNBQ1RK1 w - - 0 1"
+    },
+    {
+      "asset_suffix": "/diagram-02.png",
+      "fen": "rnbqkr2/ppp3Qp/5P2/2bp2B1/8/2P5/PP2BnPP/RN2K1NR b - - 0 1"
+    },
+    {
+      "asset_suffix": "/diagram-03.jpg",
+      "fen": "r1bqr1k1/p1p2ppp/2p5/1pb5/4n3/2N5/PPPPBPPP/R1BQ1RK1 w - - 0 1"
+    },
+    {
+      "asset_suffix": "/diagram-04.png",
+      "fen": "r1b1k1nr/pp2qppp/2pp4/bB1Pp3/3NP3/1QP5/P4PPP/RNB1K2R b - - 0 1"
+    },
+    {
+      "asset_suffix": "/diagram-05.jpg",
+      "fen": "r1b1k2r/ppppnppp/2n3q1/b3P3/2B5/BQPp1N2/P4PPP/RN2R1K1 b - - 0 1"
+    },
+    {
+      "asset_suffix": "/diagram-06.png",
+      "fen": "r1b1k2r/p1ppnppp/2n3q1/bp2P3/2B5/BQPp1N2/P4PPP/RN2R1K1 w - - 0 1"
+    },
+    {
+      "asset_suffix": "/diagram-07.jpg",
+      "fen": "rnbqk2r/ppp2p1p/3b1n2/3PN3/2B2ppP/8/PPPP2P1/RNBQK2R w - - 0 1"
+    },
+    {
+      "asset_suffix": "/diagram-08.png",
+      "fen": "rnb1kb1r/p1pp1ppp/7q/1B5n/4Pp1N/3P4/PPP3PP/RNBQ1K1R b - - 0 1"
+    },
+    {
+      "asset_suffix": "/diagram-09.jpg",
+      "fen": "r1bq1rk1/pp2bppp/2n1pn2/8/2BP4/P1N2N2/1P3PPP/R1BQ1RK1 w - - 0 1"
+    }
+  ]
+}

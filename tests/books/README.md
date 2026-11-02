@@ -19,7 +19,7 @@ again by the separate oracle integration test. Neither legal replay nor random w
 establish historical provenance; the handwritten source records supply that.
 
 ```sh
-cargo build --locked --example books_oracle
+cargo build --locked --example books_oracle --example books_diagrams
 python3 tests/books/generate.py
 cargo test --locked --test books_oracles --test books_eval
 cargo run --locked -- book eval tests/books/fixtures
@@ -34,13 +34,16 @@ Layouts sample inline paragraphs, move numbers with/without dots, repeated black
 move numbers, comma/semicolon lists, interleaved comments/NAGs and prose. Additional
 pages exercise tables, one move per paragraph, line breaks, nested legal alternatives
 with explicit expected parents and FEN-seeded midgame fragments. Full-game PDFs use
-two columns and page breaks. Further fixtures cover midgame text diagrams, analysis jumping back 17 plies, an
+two columns and page breaks. `image-diagrams.epub` embeds ten diagram images rendered from oracle positions by
+`examples/books_diagrams.rs` (five flat screen PNGs, five engraved-style JPEGs) plus a
+picture that is not a board. The gate requires zero misread images and at least the five
+screen boards read; the engraved JPEG look currently abstains. Further fixtures cover midgame text diagrams, analysis jumping back 17 plies, an
 EPUB spine break within a game, old-style source qualifiers and descriptive square
 notation. Legacy fixtures retain text/font diagrams, broken/scanned files and promotions. Negative controls contain
 prose coordinates, page/year numbers, illegal moves and unknown starting plies.
 
-There are 89 materialized fixtures. Bundling each notation matrix into a multi-page
-EPUB keeps all fixture files below 2 MB (about 1.78 MB). Outputs use fixed ZIP timestamps.
+There are 90 materialized fixtures. Bundling each notation matrix into a multi-page
+EPUB keeps all fixture files below 2 MB (about 1.96 MB). Outputs use fixed ZIP timestamps.
 No book downloads or network access participate in regeneration or CI. Current CI
 gates require 82% overall recall, 100% sampled precision, zero wrong positions, exact
 text-diagram accuracy, all deliberately broken cases detected, and a runtime below
@@ -63,8 +66,20 @@ ignored storage. The annotations contain 15 nonoverlapping excerpts each for 338
 move); 55278 is strategic prose without comparable move tables. Both remain in the
 whole-book coverage sample. These editions cannot honestly supply 15 game excerpts
 each. Fig.1–15 in 33870 were viewed and independently transcribed as diagram FENs;
-`diagram_sources` maps each FEN to its JPG suffix. Image recognition remains absent,
-so these diagrams score 0/15. Oracle FENs never seed the importer under evaluation.
+`diagram_sources` maps each FEN to its JPG suffix, and the report's "Diagram images"
+table scores what the recognizer read from those pixels: correct, wrong (must stay 0)
+and abstained. These 15 figures are never used for training. Oracle FENs never seed the
+importer under evaluation.
+
+`diagram-labels/` holds square labels for other diagrams of 33870 and 16377, used only to
+train the bundled prototypes (one line per image: file suffix and eight ranks, `x` for
+squares left out). Figures whose engraving is ambiguous (for example a queen whose
+drawn colour contradicts the game) are left out or marked `x` rather than guessed.
+5614 uses a different engraving style with no labels, so its diagrams abstain.
+Do not choose gates or thresholds from Fig.1–15. For generalization, report books never
+used for training separately: 5614 (167 images, different engraving) and the generated
+`image-diagrams` fixture are held out by book; Fig.1–15 are held-out figures of a training
+book, so they measure in-sample style only.
 
 `book eval <directory>` writes `report.md` and `metrics.json`. EPUB/PDF inputs without
 truth JSON are evaluated for coverage only, with no invented accuracy denominator.
