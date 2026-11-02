@@ -26,6 +26,7 @@ struct Context {
     parent: Option<usize>,
     known: BTreeMap<u32, (Chess, Option<usize>)>,
     invalid_start: bool,
+    explicit_start: bool,
     unrecognized_image: bool,
 }
 impl Context {
@@ -36,13 +37,12 @@ impl Context {
         if target == ply(&self.pos) {
             return true;
         }
-        if target == 0 {
-            *self = Self::default();
-            return true;
-        }
         if let Some((pos, parent)) = self.known.get(&target) {
             self.pos = pos.clone();
             self.parent = *parent;
+            true
+        } else if target == 0 && !self.explicit_start {
+            *self = Self::default();
             true
         } else {
             false
@@ -105,7 +105,9 @@ fn resolve_with(mut document: Document, language: &str, alphabet: &str) -> Book 
             if let Some(pos) = find_fen(text).or_else(|| diagram(text)) {
                 block.kind = BlockKind::Diagram { fen: fen(&pos) };
                 context = Context {
+                    known: BTreeMap::from([(ply(&pos), (pos.clone(), None))]),
                     pos,
+                    explicit_start: true,
                     ..Context::default()
                 };
                 continue;
@@ -482,6 +484,44 @@ mod tests {
 mod safety_tests {
     use super::*;
     use crate::books::document::Page;
+    #[test]
+    fn move_one_variation_returns_to_explicit_diagram() {
+        for seed in [
+            "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1",
+            "....♚...\n........\n........\n........\n........\n........\n....♙...\n....♔...\nWhite to move",
+        ] {
+            let mut page = Page::default();
+            page.push(seed, BlockKind::Paragraph);
+            page.push("1. e4", BlockKind::Paragraph);
+            page.push("1. e3", BlockKind::Paragraph);
+            let book = resolve(Document {
+                title: String::new(),
+                author: String::new(),
+                format: "test".into(),
+                pages: vec![page],
+                assets: vec![],
+            });
+            assert_eq!(book.nodes.len(), 2);
+            assert_eq!(book.nodes[1].parent, None);
+            assert_eq!(book.fragments[1].start_fen, book.fragments[0].start_fen);
+            assert_eq!(book.nodes[1].fen, "4k3/8/8/8/8/4P3/8/4K3 b - - 0 1");
+        }
+    }
+    #[test]
+    fn explicit_midgame_cannot_restart_from_standard_board() {
+        let mut page = Page::default();
+        page.push("4k3/8/8/8/8/8/4P3/4K3 w - - 0 12", BlockKind::Paragraph);
+        page.push("1. e4", BlockKind::Paragraph);
+        let book = resolve(Document {
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![],
+        });
+        assert!(book.nodes.is_empty());
+        assert!(matches!(book.fragments[0].status, Status::Unresolved(_)));
+    }
     #[test]
     fn invalid_explicit_fen_cannot_fall_back_to_opening() {
         let mut page = Page::default();
