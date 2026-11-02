@@ -140,10 +140,14 @@ pub fn tokens(text: &str) -> Vec<Token> {
                 }
                 Kind::Nag
             }
+            // A printed ellipsis is its own token, also in "30…e5" and "…e5".
+            '\u{2026}' => Kind::Word,
             _ => {
                 while i < text.len() {
                     let next = text[i..].chars().next().expect("character boundary");
                     if next.is_whitespace()
+                        || (next == '\u{2026}'
+                            && text[start..i].bytes().all(|b| b.is_ascii_digit()))
                         || matches!(
                             next,
                             '(' | ')' | '[' | ']' | ',' | ';' | '|' | '!' | '?' | '$'
@@ -491,6 +495,28 @@ fn descriptive(pos: &Chess, m: Move, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_printed_ellipsis_splits_from_numbers_and_moves() {
+        let text = "30\u{2026}e5 31\u{2026} \u{2026}Nf6 1...d5";
+        let words: Vec<(Kind, &str)> = tokens(text)
+            .into_iter()
+            .map(|t| (t.kind, &text[t.span]))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                (Kind::Number(30), "30"),
+                (Kind::Word, "\u{2026}"),
+                (Kind::Word, "e5"),
+                (Kind::Number(31), "31"),
+                (Kind::Word, "\u{2026}"),
+                (Kind::Word, "\u{2026}"),
+                (Kind::Word, "Nf6"),
+                (Kind::Number(1), "1..."),
+                (Kind::Word, "d5"),
+            ]
+        );
+    }
     #[test]
     fn alphabets_and_long_algebraic() {
         let p = Chess::default();

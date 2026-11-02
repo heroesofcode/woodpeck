@@ -1628,6 +1628,17 @@ mod image_tests {
         assert!(b.nodes[1].fen.ends_with(" 24"));
     }
     #[test]
+    fn printed_ellipsis_after_the_move_number_names_black() {
+        for text in ["30\u{2026} e5 31. Ra8+", "30\u{2026}e5 31. Ra8+"] {
+            let b = book("", &[text]);
+            assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 b - - 0 1"));
+            assert_eq!(
+                b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+                ["e7e5", "a1a8"]
+            );
+        }
+    }
+    #[test]
     fn variations_keep_the_image_move_number() {
         let b = book("", &["7. e4 (7. Ra8+) e5 (Ra8+)"]);
         let fens: Vec<_> = b.nodes.iter().map(|n| n.fen.as_str()).collect();
