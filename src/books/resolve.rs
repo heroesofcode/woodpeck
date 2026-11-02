@@ -69,18 +69,19 @@ impl Context {
             return Err(Miss::Unknown);
         }
         if self.floating {
-            if target % 2 != u32::from(self.pos.turn().is_black()) {
-                return Err(Miss::Unknown);
-            }
-            let Some(pos) = renumber(&self.pos, target / 2 + 1) else {
-                return Err(Miss::Unknown);
-            };
+            let pos = (target % 2 == u32::from(self.pos.turn().is_black()))
+                .then(|| renumber(&self.pos, target / 2 + 1))
+                .flatten();
             // "Reached after (1) P-K4, P-Q4": a game from move one leading up to the diagram
-            // starts from the opening position when only that one keeps the moves legal.
-            if target == 0 && fit(&Chess::default()) > fit(&pos) {
+            // starts from the opening position when only that one keeps more moves legal, even
+            // when the diagram has Black to move.
+            if target == 0 && fit(&Chess::default()) > pos.as_ref().map_or(0, fit) {
                 *self = Self::default();
                 return Ok(());
             }
+            let Some(pos) = pos else {
+                return Err(Miss::Unknown);
+            };
             self.pos = pos;
             self.floating = false;
             self.known = Self::known(self.pos.clone());
@@ -97,6 +98,16 @@ impl Context {
         }
         let chosen = match candidates.len() {
             0 if target == 0 && !self.explicit_start => {
+                *self = Self::default();
+                return Ok(());
+            }
+            // A diagram with Black to make move one has no ply-0 position of its own; a game
+            // from move one leading up to it plays from the opening if that fits better.
+            0 if target == 0
+                && fresh
+                && ply(&self.pos) == 1
+                && fit(&Chess::default()) > fit(&self.pos) =>
+            {
                 *self = Self::default();
                 return Ok(());
             }
@@ -772,13 +783,25 @@ fn image_position<'a>(
     // Without a stated side or a move number the side to move is unknown: abstain.
     placed(placement, stated?)
 }
-/// A heading that only names a diagram or figure ("DIAGRAM 1", "Fig. 12").
+/// A heading that only names a diagram or figure ("DIAGRAM 1", "Fig. 12"). Chapter, section,
+/// part and page headings start something new instead.
 fn caption(text: &str) -> bool {
     let words: Vec<&str> = text.split_whitespace().collect();
     words.len() <= 3
         && words.first().is_some_and(|w| {
-            notation::label_kind(w) == Some(LabelKind::Reference)
-                && w.trim_end_matches('.').len() > 2
+            matches!(
+                w.trim_end_matches(['.', ':']).to_lowercase().as_str(),
+                "diagram"
+                    | "diag"
+                    | "dia"
+                    | "fig"
+                    | "figure"
+                    | "diagramm"
+                    | "diagramme"
+                    | "diagrama"
+                    | "diagramma"
+                    | "diagramie"
+            )
         })
         && words[1..].iter().all(|w| {
             w.trim_end_matches(['.', ':'])
@@ -1102,6 +1125,25 @@ mod tests {
         assert!(caption("Fig. 3."));
         assert!(!caption("Diagrams of the opening"));
         assert!(!caption("No. 4"));
+        assert!(caption("Diag. 7"));
+        for heading in ["Chapter 3", "Section 2", "Part 4", "Page 12", "Move 9"] {
+            assert!(!caption(heading), "{heading}");
+        }
+    }
+    #[test]
+    fn a_chapter_heading_after_a_diagram_starts_afresh() {
+        let b = blocks(&[
+            (&grid_board(), BlockKind::Paragraph),
+            ("Chapter 2", BlockKind::Heading),
+            ("1. ... Kd7", BlockKind::Paragraph),
+        ]);
+        assert!(b.nodes.is_empty());
+        assert!(
+            !b.document.pages[0]
+                .blocks
+                .iter()
+                .any(|block| matches!(block.kind, BlockKind::Diagram { .. }))
+        );
     }
     #[test]
     fn a_roman_numeral_starts_a_new_line_from_move_one() {
@@ -1346,6 +1388,27 @@ mod safety_tests {
             book.fragments.last().expect("the moves").start_fen,
             "4k3/8/8/8/8/8/3P4/4K3 w - - 0 1"
         );
+    }
+    #[test]
+    fn a_game_from_move_one_leads_up_to_a_black_to_move_diagram() {
+        let mut page = Page::default();
+        page.push("4k3/8/8/8/8/8/3P4/4K3 b - - 0 1", BlockKind::Paragraph);
+        page.push(
+            "Suppose that after 1. e2-e4 e7-e5 White plays 2. d2-d4.",
+            BlockKind::Paragraph,
+        );
+        let book = resolve(Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![],
+        });
+        assert_eq!(book.nodes.len(), 3);
+        let game = book.fragments.last().expect("the game");
+        assert_eq!(game.start_fen, fen(&Chess::default()), "{:?}", game.status);
     }
     #[test]
     fn explicit_midgame_cannot_restart_from_standard_board() {
