@@ -95,6 +95,13 @@ pub fn fonts(ctx: &egui::Context) {
                 .insert(0, name.into());
         }
     }
+    if let Some(bold) = fonts
+        .families
+        .get(&FontFamily::Name("coordinates".into()))
+        .cloned()
+    {
+        fonts.families.insert(FontFamily::Name("bold".into()), bold);
+    }
     ctx.set_fonts(fonts);
 }
 
