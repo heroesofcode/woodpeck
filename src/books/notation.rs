@@ -332,7 +332,12 @@ fn own_wing(piece: &str, destination: &str) -> Option<String> {
         rest.to_string()
     } else if rest.starts_with(|c: char| c.is_ascii_digit()) || rest.starts_with("SQ") {
         format!("{name}{rest}")
-    } else if let Some(side) = name.chars().next().filter(|c| matches!(c, 'K' | 'Q')) {
+    } else if let Some(side) = (name != "KT")
+        .then(|| name.chars().next())
+        .flatten()
+        .filter(|c| matches!(c, 'K' | 'Q'))
+    {
+        // "Q. B.", "K. Kt." name a wing; a plain "Kt." does not.
         format!("{side}{rest}")
     } else if destination.starts_with("HER") {
         format!("Q{rest}")
@@ -568,6 +573,12 @@ mod typography_tests {
         assert_eq!(uci(open, "K. to his 2d.").as_deref(), Ok("e1e2"));
         assert_eq!(uci(open, "K. B. to his Q. B's 4th.").as_deref(), Ok("f1c4"));
         assert_eq!(uci(open, "Q. Kt. to his B's 3d.").as_deref(), Ok("b1c3"));
+        assert_eq!(uci(open, "K. Kt. to his B's 3d.").as_deref(), Ok("g1f3"));
+        // A plain "Kt." names no wing, so either knight could go to a Bishop's third.
+        assert_eq!(
+            uci(open, "Kt. to his B's 3d.").as_deref(),
+            Err(&MatchError::Ambiguous)
+        );
         let knight = "rnbqkbnr/pppp1ppp/8/4p3/4P3/2N5/PPPP1PPP/R1BQKBNR w KQkq - 0 2";
         assert_eq!(uci(knight, "Q. Kt. to his 5th.").as_deref(), Ok("c3b5"));
     }
