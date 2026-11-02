@@ -9,11 +9,29 @@ use crate::{
     store::ReadingProgress,
 };
 use eframe::egui::{self, Ui};
-use std::sync::{
-    Arc,
-    atomic::{AtomicU8, Ordering},
-    mpsc,
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+        mpsc,
+    },
 };
+
+/// Asks the system file chooser for a book: the XDG desktop portal on Linux (Hyprland, GNOME,
+/// KDE…), with zenity as a fallback, and the native dialogs on macOS and Windows. `None` means
+/// cancelled or no chooser available; the path field stays as the fallback either way.
+#[cfg(not(test))]
+fn pick_book() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Import a chess book")
+        .add_filter("EPUB or PDF", &["epub", "pdf", "EPUB", "PDF"])
+        .pick_file()
+}
+#[cfg(test)]
+fn pick_book() -> Option<PathBuf> {
+    None
+}
 
 struct ImportTask {
     cancel: CancelFlag,
@@ -28,6 +46,7 @@ pub(super) struct Library {
     pub reader: Option<Reader>,
     path: String,
     choosing: bool,
+    picking: Option<mpsc::Receiver<Option<PathBuf>>>,
     deleting: Option<i64>,
     import: Option<ImportTask>,
     message: String,
@@ -45,7 +64,18 @@ pub(super) fn import_error(error: &ImportError) -> String {
     }
 }
 impl Woodpeck {
-    pub(super) fn poll_books(&mut self) {
+    pub(super) fn poll_books(&mut self, ctx: &egui::Context) {
+        if let Some(picking) = &self.books.picking {
+            match picking.try_recv() {
+                Ok(Some(path)) => {
+                    self.books.picking = None;
+                    self.books.path = path.display().to_string();
+                    self.start_import(ctx, path);
+                }
+                Ok(None) | Err(mpsc::TryRecvError::Disconnected) => self.books.picking = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         let result = self
             .books
             .import
@@ -121,58 +151,85 @@ impl Woodpeck {
         self.books.reader = Some(reader);
         self.screen = Screen::Reader;
     }
+    fn choose_book(&mut self, ctx: &egui::Context) {
+        self.books.choosing = true;
+        if self.books.picking.is_some() || self.screenshot.is_some() {
+            return;
+        }
+        let (send, receive) = mpsc::channel();
+        let ctx = ctx.clone();
+        let pick = move || {
+            let _ = send.send(pick_book());
+            ctx.request_repaint();
+        };
+        // macOS dialogs must run on the main thread; elsewhere the chooser runs beside the UI.
+        if cfg!(target_os = "macos") {
+            pick();
+        } else {
+            std::thread::spawn(pick);
+        }
+        self.books.picking = Some(receive);
+    }
+    fn start_import(&mut self, ctx: &egui::Context, path: PathBuf) {
+        if self.books.import.is_some() {
+            return;
+        }
+        let cancel = CancelFlag::default();
+        let flag = cancel.clone();
+        let (send, receive) = mpsc::channel();
+        let stage = Arc::new(AtomicU8::new(0));
+        let worker_stage = stage.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            use sha2::{Digest, Sha256};
+            let result = (|| {
+                let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+                flag.check().map_err(|e| e.to_string())?;
+                worker_stage.store(1, Ordering::Relaxed);
+                ctx.request_repaint();
+                let document = TextImporter.document(&path).map_err(|e| import_error(&e))?;
+                flag.check().map_err(|e| e.to_string())?;
+                worker_stage.store(2, Ordering::Relaxed);
+                ctx.request_repaint();
+                let book = crate::books::resolve::resolve(document);
+                flag.check().map_err(|e| e.to_string())?;
+                Ok((book, format!("{:x}", Sha256::digest(bytes))))
+            })();
+            let _ = send.send(result);
+            ctx.request_repaint();
+        });
+        self.books.import = Some(ImportTask {
+            cancel,
+            result: receive,
+            stage,
+        });
+        self.books.message.clear();
+    }
     fn book_import(&mut self, ui: &mut Ui) {
         if ui.button("Import book…").clicked() {
-            self.books.choosing = true;
+            self.choose_book(ui.ctx());
+        }
+        if self.books.picking.is_some() {
+            ui.weak("Choose a book in the file dialog…");
         }
         if self.books.choosing {
+            let mut import = false;
             widgets::card(ui).show(ui, |ui| {
-                ui.label("EPUB or PDF file path");
-                ui.text_edit_singleline(&mut self.books.path);
+                ui.label("Or type the EPUB or PDF file path");
+                let field = ui.text_edit_singleline(&mut self.books.path);
                 ui.small(
                     "Text-layer books only. DRM-protected and scanned books aren't supported.",
                 );
-                if ui
-                    .add_enabled(
-                        self.books.import.is_none() && !self.books.path.trim().is_empty(),
-                        egui::Button::new("Import"),
-                    )
-                    .clicked()
-                {
-                    let path = std::path::PathBuf::from(self.books.path.trim());
-                    let cancel = CancelFlag::default();
-                    let flag = cancel.clone();
-                    let (send, receive) = mpsc::channel();
-                    let stage = Arc::new(AtomicU8::new(0));
-                    let worker_stage = stage.clone();
-                    let ctx = ui.ctx().clone();
-                    std::thread::spawn(move || {
-                        use sha2::{Digest, Sha256};
-                        let result = (|| {
-                            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-                            flag.check().map_err(|e| e.to_string())?;
-                            worker_stage.store(1, Ordering::Relaxed);
-                            ctx.request_repaint();
-                            let document =
-                                TextImporter.document(&path).map_err(|e| import_error(&e))?;
-                            flag.check().map_err(|e| e.to_string())?;
-                            worker_stage.store(2, Ordering::Relaxed);
-                            ctx.request_repaint();
-                            let book = crate::books::resolve::resolve(document);
-                            flag.check().map_err(|e| e.to_string())?;
-                            Ok((book, format!("{:x}", Sha256::digest(bytes))))
-                        })();
-                        let _ = send.send(result);
-                        ctx.request_repaint();
-                    });
-                    self.books.import = Some(ImportTask {
-                        cancel,
-                        result: receive,
-                        stage,
-                    });
-                    self.books.message.clear();
-                }
+                let ready = self.books.import.is_none() && !self.books.path.trim().is_empty();
+                import = ui.add_enabled(ready, egui::Button::new("Import")).clicked()
+                    || (ready
+                        && field.lost_focus()
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter)));
             });
+            if import {
+                let path = PathBuf::from(self.books.path.trim());
+                self.start_import(ui.ctx(), path);
+            }
         }
         if let Some(task) = &self.books.import {
             let stage = task.stage.load(Ordering::Relaxed);

@@ -48,7 +48,7 @@ impl Woodpeck {
         let ctx = ui.ctx().clone();
         self.keyboard(&ctx);
         self.save_reader();
-        self.poll_books();
+        self.poll_books(&ctx);
         let window = ui.max_rect().size();
         let mut layout = layout::calculate(window.x, window.y);
         if self.collapsed && layout.navigation == Navigation::Sidebar {
