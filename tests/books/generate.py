@@ -385,6 +385,13 @@ assert text == '11. Bxb5+ Nbd7'
 save('text-grid.epub', ['<pre>' + '\n'.join(rows) + '</pre><h3>DIAGRAM 1.</h3><p>White to move.</p><p>' + text + '</p>'],
      [fragment(text, UCI[20:22], start=f'{placement} w - - 0 11')], 'text grid', diagrams=[f'{placement} w - - 0 1'])
 
+# PGN pasted into a book: tag pairs are not moves; a FEN tag gives the start of its game.
+first = numbered(SAN[:8])
+second = '6. Bc4 Nf6 7. Qb3'
+pages = ['<p>[Event "Paris"] [Round "3"] [White "A"] [Black "B"] [Result "1-0"] [PlyCount "33"] ' + first + ' 1-0</p>',
+         f'<p>[Event "?"] [SetUp "1"] [FEN "{fens[10]}"] [PlyCount "17"] {second}</p>']
+save('pgn-headers.epub', pages, [fragment(first, UCI[:8]), fragment(second, UCI[10:13], page=1, start=fens[10])], 'PGN')
+
 output_bytes = sum(p.stat().st_size for p in ROOT.iterdir() if p.name not in ['metrics.json','report.md'])
 assert output_bytes < 2_000_000, output_bytes
 print('Committed fixture bytes:', output_bytes)

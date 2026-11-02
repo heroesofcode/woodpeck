@@ -60,6 +60,8 @@ references. Text boards printed as rows ("8 | #R | #Kt| ... |", `#` black, `^` w
 their caption heading ("DIAGRAM 1") keeps it, and moves numbered from one that are legal
 only from the opening position are taken as the game that led to the board. A board that
 cannot be placed still blocks inference, and its rank digits are never move numbers.
+PGN pasted into a book keeps its tag pairs (`[PlyCount "39"]`) out of the moves: a header
+starts a new game from the opening position, or from its `[FEN]` tag when one is given.
 A move that closes a sentence ("2 P-g4.") keeps its full stop out of the notation.
 Nested delimiters save and restore line contexts. Failed moves stop their branch,
 retain a reason and preserve the successfully validated prefix. Invalid explicit

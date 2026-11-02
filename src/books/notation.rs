@@ -23,11 +23,54 @@ pub enum Kind {
     Nag,
     Result,
     Comment,
+    /// A PGN tag pair such as `[White "Morphy"]` or `[FEN "..."]`.
+    Tag,
 }
 #[derive(Clone, Debug)]
 pub struct Token {
     pub kind: Kind,
     pub span: Range<usize>,
+}
+/// Length of a PGN tag pair body after its `[`: a name, a quoted value and `]`.
+fn tag_pair(rest: &str) -> Option<usize> {
+    let name_end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))?;
+    if name_end == 0 || !rest.starts_with(|c: char| c.is_ascii_uppercase()) {
+        return None;
+    }
+    let after = rest[name_end..].trim_start();
+    let value = after.strip_prefix('"')?;
+    let close = value.find('"')?;
+    let tail = &value[close + 1..];
+    let bracket = tail.find(']')?;
+    if !tail[..bracket].trim().is_empty() {
+        return None;
+    }
+    Some(rest.len() - tail.len() + bracket + 1)
+}
+/// The name and value of a tag pair token.
+pub fn tag(raw: &str) -> Option<(&str, &str)> {
+    let body = raw.strip_prefix('[')?.strip_suffix(']')?.trim();
+    let (name, value) = body.split_once(char::is_whitespace)?;
+    Some((name, value.trim().strip_prefix('"')?.strip_suffix('"')?))
+}
+/// What a word means given the token before it: an evaluation sign, a result, a move number,
+/// a label number ("Game 12", a year) or plain text.
+fn word_kind(word: &str, previous: Option<(&Kind, &str)>) -> Kind {
+    if matches!(word, "+-" | "-+" | "=" | "+/-" | "±" | "∓" | "⩲" | "⩱") {
+        Kind::Nag
+    } else if matches!(word, "1-0" | "0-1" | "1/2-1/2" | "½-½" | "*") {
+        Kind::Result
+    } else if let Ok(n) = word.trim_end_matches('.').parse::<u32>() {
+        let named = previous.is_some_and(|(kind, raw)| *kind == Kind::Word && label_word(raw));
+        // No game reaches move 1000: four digits are years.
+        if named || n >= 1000 {
+            Kind::Label
+        } else {
+            Kind::Number(n)
+        }
+    } else {
+        Kind::Word
+    }
 }
 pub fn tokens(text: &str) -> Vec<Token> {
     let mut result: Vec<Token> = Vec::new();
@@ -65,6 +108,16 @@ pub fn tokens(text: &str) -> Vec<Token> {
                 last.kind = Kind::Word;
                 continue;
             }
+        }
+        if c == '['
+            && let Some(len) = tag_pair(&text[i..])
+        {
+            i += len;
+            result.push(Token {
+                kind: Kind::Tag,
+                span: start..i,
+            });
+            continue;
         }
         let kind = match c {
             '{' => {
@@ -107,24 +160,8 @@ pub fn tokens(text: &str) -> Vec<Token> {
                     }
                     i += next.len_utf8();
                 }
-                let word = &text[start..i];
-                if matches!(word, "+-" | "-+" | "=" | "+/-" | "±" | "∓" | "⩲" | "⩱") {
-                    Kind::Nag
-                } else if matches!(word, "1-0" | "0-1" | "1/2-1/2" | "½-½" | "*") {
-                    Kind::Result
-                } else if let Ok(n) = word.trim_end_matches('.').parse::<u32>() {
-                    let named = result
-                        .last()
-                        .is_some_and(|t| t.kind == Kind::Word && label_word(&text[t.span.clone()]));
-                    // No game reaches move 1000: four digits are years.
-                    if named || n >= 1000 {
-                        Kind::Label
-                    } else {
-                        Kind::Number(n)
-                    }
-                } else {
-                    Kind::Word
-                }
+                let previous = result.last().map(|t| (&t.kind, &text[t.span.clone()]));
+                word_kind(&text[start..i], previous)
             }
         };
         result.push(Token {
@@ -243,16 +280,18 @@ pub fn parse(pos: &Chess, text: &str, alphabet: &str) -> Result<Move, MatchError
     {
         return Ok(m);
     }
-    let candidates: Vec<_> = pos
-        .legal_moves()
-        .into_iter()
-        .filter(|m| descriptive(pos, *m, text))
-        .collect();
-    match candidates.as_slice() {
+    match candidates(pos, text).as_slice() {
         [m] => Ok(*m),
         [] => Err(MatchError::Illegal),
         _ => Err(MatchError::Ambiguous),
     }
+}
+/// Every legal move a descriptive text could mean ("B-Kt2" may name either bishop).
+pub fn candidates(pos: &Chess, text: &str) -> Vec<Move> {
+    pos.legal_moves()
+        .into_iter()
+        .filter(|m| descriptive(pos, *m, text))
+        .collect()
 }
 fn desc_role(s: &str) -> Option<Role> {
     match s {
@@ -280,6 +319,26 @@ fn desc_file(s: &str, file: u32) -> bool {
         "B" => file == 2 || file == 5,
         _ => false,
     }
+}
+/// "Q. to her Kt's 3d", "K. to his B's sq.", "Q. Kt. to his 5th": the pronoun names the piece's
+/// own wing, or its own file when no file follows.
+fn own_wing(piece: &str, destination: &str) -> Option<String> {
+    let rest = destination
+        .strip_prefix("HIS")
+        .or_else(|| destination.strip_prefix("HER"))?;
+    let name = piece.strip_suffix('P').unwrap_or(piece);
+    let wing = rest.starts_with('Q') || rest.starts_with('K') && !rest.starts_with("KT");
+    Some(if wing {
+        rest.to_string()
+    } else if rest.starts_with(|c: char| c.is_ascii_digit()) || rest.starts_with("SQ") {
+        format!("{name}{rest}")
+    } else if let Some(side) = name.chars().next().filter(|c| matches!(c, 'K' | 'Q')) {
+        format!("{side}{rest}")
+    } else if destination.starts_with("HER") {
+        format!("Q{rest}")
+    } else {
+        rest.to_string()
+    })
 }
 fn descriptive(pos: &Chess, m: Move, text: &str) -> bool {
     let mut s = text
@@ -359,6 +418,8 @@ fn descriptive(pos: &Chess, m: Move, text: &str) -> bool {
     if s.contains('X') != m.is_capture() {
         return false;
     }
+    let owned = own_wing(piece, destination);
+    let destination = owned.as_deref().unwrap_or(destination);
     if let Some(target) = desc_role(destination) {
         return m.capture() == Some(target);
     }
@@ -485,5 +546,38 @@ mod typography_tests {
                 .to_string(),
             "d2d4"
         );
+    }
+    #[test]
+    fn possessive_pronouns_name_the_pieces_own_wing() {
+        let uci = |fen: &str, text: &str| {
+            let pos: Chess = fen
+                .parse::<shakmaty::fen::Fen>()
+                .unwrap()
+                .into_position(shakmaty::CastlingMode::Standard)
+                .unwrap();
+            parse(&pos, text, "KQRBN")
+                .map(|m| m.to_uci(shakmaty::CastlingMode::Standard).to_string())
+        };
+        let open = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2";
+        let c3 = "rnbqkbnr/pppp1ppp/8/4p3/4P3/2P5/PP1P1PPP/RNBQKBNR w KQkq - 0 2";
+        assert_eq!(uci(c3, "Q. to her Kt's 3d.").as_deref(), Ok("d1b3"));
+        assert_eq!(
+            uci(open, "Q. to her 4th.").as_deref(),
+            Err(&MatchError::Illegal)
+        );
+        assert_eq!(uci(open, "K. to his 2d.").as_deref(), Ok("e1e2"));
+        assert_eq!(uci(open, "K. B. to his Q. B's 4th.").as_deref(), Ok("f1c4"));
+        assert_eq!(uci(open, "Q. Kt. to his B's 3d.").as_deref(), Ok("b1c3"));
+        let knight = "rnbqkbnr/pppp1ppp/8/4p3/4P3/2N5/PPPP1PPP/R1BQKBNR w KQkq - 0 2";
+        assert_eq!(uci(knight, "Q. Kt. to his 5th.").as_deref(), Ok("c3b5"));
+    }
+    #[test]
+    fn tag_pairs_are_single_tokens() {
+        let text = "[PlyCount \"39\"] [1... Nf6] [Site \"?\"]";
+        let kinds: Vec<_> = tokens(text).into_iter().map(|t| t.kind).collect();
+        assert_eq!(kinds[0], Kind::Tag);
+        assert_eq!(kinds[1], Kind::Open);
+        assert_eq!(kinds.last(), Some(&Kind::Tag));
+        assert_eq!(tag("[PlyCount \"39\"]"), Some(("PlyCount", "39")));
     }
 }
