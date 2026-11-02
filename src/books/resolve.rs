@@ -154,7 +154,30 @@ fn label(ts: &[Token], i: usize, text: &str) -> Option<LabelKind> {
     }
 }
 /// How many moves after token `i` stay legal from `pos` (move numbers and remarks skipped).
-fn legal_run(pos: &Chess, ts: &[Token], mut i: usize, text: &str, alphabet: &str) -> usize {
+fn legal_run(pos: &Chess, ts: &[Token], i: usize, text: &str, alphabet: &str) -> usize {
+    walk(pos, ts, i, text, alphabet, None).0
+}
+/// The moves `legal_run` would play from `i`: each move's token index and the position before
+/// it, the token index where the run stopped and the position there.
+fn trace(
+    pos: &Chess,
+    ts: &[Token],
+    i: usize,
+    text: &str,
+    alphabet: &str,
+) -> (Vec<(usize, Chess)>, usize, Chess) {
+    let mut steps = Vec::new();
+    let (_, stop, at) = walk(pos, ts, i, text, alphabet, Some(&mut steps));
+    (steps, stop, at)
+}
+fn walk(
+    pos: &Chess,
+    ts: &[Token],
+    mut i: usize,
+    text: &str,
+    alphabet: &str,
+    mut steps: Option<&mut Vec<(usize, Chess)>>,
+) -> (usize, usize, Chess) {
     let mut pos = pos.clone();
     let mut run = 0;
     while i < ts.len() && run < LOOKAHEAD {
@@ -165,6 +188,9 @@ fn legal_run(pos: &Chess, ts: &[Token], mut i: usize, text: &str, alphabet: &str
                 let Some((m, _, count)) = parse_move(&pos, ts, i, text, alphabet) else {
                     break;
                 };
+                if let Some(steps) = steps.as_deref_mut() {
+                    steps.push((i, pos.clone()));
+                }
                 pos.play_unchecked(m);
                 run += 1;
                 i += count;
@@ -172,7 +198,7 @@ fn legal_run(pos: &Chess, ts: &[Token], mut i: usize, text: &str, alphabet: &str
             _ => break,
         }
     }
-    run
+    (run, i, pos)
 }
 /// Check marks and evaluation signs that sit between moves.
 fn noise(raw: &str) -> bool {
@@ -346,7 +372,11 @@ fn resolve_with(
                 continue;
             }
             let text = &page.text[block.span.clone()];
-            if let Some(pos) = find_fen(text).or_else(|| diagram(text)) {
+            // A FEN inside a PGN header seeds the game that follows it instead.
+            if let Some(pos) = find_fen(text)
+                .filter(|_| !text.contains("[FEN "))
+                .or_else(|| diagram(text))
+            {
                 block.kind = BlockKind::Diagram { fen: fen(&pos) };
                 context = Context {
                     known: Context::known(pos.clone()),
@@ -360,6 +390,7 @@ fn resolve_with(
             if words
                 .windows(6)
                 .any(|w| w[0].matches('/').count() == 7 && matches!(w[1], "w" | "b"))
+                && !text.contains("[FEN ")
             {
                 context.invalid_start = true;
                 book.fragments.push(Fragment {
@@ -548,6 +579,29 @@ fn resolve_tokens(
             Kind::Result => {
                 active = false;
             }
+            // A PGN header starts a new game; its FEN tag, if any, gives the position.
+            Kind::Tag if stack.is_empty() => {
+                if i == 0 || ts[i - 1].kind != Kind::Tag {
+                    *context = Context::default();
+                }
+                if let Some(("FEN", value)) = notation::tag(raw) {
+                    *context = match position(value) {
+                        Some(pos) => Context {
+                            known: Context::known(pos.clone()),
+                            pos,
+                            explicit_start: true,
+                            ..Context::default()
+                        },
+                        None => Context {
+                            invalid_start: true,
+                            ..Context::default()
+                        },
+                    };
+                }
+                before = context.clone();
+                active = false;
+                blocked = false;
+            }
             Kind::Comment => {
                 if let Some(id) = context.parent {
                     book.nodes[id]
@@ -566,7 +620,12 @@ fn resolve_tokens(
                     i += 1;
                     continue;
                 }
-                if let Some((m, span, count)) = parse_move(&context.pos, ts, i, text, alphabet) {
+                let read = read_move(&context.pos, ts, i, text, alphabet).or_else(|ambiguous| {
+                    ambiguous
+                        .and_then(|group| choose_move(&context.pos, ts, i, text, alphabet, group))
+                        .ok_or(())
+                });
+                if let Ok((m, span, count)) = read {
                     before = context.clone();
                     context.remember();
                     let san = SanPlus::from_move(context.pos.clone(), m).to_string();
@@ -609,44 +668,104 @@ fn resolve_tokens(
                     comment.push_str(raw);
                 }
             }
-            // Labels were handled before the match.
-            Kind::Word | Kind::Label => {}
+            // Labels were handled before the match; tag pairs inside a variation are skipped.
+            Kind::Word | Kind::Label | Kind::Tag => {}
         }
         i += 1;
     }
 }
 /// Longest legal descriptive phrase allows spaced typography without consuming prose.
-fn parse_move(
+/// Tokens `i..i + count` can form one move: words, plus bare rank digits after the first.
+fn move_group(ts: &[Token], i: usize, count: usize, text: &str) -> bool {
+    ts[i..i + count].iter().enumerate().all(|(j, t)| {
+        t.kind == Kind::Word
+            || j > 0 && matches!(t.kind, Kind::Number(_)) && !text[t.span.clone()].contains('.')
+    })
+}
+type Read = (shakmaty::Move, std::ops::Range<usize>, usize);
+/// One reading of an ambiguous move and how far the moves after it stay legal.
+struct Reading {
+    steps: Vec<(usize, Chess)>,
+    stop: usize,
+    at: Chess,
+    m: shakmaty::Move,
+}
+/// The longest group of tokens from `i` that reads as one legal move; on failure, the first
+/// group that read as several moves (its span and token count), if any.
+fn read_move(
     pos: &Chess,
     ts: &[Token],
     i: usize,
     text: &str,
     alphabet: &str,
-) -> Option<(shakmaty::Move, std::ops::Range<usize>, usize)> {
+) -> Result<Read, Option<(std::ops::Range<usize>, usize)>> {
+    let mut ambiguous = None;
     for count in (1..=8.min(ts.len() - i)).rev() {
-        let group = &ts[i..i + count];
-        if group.iter().enumerate().any(|(j, t)| {
-            t.kind != Kind::Word
-                && !(j > 0
-                    && matches!(t.kind, Kind::Number(_))
-                    && !text[t.span.clone()].contains('.'))
-        }) {
+        if !move_group(ts, i, count, text) {
             continue;
         }
-        let span = ts[i].span.start..group.last().expect("nonempty group").span.end;
-        if let Ok(m) = notation::parse(pos, &text[span.clone()], alphabet) {
-            return Some((m, span, count));
-        }
-        // A move closing a sentence: "(2) P-g4."
+        let span = ts[i].span.start..ts[i + count - 1].span.end;
         let raw = &text[span.clone()];
-        if raw.ends_with('.')
-            && !raw.ends_with("..")
-            && let Ok(m) = notation::parse(pos, &raw[..raw.len() - 1], alphabet)
-        {
-            return Some((m, span.start..span.end - 1, count));
+        // A move may close a sentence: "(2) P-g4."
+        let trimmed = raw
+            .strip_suffix('.')
+            .filter(|r| !r.ends_with('.'))
+            .map(|r| (r, span.start..span.end - 1));
+        for (raw, span) in [(raw, span.clone())].into_iter().chain(trimmed) {
+            match notation::parse(pos, raw, alphabet) {
+                Ok(m) => return Ok((m, span, count)),
+                Err(notation::MatchError::Ambiguous) if ambiguous.is_none() => {
+                    ambiguous = Some((span, count));
+                }
+                Err(_) => {}
+            }
         }
     }
-    None
+    Err(ambiguous)
+}
+fn parse_move(pos: &Chess, ts: &[Token], i: usize, text: &str, alphabet: &str) -> Option<Read> {
+    read_move(pos, ts, i, text, alphabet).ok()
+}
+/// A descriptive move that more than one piece could make ("B-Kt2" when both bishops reach a
+/// Knight's second) is taken only when a single reading keeps the following moves legal for
+/// at least two more plies than any other, and every other reading breaks on a move the best
+/// one plays because that move is illegal there, not merely ambiguous.
+fn choose_move(
+    pos: &Chess,
+    ts: &[Token],
+    i: usize,
+    text: &str,
+    alphabet: &str,
+    (span, count): (std::ops::Range<usize>, usize),
+) -> Option<Read> {
+    let mut runs: Vec<Reading> = notation::candidates(pos, &text[span.clone()])
+        .into_iter()
+        .map(|m| {
+            let mut after = pos.clone();
+            after.play_unchecked(m);
+            let (steps, stop, at) = trace(&after, ts, i + count, text, alphabet);
+            Reading { steps, stop, at, m }
+        })
+        .collect();
+    if runs.len() < 2 {
+        return None;
+    }
+    runs.sort_by_key(|run| std::cmp::Reverse(run.steps.len()));
+    let (best, others) = runs.split_first().expect("two readings");
+    let refuted = others.iter().all(|other| {
+        best.steps.len() >= other.steps.len() + 2
+            && best
+                .steps
+                .iter()
+                .find(|(k, _)| *k == other.stop)
+                .is_some_and(|(k, before)| {
+                    parse_move(before, ts, *k, text, alphabet).is_some_and(|(_, span, _)| {
+                        notation::parse(&other.at, &text[span], alphabet)
+                            == Err(notation::MatchError::Illegal)
+                    })
+                })
+    });
+    refuted.then_some((best.m, span, count))
 }
 fn stated_turn(text: &str) -> Option<Color> {
     let lower = text.to_lowercase();
@@ -1105,6 +1224,29 @@ mod tests {
             b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
             ["e2e4", "e7e5", "f1c4"]
         );
+    }
+    #[test]
+    fn pgn_headers_start_a_new_game_and_are_not_moves() {
+        let b = book(
+            "[Event \"?\"] [PlyCount \"39\"] 1. e4 e5 2. Nf3 1-0 \
+             [White \"B\"] [Black \"C\"] [SetUp \"1\"] \
+             [FEN \"4k3/8/8/8/8/8/4P3/4K3 w - - 0 1\"] 1. e4 Kd7",
+        );
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            ["e2e4", "e7e5", "g1f3", "e2e4", "e8d7"]
+        );
+        assert_eq!(b.nodes[3].parent, None);
+        assert!(b.fragments.iter().all(|f| f.status == Status::Resolved));
+    }
+    #[test]
+    fn an_ambiguous_descriptive_move_is_read_from_the_moves_after_it() {
+        let b = book("1. P-QKt3 P-K3 2. P-KKt3 P-Q4 3. B-Kt2 Kt-KB3 4. B-Q4 Kt-B3");
+        assert_eq!(b.nodes[4].uci, "c1b2");
+        assert_eq!(b.nodes.len(), 8);
+        let b = book("1. P-QKt3 P-K3 2. P-KKt3 P-Q4 3. B-Kt2 Kt-KB3");
+        assert_eq!(b.nodes.len(), 4);
+        assert!(matches!(b.fragments[0].status, Status::Partial(_)));
     }
     #[test]
     fn a_move_may_end_its_sentence() {

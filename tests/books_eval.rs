@@ -47,9 +47,9 @@ fn generated_books_quality_gate() {
         );
         // Descriptive ambiguity is measured explicitly, never removed from the denominator.
         let floor = match truth.notation.as_str() {
-            "descriptive-0" | "descriptive-2" => 0.36,
-            "descriptive-1" => 0.20,
-            "descriptive-3" => 0.38,
+            "descriptive-0" | "descriptive-2" => 0.41,
+            "descriptive-1" => 0.29,
+            "descriptive-3" => 0.43,
             "PDF two columns" => 0.0, // Aggregate PDF gate below; page resets remain a known gap.
             "image diagrams" => 0.5,
             _ => 0.99,
@@ -58,7 +58,7 @@ fn generated_books_quality_gate() {
     }
     assert!(pdf_correct as f64 / pdf_expected as f64 >= 0.97);
     assert!(expected > 60_000);
-    assert!(correct as f64 / expected as f64 >= 0.82);
+    assert!(correct as f64 / expected as f64 >= 0.83);
     assert_eq!(correct, emitted);
     assert!(
         started.elapsed().as_secs() < 60,
