@@ -79,4 +79,10 @@ pub struct Document {
     pub format: String,
     pub pages: Vec<Page>,
     pub assets: Vec<Asset>,
+    /// Path of the asset holding the book's own cover picture, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
+    /// ISBN from the book's metadata, used only to look up a cover when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn: Option<String>,
 }

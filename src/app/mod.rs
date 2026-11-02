@@ -5,6 +5,7 @@ pub mod bench_support;
 mod board;
 mod books;
 mod charts;
+mod covers;
 mod demo;
 mod frame_stats;
 mod library;

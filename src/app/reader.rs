@@ -167,7 +167,8 @@ fn chapter_level(pages: &[crate::books::document::Page]) -> u8 {
         .and_then(|(level, _)| u8::try_from(level).ok())
         .unwrap_or(1)
 }
-fn asset_image(bytes: &[u8]) -> Option<egui::ColorImage> {
+/// Decodes a PNG, JPEG or SVG asset, scaled down so its longer side is at most `max` pixels.
+pub(super) fn asset_image(bytes: &[u8], max: u32) -> Option<egui::ColorImage> {
     let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;
@@ -179,8 +180,8 @@ fn asset_image(bytes: &[u8]) -> Option<egui::ColorImage> {
         limits.max_alloc = Some(64 * 1024 * 1024);
         reader.limits(limits);
         let decoded = reader.decode().ok()?;
-        let image = if decoded.width().max(decoded.height()) > 1600 {
-            decoded.thumbnail(1600, 1600)
+        let image = if decoded.width().max(decoded.height()) > max {
+            decoded.thumbnail(max, max)
         } else {
             decoded
         }
@@ -191,7 +192,8 @@ fn asset_image(bytes: &[u8]) -> Option<egui::ColorImage> {
         ));
     }
     let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
-    let scale = (1024.0 / tree.size().width().max(tree.size().height())).min(1.0);
+    let limit = f32::from(u16::try_from(max.min(1024)).unwrap_or(1024));
+    let scale = (limit / tree.size().width().max(tree.size().height())).min(1.0);
     let width = (tree.size().width() * scale).ceil().max(1.0) as u32;
     let height = (tree.size().height() * scale).ceil().max(1.0) as u32;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
@@ -569,7 +571,7 @@ impl Reader {
                             if !self.textures.contains_key(path)
                                 && let Some(asset) =
                                     self.book.document.assets.iter().find(|a| &a.path == path)
-                                && let Some(color) = asset_image(&asset.bytes)
+                                && let Some(color) = asset_image(&asset.bytes, 1600)
                             {
                                 self.textures.insert(
                                     path.clone(),
@@ -932,6 +934,8 @@ mod tests {
         let mut second = Page::default();
         second.push("2. Nf3 Nc6", BlockKind::Paragraph);
         crate::books::resolve::resolve(Document {
+            cover: None,
+            isbn: None,
             title: "Reader test".into(),
             author: String::new(),
             format: "epub".into(),
@@ -942,13 +946,13 @@ mod tests {
     #[test]
     fn embedded_images_decode_and_invalid_assets_fall_back() {
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="red"/></svg>"#;
-        assert_eq!(asset_image(svg).unwrap().size, [20, 10]);
+        assert_eq!(asset_image(svg, 1600).unwrap().size, [20, 10]);
         let mut png = std::io::Cursor::new(Vec::new());
         image::RgbaImage::new(8, 8)
             .write_to(&mut png, image::ImageFormat::Png)
             .unwrap();
-        assert_eq!(asset_image(png.get_ref()).unwrap().size, [8, 8]);
-        assert!(asset_image(b"broken image").is_none());
+        assert_eq!(asset_image(png.get_ref(), 1600).unwrap().size, [8, 8]);
+        assert!(asset_image(b"broken image", 1600).is_none());
     }
     #[test]
     fn variations_and_page_following() {

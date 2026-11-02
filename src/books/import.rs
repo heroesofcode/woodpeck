@@ -72,12 +72,29 @@ impl PageSource for TextImporter {
                     .to_string_lossy()
                     .into()
             });
+            let isbn = extracted
+                .pages
+                .iter()
+                .take(8)
+                .flatten()
+                .filter(|l| l.text.to_uppercase().contains("ISBN"))
+                .find_map(|l| isbn(&l.text));
+            let cover = extracted
+                .cover
+                .clone()
+                .filter(|b| decodes(b))
+                .map(|bytes| Asset {
+                    path: "cover".into(),
+                    bytes,
+                });
             return Ok(Document {
+                cover: cover.as_ref().map(|c| c.path.clone()),
+                isbn,
                 title,
                 author: extracted.author.clone().unwrap_or_default(),
                 format: "pdf".into(),
                 pages,
-                assets: vec![],
+                assets: cover.into_iter().collect(),
             });
         }
         if !bytes.starts_with(b"PK") {
@@ -444,6 +461,8 @@ fn epub(bytes: &[u8]) -> Result<Document, ImportError> {
         .filter_map(|e| Some((e.attr("id")?.to_owned(), e.attr("href")?.to_owned())))
         .collect();
     let mut doc = Document {
+        cover: None,
+        isbn: None,
         title: metadata("dc\\:title"),
         author: metadata("dc\\:creator"),
         format: "epub".into(),
@@ -545,7 +564,139 @@ fn epub(bytes: &[u8]) -> Result<Document, ImportError> {
             doc.pages.push(page);
         }
     }
+    if let Some(href) = epub_cover(&opf) {
+        let path = joined(base, &href);
+        // A cover the library cannot draw counts as none, so one is looked up instead.
+        if let Some(bytes) = files.get(&path).filter(|b| decodes(b)) {
+            if !doc.assets.iter().any(|a| a.path == path) {
+                doc.assets.push(Asset {
+                    path: path.clone(),
+                    bytes: bytes.clone(),
+                });
+            }
+            doc.cover = Some(path);
+        }
+    }
+    doc.isbn = opf
+        .select(&selector("dc\\:identifier"))
+        .find_map(|e| isbn(&e.text().collect::<String>()));
     Ok(doc)
+}
+/// Whether a picture decodes as one of the formats the library can draw (PNG, JPEG).
+fn decodes(bytes: &[u8]) -> bool {
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .filter(|r| r.format().is_some())
+        .is_some_and(|r| r.into_dimensions().is_ok())
+}
+/// The cover image an EPUB declares: an EPUB 3 `cover-image` or EPUB 2 `<meta name="cover">` image,
+/// or failing those an image item named like a cover.
+fn epub_cover(opf: &Html) -> Option<String> {
+    let items: Vec<_> = opf.select(&selector("item")).collect();
+    let image = |e: &scraper::ElementRef| {
+        e.attr("media-type")
+            .is_some_and(|t| t.starts_with("image/"))
+    };
+    items
+        .iter()
+        .find(|e| {
+            image(e)
+                && e.attr("properties")
+                    .is_some_and(|p| p.split_whitespace().any(|p| p == "cover-image"))
+        })
+        .and_then(|e| e.attr("href").map(str::to_owned))
+        .or_else(|| {
+            // Some books point this at an XHTML cover page; only an image will do.
+            opf.select(&selector("meta[name=cover]")).find_map(|m| {
+                let id = m.attr("content")?;
+                items
+                    .iter()
+                    .find(|e| e.attr("id") == Some(id) && image(e))
+                    .and_then(|e| e.attr("href").map(str::to_owned))
+            })
+        })
+        .or_else(|| {
+            items
+                .iter()
+                .filter(|e| image(e))
+                .find(|e| {
+                    [e.attr("id"), e.attr("href")]
+                        .into_iter()
+                        .flatten()
+                        .any(names_cover)
+                })
+                .and_then(|e| e.attr("href").map(str::to_owned))
+        })
+}
+/// An id or file name that names the cover ("cover", "cover1", "cover-image", "coverpage"),
+/// not one that only contains the letters ("discovered-check.png").
+fn names_cover(name: &str) -> bool {
+    let file = name.rsplit('/').next().unwrap_or(name).to_lowercase();
+    let stem = file.split('.').next().unwrap_or(&file);
+    stem.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| {
+            word.strip_prefix("cover").is_some_and(|rest| {
+                rest.chars().all(|c| c.is_ascii_digit())
+                    || ["image", "img", "page", "art", "front"].contains(&rest)
+            })
+        })
+}
+/// An ISBN-10 or ISBN-13 in the text, digits only, when its check digit is valid.
+fn isbn(text: &str) -> Option<String> {
+    let upper = text.to_uppercase();
+    let start = upper.find("ISBN").map_or(0, |i| i + 4);
+    let rest = upper[start..].trim_start_matches(|c: char| !c.is_ascii_digit());
+    // "ISBN-13: 978…" or "ISBN 10 0-…": a label naming the length comes before the number.
+    let unlabelled = ["13", "10"]
+        .iter()
+        .find_map(|label| rest.strip_prefix(label))
+        .filter(|after| after.starts_with(|c: char| !c.is_ascii_digit() && c != '-'));
+    unlabelled
+        .and_then(isbn_digits)
+        .or_else(|| isbn_digits(rest))
+}
+/// The ISBN starting at the first digit of `text`, when its check digit is valid. It may be
+/// followed on the same line by more numbers ("0-306-40615-2 1995"), so it is the first 13 or
+/// 10 digits that end where a group ends.
+fn isbn_digits(text: &str) -> Option<String> {
+    let mut digits = String::new();
+    let mut ends = Vec::new();
+    for c in text.chars().skip_while(|c| !c.is_ascii_digit()) {
+        if c.is_ascii_digit() || c == 'X' {
+            digits.push(c);
+        } else if matches!(c, '-' | ' ') {
+            ends.push(digits.len());
+        } else {
+            break;
+        }
+    }
+    ends.push(digits.len());
+    let value = |c: char| c.to_digit(10).or((c == 'X').then_some(10));
+    let valid = |isbn: &str| match isbn.len() {
+        10 => isbn
+            .chars()
+            .zip((1..=10).rev())
+            .map(|(c, w)| value(c).map(|v| v * w))
+            .sum::<Option<u32>>()
+            .is_some_and(|sum| sum % 11 == 0),
+        13 => {
+            !isbn.contains('X')
+                && isbn
+                    .chars()
+                    .zip([1, 3].into_iter().cycle())
+                    .map(|(c, w)| value(c).map(|v| v * w))
+                    .sum::<Option<u32>>()
+                    .is_some_and(|sum| sum % 10 == 0)
+        }
+        _ => false,
+    };
+    [13, 10]
+        .into_iter()
+        .filter(|length| ends.contains(length))
+        .map(|length| &digits[..length])
+        .find(|isbn| valid(isbn))
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -793,6 +944,111 @@ mod tests {
             &[],
         );
         assert!(blocks(&page).iter().all(|b| b.0 == BlockKind::Paragraph));
+    }
+
+    #[test]
+    fn isbns_need_a_valid_check_digit() {
+        assert_eq!(isbn("ISBN 0-306-40615-2").as_deref(), Some("0306406152"));
+        assert_eq!(
+            isbn("urn:isbn:978-0-306-40615-7").as_deref(),
+            Some("9780306406157")
+        );
+        assert_eq!(isbn("ISBN 0-306-40615-3"), None);
+        for labelled in [
+            "ISBN-13: 978-0-306-40615-7",
+            "ISBN-13 978-0-306-40615-7",
+            "ISBN 13: 978 0 306 40615 7",
+            "ISBN13:9780306406157",
+        ] {
+            assert_eq!(
+                isbn(labelled).as_deref(),
+                Some("9780306406157"),
+                "{labelled}"
+            );
+        }
+        assert_eq!(
+            isbn("ISBN-10: 0-306-40615-2").as_deref(),
+            Some("0306406152")
+        );
+        assert_eq!(
+            isbn("ISBN 0-306-40615-2 1995").as_deref(),
+            Some("0306406152")
+        );
+        assert_eq!(
+            isbn("ISBN 978-0-306-40615-7 2nd edition").as_deref(),
+            Some("9780306406157")
+        );
+        assert_eq!(isbn("ISBN 03064061521995"), None);
+        assert_eq!(isbn("http://www.gutenberg.org/16377"), None);
+    }
+
+    #[test]
+    fn epub_covers_come_from_the_package() {
+        for (opf, cover) in [
+            (
+                "<item id='c' href='images/front.jpg' media-type='image/jpeg' properties='cover-image'/>",
+                Some("images/front.jpg"),
+            ),
+            (
+                "<item id='pic' href='front.png' media-type='image/png'/></manifest><metadata><meta name='cover' content='pic'/></metadata><manifest>",
+                Some("front.png"),
+            ),
+            (
+                "<item id='cover' href='cover.jpg' media-type='image/jpeg'/>",
+                Some("cover.jpg"),
+            ),
+            (
+                "<item id='plate' href='plate.png' media-type='image/png'/>",
+                None,
+            ),
+            (
+                "<item id='discover' href='discovered-check.png' media-type='image/png'/>",
+                None,
+            ),
+            (
+                "<item id='cover' href='cover.xhtml' media-type='application/xhtml+xml'/><item id='art' href='front.png' media-type='image/png' /></manifest><metadata><meta name='cover' content='cover'/></metadata><manifest>",
+                None,
+            ),
+            // Declared, but not a picture the library can draw.
+            (
+                "<item id='c' href='broken.jpg' media-type='image/jpeg' properties='cover-image'/>",
+                None,
+            ),
+        ] {
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::RgbImage::new(2, 3)
+                .write_to(&mut png, image::ImageFormat::Png)
+                .unwrap();
+            let png = png.into_inner();
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            let package = format!(
+                "<package><metadata><dc:identifier>urn:isbn:9780306406157</dc:identifier></metadata><manifest><item id='chapter' href='chapter.html'/>{opf}</manifest><spine><itemref idref='chapter'/></spine></package>"
+            );
+            for (name, data) in [
+                (
+                    "META-INF/container.xml",
+                    &b"<container><rootfile full-path='book.opf'/></container>"[..],
+                ),
+                ("book.opf", package.as_bytes()),
+                ("chapter.html", b"<p>Text.</p>"),
+                ("images/front.jpg", &png),
+                ("front.png", &png),
+                ("cover.jpg", &png),
+                ("plate.png", &png),
+                ("discovered-check.png", &png),
+                ("broken.jpg", b"jpeg"),
+            ] {
+                zip.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                zip.write_all(data).unwrap();
+            }
+            let document = epub(&zip.finish().unwrap().into_inner()).unwrap();
+            assert_eq!(document.cover.as_deref(), cover);
+            if let Some(path) = cover {
+                assert!(document.assets.iter().any(|a| a.path == path));
+            }
+            assert_eq!(document.isbn.as_deref(), Some("9780306406157"));
+        }
     }
 
     #[test]
