@@ -341,11 +341,14 @@ impl Reader {
     fn change_page(&mut self, page: usize) {
         self.page = page.min(self.book.document.pages.len().saturating_sub(1));
         self.node = None;
+        // The first line on the page that has moves, else its first passage of any kind.
+        let on_page = |f: &&crate::books::model::Fragment| f.page == self.page;
         self.fragment = self
             .book
             .fragments
             .iter()
-            .position(|f| f.page == self.page)
+            .position(|f| on_page(&f) && !f.nodes.is_empty())
+            .or_else(|| self.book.fragments.iter().position(|f| on_page(&f)))
             .unwrap_or(usize::MAX);
         self.start();
     }
@@ -365,7 +368,13 @@ impl Reader {
         self.node = None;
         self.choice = 0;
         if let Some(f) = self.book.fragments.get(self.fragment) {
-            self.fen.clone_from(&f.start_fen);
+            // An unresolved passage has no verified position: its start is only where the
+            // last good line stopped, so the board says so instead of showing it.
+            if matches!(f.status, Status::Unresolved(_)) {
+                self.fen.clear();
+            } else {
+                self.fen.clone_from(&f.start_fen);
+            }
         }
         self.dirty = Some(Instant::now());
     }
@@ -995,6 +1004,36 @@ mod tests {
         reader.end();
         assert_eq!(reader.page, 1);
         assert_eq!(reader.book.nodes[reader.node.unwrap()].san, "Nc6");
+    }
+    #[test]
+    fn unresolved_passages_show_no_board() {
+        let mut first = Page::default();
+        first.push("1. e4 e5 2. Nf3", BlockKind::Paragraph);
+        let mut second = Page::default();
+        second.push("14. Qh5 Kd7", BlockKind::Paragraph);
+        second.push("2... Nc6", BlockKind::Paragraph);
+        let book = crate::books::resolve::resolve(Document {
+            cover: None,
+            isbn: None,
+            title: "Reader test".into(),
+            author: String::new(),
+            format: "epub".into(),
+            pages: vec![first, second],
+            assets: vec![],
+        });
+        let mut reader = Reader::new(1, book, None);
+        reader.change_page(1);
+        // The page opens on its line with moves, not on the unresolved passage before it.
+        assert_eq!(reader.book.fragments[reader.fragment].nodes.len(), 1);
+        let unresolved = reader
+            .book
+            .fragments
+            .iter()
+            .position(|f| matches!(f.status, Status::Unresolved(_)))
+            .unwrap();
+        reader.fragment = unresolved;
+        reader.start();
+        assert!(crate::books::resolve::position(&reader.fen).is_none());
     }
     #[test]
     fn progress_roundtrip_and_manual_page_change() {
