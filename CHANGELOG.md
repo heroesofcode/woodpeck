@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.0](https://github.com/heroesofcode/woodpeck/compare/v0.3.0...v0.4.0) (2026-11-02)
+
+
+### Features
+
+* **app:** add a library and reader for imported chess books ([2be01c5](https://github.com/heroesofcode/woodpeck/commit/2be01c55a709244c683f5f5c1dad39a1d4ae1acf))
+* **books:** choose books with the system file dialog ([f4606c8](https://github.com/heroesofcode/woodpeck/commit/f4606c89080aeb41c49d454e333444f7b41f7298))
+* **books:** give the reader a type scale, contents and adaptive layout ([3535cce](https://github.com/heroesofcode/woodpeck/commit/3535cceace45bf267b97fd95bf09a0aee24da6e7))
+* **books:** import EPUB and PDF chess books into validated move trees ([7bd1ba1](https://github.com/heroesofcode/woodpeck/commit/7bd1ba12b7c1885dcb9119583338133841bcc7a1))
+* **books:** keep heading levels and reflow PDF paragraphs ([7e2e4a8](https://github.com/heroesofcode/woodpeck/commit/7e2e4a8a5b1e9c1263170ca97f50b0c56e8d2a86))
+* **books:** place PDF pictures in the text and follow games through unread boards ([1711dfe](https://github.com/heroesofcode/woodpeck/commit/1711dfe969c9e35063a07c7d06edb6e3908d861b))
+* **books:** recognize diagram images with bundled prototypes ([889271d](https://github.com/heroesofcode/woodpeck/commit/889271da14a35520b5122f38ceea961244378cdb))
+* **books:** say what an import found when the book opens ([c8758f1](https://github.com/heroesofcode/woodpeck/commit/c8758f1727d315082c0490eeb6439bfaf4dc26eb))
+* **books:** seed positions from recognized diagram images ([c090aa0](https://github.com/heroesofcode/woodpeck/commit/c090aa092a9f18630b160e7137750b9ec40845f8))
+* **books:** show book covers in a library grid ([7d6ebaf](https://github.com/heroesofcode/woodpeck/commit/7d6ebafbda9a8340e89ca26a6f5723a33f446287))
+
+
+### Bug fixes
+
+* **books:** await the file dialog off the UI thread ([f13f350](https://github.com/heroesofcode/woodpeck/commit/f13f350a3739c62c995635e64026f54f7054da9a))
+* **books:** ignore asides and failed numbers when placing diagram images ([e8f28b4](https://github.com/heroesofcode/woodpeck/commit/e8f28b418cca622ccd7a2393f3bd81647331136d))
+* **books:** invalidate the position at nested images in source order ([4c92299](https://github.com/heroesofcode/woodpeck/commit/4c922991e07ae1e52590e44ef39180eec83271f8))
+* **books:** keep diagram positions when a line restarts at move one ([cee03b1](https://github.com/heroesofcode/woodpeck/commit/cee03b1547f80b17ba0789e1f95b5d047a6d22b8))
+* **books:** keep plain knights wingless and read PGN headers split across paragraphs ([43d1342](https://github.com/heroesofcode/woodpeck/commit/43d1342a19848fee5e47b4af0632f817cf3482c9))
+* **books:** only treat diagram captions as captions and keep move one for black-to-move diagrams ([eeab109](https://github.com/heroesofcode/woodpeck/commit/eeab109a4504fb8e7797ec20b59e3ca5f1fb97ce))
+* **books:** preserve confirmed context across intervening prose ([0a80e03](https://github.com/heroesofcode/woodpeck/commit/0a80e03a3e81743ead29a2e96651c2b442dc86ed))
+* **books:** read PGN headers and more old descriptive notation ([5d52146](https://github.com/heroesofcode/woodpeck/commit/5d52146375343e40b426e39851893eb37b00bac2))
+* **books:** resolve lines that resume a game or start after a diagram ([a961c9a](https://github.com/heroesofcode/woodpeck/commit/a961c9a4484236cf8e806ca76c8f6e4907da718d))
+* **books:** retain verified positions through image captions ([399a0d3](https://github.com/heroesofcode/woodpeck/commit/399a0d3e3ad740452b4d0ec3e85ea946136308a7))
+* **reader:** keep boards readable and controls reachable in small windows ([7b9e1af](https://github.com/heroesofcode/woodpeck/commit/7b9e1af5ece8936381650c979c3d398464581229))
+* **reader:** show no board for passages without a verified position ([634d795](https://github.com/heroesofcode/woodpeck/commit/634d7956efc9011b3774bc13598d38c60a521def))
+
 ## [0.3.0](https://github.com/heroesofcode/woodpeck/compare/v0.2.0...v0.3.0) (2026-11-01)
 
 
