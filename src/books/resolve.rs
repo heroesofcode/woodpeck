@@ -695,6 +695,13 @@ mod tests {
         })
     }
     #[test]
+    fn a_diagram_without_moves_counts_as_a_position() {
+        let summary = book("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1").summary();
+        assert_eq!((summary.positions, summary.unresolved), (1, 0));
+        let summary = book("1. e4 e5 2. Nf3").summary();
+        assert_eq!((summary.positions, summary.unresolved), (3, 0));
+    }
+    #[test]
     fn variation_and_illegal_safety() {
         let b = book("1. e4 (1. d4 d5 [1... Nf6]) e5 2. Nf3 Nc6 3. Bh9 a6");
         assert_eq!(

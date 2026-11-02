@@ -147,6 +147,8 @@ pub(super) struct Reader {
     contents: Vec<(usize, u8, String)>,
     /// Highest heading level the book uses, so its chapters get the chapter style.
     top_level: u8,
+    /// What the import found, shown once above the book until dismissed.
+    pub(super) notice: Option<String>,
 }
 /// The heading level that marks chapters: the highest imported level used more than once.
 fn chapter_level(pages: &[crate::books::document::Page]) -> u8 {
@@ -250,6 +252,7 @@ impl Reader {
             runs: None,
             contents: Vec::new(),
             top_level: 1,
+            notice: None,
         };
         reader.contents = reader
             .book
@@ -806,6 +809,18 @@ impl Woodpeck {
         reader.keyboard(ui);
         widgets::caption(ui, &reader.book.document.author);
         ui.heading(&reader.book.document.title);
+        if let Some(notice) = &reader.notice {
+            let mut dismiss = false;
+            widgets::card(ui).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(notice);
+                    dismiss = ui.small_button("Got it").clicked();
+                });
+            });
+            if dismiss {
+                reader.notice = None;
+            }
+        }
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(reader.page > 0, egui::Button::new("< Previous page"))
