@@ -318,7 +318,9 @@ fn resolve_tokens(
                     target += 1;
                 }
                 let floating = context.floating;
-                if n == 0 || !context.seek(target) {
+                if floating && blocked {
+                    // An earlier number already failed: a later one must not pin the image's ply.
+                } else if n == 0 || !context.seek(target) {
                     let reason = if context.unrecognized_image {
                         format!("Unrecognized image: no verified starting position at move {raw}")
                     } else {
@@ -530,8 +532,15 @@ fn image_position<'a>(
         // The first move number followed by a move that is legal for the side it names. Other
         // numbers (square ranks, example numbers, page references) are skipped.
         let mut found = None;
+        let mut depth = 0usize;
         for (n, t) in ts.iter().enumerate() {
-            if !matches!(t.kind, Kind::Number(_)) {
+            match t.kind {
+                Kind::Open => depth += 1,
+                Kind::Close => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            // Numbers inside parentheses belong to variations or asides, not the diagram.
+            if depth > 0 || !matches!(t.kind, Kind::Number(_)) {
                 continue;
             }
             let mut i = n;
@@ -854,6 +863,21 @@ mod image_tests {
         // "1." names White, but only Black can play e5.
         let b = book("", &["1. e5"]);
         assert_eq!(recognized(&b), None);
+    }
+    #[test]
+    fn numbers_in_parentheses_do_not_set_the_side() {
+        let b = book("", &["(Compare 11... e5 in another game.) 1. e4 e5"]);
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 w - - 0 1"));
+    }
+    #[test]
+    fn a_failed_number_keeps_the_image_unnumbered() {
+        // "2. ... Nd4" fails on the White-to-move image; "3. e4" in the same failed fragment
+        // must not pin the image to move 3, so the next paragraph can still number it.
+        let b = book("White to move", &["2. ... Nd4 3. e4", "4. Ra8+"]);
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            ["a1a8"]
+        );
     }
     #[test]
     fn image_without_moves_still_shows_the_position() {
