@@ -37,6 +37,8 @@ struct Context {
     unrecognized_image: bool,
     /// A position read from an image has no move number until the text gives one.
     floating: bool,
+    /// The last block ended in PGN tag pairs, so tags that follow belong to the same header.
+    header: bool,
 }
 /// Why a move number could not be placed.
 enum Miss {
@@ -408,10 +410,12 @@ fn resolve_with(
                 continue;
             }
             let ts = notation::tokens(text);
+            // Tag pairs on their own, one header line per paragraph, still set up the game.
             if !ts
                 .iter()
-                .any(|t| matches!(t.kind, Kind::Number(_) | Kind::Label))
+                .any(|t| matches!(t.kind, Kind::Number(_) | Kind::Label | Kind::Tag))
             {
+                context.header = false;
                 continue;
             }
             let start = fen(&context.pos);
@@ -431,6 +435,7 @@ fn resolve_with(
                 alphabet,
                 &mut fragment,
             );
+            context.header = ts.last().is_some_and(|t| t.kind == Kind::Tag);
             if !fragment.nodes.is_empty() || fragment.status != Status::Resolved {
                 let section = book.sections.last_mut().expect("initial section");
                 section.fragments.push(book.fragments.len());
@@ -581,7 +586,12 @@ fn resolve_tokens(
             }
             // A PGN header starts a new game; its FEN tag, if any, gives the position.
             Kind::Tag if stack.is_empty() => {
-                if i == 0 || ts[i - 1].kind != Kind::Tag {
+                let continued = if i == 0 {
+                    context.header
+                } else {
+                    ts[i - 1].kind == Kind::Tag
+                };
+                if !continued {
                     *context = Context::default();
                 }
                 if let Some(("FEN", value)) = notation::tag(raw) {
@@ -598,6 +608,7 @@ fn resolve_tokens(
                         },
                     };
                 }
+                context.header = true;
                 before = context.clone();
                 active = false;
                 blocked = false;
@@ -1237,6 +1248,27 @@ mod tests {
             ["e2e4", "e7e5", "g1f3", "e2e4", "e8d7"]
         );
         assert_eq!(b.nodes[3].parent, None);
+        assert!(b.fragments.iter().all(|f| f.status == Status::Resolved));
+    }
+    #[test]
+    fn a_header_with_one_tag_per_paragraph_still_sets_up_the_game() {
+        let p = BlockKind::Paragraph;
+        let b = blocks(&[
+            ("1. e4 e5 2. Nf3", p.clone()),
+            ("[Event \"?\"]", p.clone()),
+            ("[FEN \"4k3/8/8/8/8/8/4P3/4K3 w - - 0 1\"]", p.clone()),
+            ("[PlyCount \"2\"]", p.clone()),
+            ("1. e4 Kd7", p.clone()),
+            ("[Event \"?\"]", p.clone()),
+            ("A new game from the opening.", p.clone()),
+            ("1. d4", p),
+        ]);
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            ["e2e4", "e7e5", "g1f3", "e2e4", "e8d7", "d2d4"]
+        );
+        assert_eq!(b.nodes[3].parent, None);
+        assert_eq!(b.nodes[5].parent, None);
         assert!(b.fragments.iter().all(|f| f.status == Status::Resolved));
     }
     #[test]
