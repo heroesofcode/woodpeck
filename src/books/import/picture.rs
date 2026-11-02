@@ -247,6 +247,8 @@ fn jbig2(
     }
     impl Canvas {
         fn put(&mut self, black: bool, count: u32) {
+            // JBIG2 ink bits are the inverse of PDF DeviceGray samples. Convert that
+            // polarity first, then apply the PDF Decode array as for other gray images.
             let value = if black == self.inverted { 255 } else { 0 };
             let (width, height) = self.image.dimensions();
             if self.y < height {
@@ -368,6 +370,33 @@ mod tests {
             .set("Decode", vec![Object::Integer(1), Object::Integer(0)]);
         let (doc, page) = page_with(vec![("Neg", image)], "/Neg Do");
         assert_eq!(decoded(&pictures(&doc, page)[0]).get_pixel(5, 5).0, [245]);
+    }
+    #[test]
+    fn jbig2_ink_obeys_pdf_decode_polarity() {
+        // Synthetic embedded JBIG2: page information with a uniform default pixel,
+        // followed by end-of-page. No book or external image data is used.
+        for black in [false, true] {
+            let mut data = vec![0, 0, 0, 1, 48, 0, 1, 0, 0, 0, 19];
+            for n in [128u32, 128, 0, 0] {
+                data.extend_from_slice(&n.to_be_bytes());
+            }
+            data.extend_from_slice(&[u8::from(black) << 2, 0, 0]);
+            data.extend_from_slice(&[0, 0, 0, 2, 49, 0, 1, 0, 0, 0, 0]);
+            for inverted in [false, true] {
+                let mut image = gray_image(128, 0);
+                image.dict.set("Filter", "JBIG2Decode");
+                image.dict.set("BitsPerComponent", 1);
+                if inverted {
+                    image.dict.set("Decode", vec![1.into(), 0.into()]);
+                }
+                image.content = data.clone();
+                let (doc, page) = page_with(vec![("Board", image)], "/Board Do");
+                let found = pictures(&doc, page);
+                assert_eq!(found.len(), 1);
+                let value = if black == inverted { 255 } else { 0 };
+                assert!(decoded(&found[0]).pixels().all(|p| p.0 == [value]));
+            }
+        }
     }
     #[test]
     fn icc_gray_counts_as_gray() {
