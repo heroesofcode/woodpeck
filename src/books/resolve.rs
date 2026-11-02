@@ -366,7 +366,6 @@ fn resolve_with(
                 });
                 continue;
             }
-            context.confirmed_image = false;
             // An unrecognized image may introduce a new diagram position. Carrying an
             // opening position through it can produce legal but entirely wrong endgames.
             if let BlockKind::Image { path, alt } = &block.kind
@@ -1568,7 +1567,8 @@ mod image_tests {
                 alt: String::new(),
             };
             let page = &mut document.pages[0];
-            page.blocks.pop(); // Replace the helper's empty trailing paragraph with the caption.
+            page.blocks.pop();
+            page.push("The position above.", BlockKind::Paragraph);
             page.push("Fig. 3", BlockKind::Heading);
             page.push("2... Nc6 3. Bb5", BlockKind::Paragraph);
             let b = resolve_using(document.clone(), Some(&Reads(reading.clone())));
