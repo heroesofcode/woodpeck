@@ -1,6 +1,6 @@
 //! Ground truth is authored independently of notation parsing. Only annotated ranges in sampled
 //! books count toward precision; generated fixtures set `complete` to include all emitted moves.
-use super::{import, model::Status, resolve};
+use super::{document::BlockKind, import, model::Status, resolve};
 use serde::{Deserialize, Serialize};
 use shakmaty::{CastlingMode, Position, uci::UciMove};
 use std::{error::Error, path::Path, time::Instant};
@@ -17,6 +17,14 @@ pub struct Truth {
     pub fragments: Vec<ExpectedFragment>,
     #[serde(default)]
     pub diagrams: Vec<String>,
+    /// Transcribed diagram images, matched by the end of their asset path.
+    #[serde(default)]
+    pub diagram_sources: Vec<DiagramSource>,
+}
+#[derive(Debug, Deserialize)]
+pub struct DiagramSource {
+    pub asset_suffix: String,
+    pub fen: String,
 }
 #[derive(Debug, Deserialize)]
 pub struct ExpectedFragment {
@@ -58,6 +66,20 @@ pub struct Metrics {
     pub wrong_positions: usize,
     pub expected_diagrams: usize,
     pub correct_diagrams: usize,
+    /// Images in the book, and those read as diagrams.
+    #[serde(default)]
+    pub images: usize,
+    #[serde(default)]
+    pub images_recognized: usize,
+    /// Transcribed images: read exactly, read differently (must stay 0), squares matching.
+    #[serde(default)]
+    pub labelled_images: usize,
+    #[serde(default)]
+    pub labelled_correct: usize,
+    #[serde(default)]
+    pub labelled_wrong: usize,
+    #[serde(default)]
+    pub labelled_squares: usize,
     pub resolved: usize,
     pub partial: usize,
     pub unresolved: usize,
@@ -115,6 +137,12 @@ impl Metrics {
         self.wrong_positions += other.wrong_positions;
         self.expected_diagrams += other.expected_diagrams;
         self.correct_diagrams += other.correct_diagrams;
+        self.images += other.images;
+        self.images_recognized += other.images_recognized;
+        self.labelled_images += other.labelled_images;
+        self.labelled_correct += other.labelled_correct;
+        self.labelled_wrong += other.labelled_wrong;
+        self.labelled_squares += other.labelled_squares;
         self.resolved += other.resolved;
         self.partial += other.partial;
         self.unresolved += other.unresolved;
@@ -123,6 +151,18 @@ impl Metrics {
         self.pages += other.pages;
         self.import_ms += other.import_ms;
     }
+}
+/// Board squares of a FEN placement, rank 8 first.
+fn squares(fen: &str) -> Vec<char> {
+    let placement = fen.split(' ').next().unwrap_or_default();
+    let mut out = Vec::with_capacity(64);
+    for c in placement.chars().filter(|c| *c != '/') {
+        match c.to_digit(10) {
+            Some(n) => out.extend(std::iter::repeat_n('.', n as usize)),
+            None => out.push(c),
+        }
+    }
+    out
 }
 fn ratio(n: usize, d: usize) -> f64 {
     if d == 0 { 1.0 } else { n as f64 / d as f64 }
@@ -179,6 +219,24 @@ impl Report {
                 100.0 * ratio(c.partial, c.tokens.max(1)),
                 c.unresolved,
                 100.0 * ratio(c.unresolved, c.tokens.max(1))
+            )
+            .expect("string write");
+        }
+        s.push_str("\nDiagram images (read from pixels; labelled = transcribed images, wrong must be 0):\n\n| Book | Images | Read as diagram | Labelled | Correct | Wrong | Abstained | Square accuracy |\n|---|---:|---:|---:|---:|---:|---:|---:|\n");
+        for m in std::iter::once(&self.overall).chain(&self.fixtures) {
+            use std::fmt::Write;
+            let read = m.labelled_correct + m.labelled_wrong;
+            writeln!(
+                s,
+                "| {} | {} | {} | {} | {} | {} | {} | {:.1}% |",
+                m.name,
+                m.images,
+                m.images_recognized,
+                m.labelled_images,
+                m.labelled_correct,
+                m.labelled_wrong,
+                m.labelled_images - read,
+                100.0 * ratio(m.labelled_squares, read * 64)
             )
             .expect("string write");
         }
@@ -249,6 +307,7 @@ pub fn run(dir: &Path) -> Result<Report, Box<dyn Error>> {
             scanned: false,
             fragments: vec![],
             diagrams: vec![],
+            diagram_sources: vec![],
         };
         let metrics = evaluate(&path, &truth)?;
         report.overall.add(&metrics);
@@ -420,8 +479,51 @@ pub fn evaluate(path: &Path, truth: &Truth) -> Result<Metrics, Box<dyn Error>> {
     }
     super::coverage::measure(&book, &mut metrics);
     metrics.expected_diagrams = truth.diagrams.len();
+    let blocks = || book.document.pages.iter().flat_map(|p| &p.blocks);
     for expected in &truth.diagrams {
-        metrics.correct_diagrams += usize::from(book.document.pages.iter().flat_map(|p| &p.blocks).any(|b| matches!(&b.kind, super::document::BlockKind::Diagram { fen } if fen == expected)));
+        metrics.correct_diagrams += usize::from(blocks().any(|b| {
+            matches!(&b.kind, BlockKind::Diagram { fen } | BlockKind::RecognizedDiagram { fen, .. } if fen == expected)
+        }));
+    }
+    for block in blocks() {
+        match &block.kind {
+            BlockKind::Image { .. } => metrics.images += 1,
+            BlockKind::RecognizedDiagram { .. } => {
+                metrics.images += 1;
+                metrics.images_recognized += 1;
+            }
+            _ => {}
+        }
+    }
+    for source in &truth.diagram_sources {
+        metrics.labelled_images += 1;
+        let read = blocks().find_map(|b| match &b.kind {
+            BlockKind::RecognizedDiagram { path, fen, .. }
+                if path.ends_with(&source.asset_suffix) =>
+            {
+                Some(fen)
+            }
+            _ => None,
+        });
+        if let Some(fen) = read {
+            if *fen == source.fen {
+                metrics.labelled_correct += 1;
+            } else {
+                metrics.labelled_wrong += 1;
+                metrics
+                    .failures
+                    .push(format!("{} read as {fen}", source.asset_suffix));
+            }
+            metrics.labelled_squares += squares(fen)
+                .iter()
+                .zip(squares(&source.fen))
+                .filter(|(a, b)| **a == *b)
+                .count();
+        } else {
+            metrics
+                .failures
+                .push(format!("{} not read (abstained)", source.asset_suffix));
+        }
     }
     // Recheck every emitted edge, including moves outside annotated excerpts.
     for node in &book.nodes {
@@ -439,7 +541,11 @@ pub fn evaluate(path: &Path, truth: &Truth) -> Result<Metrics, Box<dyn Error>> {
         let m = node.uci.parse::<UciMove>()?.to_move(&pos)?;
         let after = pos.play(m)?;
         if resolve::fen(&after) != node.fen {
-            return Err("Invalid emitted tree edge".into());
+            return Err(format!(
+                "Invalid emitted tree edge: page {} {} from {before} gives {}",
+                node.page, node.uci, node.fen
+            )
+            .into());
         }
         if m.to_uci(CastlingMode::Standard).to_string() != node.uci {
             return Err("Noncanonical UCI".into());

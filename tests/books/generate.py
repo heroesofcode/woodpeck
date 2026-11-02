@@ -19,10 +19,10 @@ f1c4 g8f6 f3b3 d8e7 b1c3 c7c6 c1g5 b7b5 c3b5 c6b5 c4b5 b8d7
 e1c1 a8d8 d1d7 d8d7 h1d1 e7e6 b5d7 f6d7 b3b8 d7b8 d1d8'''.split()
 assert len(SAN) == len(UCI)
 
-def epub(path, pages):
+def epub(path, pages, images=None):
     entries = {'mimetype': 'application/epub+zip',
       'META-INF/container.xml': '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
-      'book.opf': '<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="3.0" unique-identifier="book-id"><metadata><dc:identifier id="book-id">urn:woodpeck:opera</dc:identifier><dc:title>Opera Game</dc:title><dc:creator>Paul Morphy</dc:creator><dc:language>en</dc:language><meta property="dcterms:modified">2000-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>' + ''.join(f'<item id="p{i}" href="p{i}.xhtml" media-type="application/xhtml+xml"/>' for i in range(len(pages))) + '</manifest><spine>' + ''.join(f'<itemref idref="p{i}"/>' for i in range(len(pages))) + '</spine></package>'}
+      'book.opf': '<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="3.0" unique-identifier="book-id"><metadata><dc:identifier id="book-id">urn:woodpeck:opera</dc:identifier><dc:title>Opera Game</dc:title><dc:creator>Paul Morphy</dc:creator><dc:language>en</dc:language><meta property="dcterms:modified">2000-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>' + ''.join(f'<item id="p{i}" href="p{i}.xhtml" media-type="application/xhtml+xml"/>' for i in range(len(pages))) + ''.join(f'<item id="i{i}" href="images/{n}" media-type="image/{"jpeg" if n.endswith(".jpg") else "png"}"/>' for i, n in enumerate(images or {})) + '</manifest><spine>' + ''.join(f'<itemref idref="p{i}"/>' for i in range(len(pages))) + '</spine></package>'}
     entries['nav.xhtml'] = '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><ol><li><a href="p0.xhtml">Opera Game</a></li></ol></nav></body></html>'
     for i, content in enumerate(pages):
         entries[f'p{i}.xhtml'] = f'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Opera Game</title></head><body>{content}</body></html>'
@@ -31,6 +31,10 @@ def epub(path, pages):
             info = zipfile.ZipInfo(name, (2000, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_STORED if name == "mimetype" else zipfile.ZIP_DEFLATED
             z.writestr(info, content.encode())
+        for name, content in (images or {}).items():
+            info = zipfile.ZipInfo('images/' + name, (2000, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, content)
 
 def pdf(path, pages, scanned=False):
     objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'', b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']
@@ -54,11 +58,12 @@ def pdf(path, pages, scanned=False):
 def fragment(anchor, moves, page=0, start=START, **extra):
     return dict(page=page, anchor=anchor, start_fen=start, moves=moves, **extra)
 
-def save(name, pages, fragments, notation, diagrams=(), scanned=False):
+def save(name, pages, fragments, notation, diagrams=(), scanned=False, images=None, sources=None):
     path = ROOT / name
-    if path.suffix == '.epub': epub(path, pages)
+    if path.suffix == '.epub': epub(path, pages, images)
     else: pdf(path, pages, scanned)
     truth = dict(file=name, notation=notation, complete=True, fragments=fragments, diagrams=diagrams, scanned=scanned)
+    if sources is not None: truth['diagram_sources'] = sources
     path.with_suffix('.json').write_text(json.dumps(truth, ensure_ascii=False, indent=2)+'\n')
 
 def numbered(moves):
@@ -294,6 +299,41 @@ for row in parts[0].split('/'):
     rows.append(expanded.translate(str.maketrans('KQRBNPkqrbnp','♔♕♖♗♘♙♚♛♜♝♞♟')))
 text=numbered(g['san'][20:24]);grid='\n'.join(rows)+'\nWhite to move'
 save('midgame-diagram.epub',['<pre>'+grid+'</pre><p>'+text+'</p>'],[fragment(text,g['uci'][20:24],start=fen)],'diagram midgame',diagrams=[fen])
+
+# Diagram images rendered from oracle positions by a separate helper (two looks), followed by
+# the next moves. Castling and en passant are not readable from a picture, so samples avoid them.
+# Compile once: cargo build --locked --example books_diagrams
+import struct, tempfile, zlib
+def png(width, height, pixel):
+    raw = b''.join(b'\0' + bytes(pixel(x, y) for x in range(width)) for y in range(height))
+    chunk = lambda kind, data: struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 0, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b'')
+renders=[]; image_pages=[]; image_truth=[]; image_sources=[]; image_diagrams=[]
+for gi,g in enumerate(games):
+    if len(image_sources) == 10: break
+    k = 14 + gi % 9
+    if len(g['uci']) < k+4 or any(s.startswith('O-O') for s in g['san'][k:k+4]): continue
+    if any(f.split()[3] != '-' for f in g['fens'][k:k+4]): continue
+    parts = g['fens'][k].split(); placement, turn = parts[0], parts[1]
+    number = int(parts[5]); start = f'{placement} {turn} - - 0 {number}'
+    style = ['screen', 'printed'][len(image_sources) % 2]
+    name = f'diagram-{len(image_sources):02}.' + ('png' if style == 'screen' else 'jpg')
+    renders.append(dict(file=name, placement=placement, style=style, square=26 + 2 * (len(image_sources) % 5), seed=gi + 101))
+    text = ' '.join((f'{(k+i)//2+1}. ' if (k+i) % 2 == 0 else (f'{(k+i)//2+1}... ' if i == 0 else '')) + g['san'][k+i] for i in range(4))
+    prose = ['', 'White to play.', 'Black to play.'][0 if len(image_sources) % 3 else (1 if turn == 'w' else 2)]
+    image_pages.append(f'<h2>Position {len(image_sources)+1}</h2><p><img src="images/{name}" alt="Chess diagram"/></p>' + (f'<p>{prose}</p>' if prose else '') + '<p>' + text + '</p>')
+    image_truth.append(fragment(text, g['uci'][k:k+4], page=len(image_pages)-1, start=start))
+    fen = f'{placement} {turn} - - 0 1'
+    image_sources.append(dict(asset_suffix='/' + name, fen=fen)); image_diagrams.append(fen)
+with tempfile.TemporaryDirectory() as tmp:
+    subprocess.run([str(oracle.parent / 'books_diagrams'), tmp], input=json.dumps(renders).encode(), check=True)
+    images = {r['file']: (Path(tmp) / r['file']).read_bytes() for r in renders}
+# Negative control: a picture that is not a board must stay unrecognized, with its moves unresolved.
+images['portrait.png'] = png(160, 200, lambda x, y: (x * 3 + y * 5) % 256 // 2 + 64)
+text = '1. e4 e5'
+image_pages.append('<h2>Not a diagram</h2><p><img src="images/portrait.png" alt="Portrait"/></p><p>' + text + '</p>')
+image_truth.append(fragment(text, [], page=len(image_pages)-1, unresolved=True))
+save('image-diagrams.epub', image_pages, image_truth, 'image diagrams', diagrams=image_diagrams, images=images, sources=image_sources)
 
 # Bundle one source per spine page, preserving headings and exact oracle anchors.
 # This removes repeated container metadata without shrinking the evaluation sample.
