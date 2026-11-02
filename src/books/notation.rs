@@ -15,6 +15,8 @@ pub const ALPHABETS: &[(&str, &str)] = &[
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
     Number(u32),
+    /// A number that names an example, diagram, game, page or year rather than a move.
+    Label,
     Open,
     Close,
     Word,
@@ -111,7 +113,15 @@ pub fn tokens(text: &str) -> Vec<Token> {
                 } else if matches!(word, "1-0" | "0-1" | "1/2-1/2" | "½-½" | "*") {
                     Kind::Result
                 } else if let Ok(n) = word.trim_end_matches('.').parse::<u32>() {
-                    Kind::Number(n)
+                    let named = result
+                        .last()
+                        .is_some_and(|t| t.kind == Kind::Word && label_word(&text[t.span.clone()]));
+                    // No game reaches move 1000: four digits are years.
+                    if named || n >= 1000 {
+                        Kind::Label
+                    } else {
+                        Kind::Number(n)
+                    }
                 } else {
                     Kind::Word
                 }
@@ -123,6 +133,44 @@ pub fn tokens(text: &str) -> Vec<Token> {
         });
     }
     result
+}
+/// What a labelled number names, from the word printed before it ("Example 8", "Game No. 2").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelKind {
+    /// A new game from the initial position.
+    Game,
+    /// A new example or problem whose position the text alone does not give.
+    Example,
+    /// A cross-reference: a diagram, page, chapter or move named in prose.
+    Reference,
+}
+/// The kind of label introduced by `word`, if it introduces one.
+pub fn label_kind(word: &str) -> Option<LabelKind> {
+    // "Game 2" and "No. 2" label the number; "A game: 1. e4" introduces a move.
+    let word = word
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .trim_end_matches('.');
+    if word.ends_with(|c: char| !c.is_alphanumeric()) {
+        return None;
+    }
+    let word = word.to_lowercase();
+    match word.as_str() {
+        "game" | "games" | "partie" | "partida" | "partita" | "spiel" | "partij" | "partia"
+        | "round" => Some(LabelKind::Game),
+        "example" | "examples" | "ex" | "problem" | "problems" | "exercise" | "exercises"
+        | "position" | "positions" | "study" | "studies" | "puzzle" | "beispiel" | "aufgabe"
+        | "stellung" | "exemple" | "ejemplo" | "esempio" | "voorbeeld" | "przykład" | "zadanie" => {
+            Some(LabelKind::Example)
+        }
+        "diagram" | "diagrams" | "diag" | "dia" | "fig" | "figure" | "figures" | "no" | "nr"
+        | "number" | "page" | "pages" | "pp" | "chapter" | "chap" | "section" | "part" | "move"
+        | "moves" | "diagramm" | "diagramme" | "diagrama" | "diagramma" | "diagramie"
+        | "rozdział" | "seite" | "kapitel" => Some(LabelKind::Reference),
+        _ => None,
+    }
+}
+fn label_word(word: &str) -> bool {
+    label_kind(word).is_some()
 }
 fn role_letter(c: char, alphabet: &str) -> char {
     if let Some(i) = "♔♕♖♗♘♙"

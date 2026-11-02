@@ -350,6 +350,41 @@ for name,_ in variants:
     save(f'matrix-{name}.epub',pages,truths,name)
 for p in ROOT.glob('matrix-*.json'):
     p.write_text(json.dumps(json.loads(p.read_text()),ensure_ascii=False,separators=(',',':'))+'\n')
+
+# Continuations: a game resumed after prose, analysis that jumps back, a black-move
+# continuation, a move number two lines reach (must abstain) and a new game that resets.
+line = json.loads(subprocess.check_output([str(oracle)], input=json.dumps([dict(name='Opera', pgn=' '.join(SAN[:16]))]).encode()))[0]
+assert line['uci'] == UCI[:16]
+fens = line['fens']
+after_bg4 = fens[6]
+pages = ['<h2>Game 1</h2><p>1. e4 e5 2. Nf3 d6 3. d4 Bg4</p><p>White now opens the centre.</p>'
+         '<p>4. dxe5 Bxf3 5. Qxf3 dxe5</p><p>Also possible was 4. Nc3 Nf6.</p>'
+         '<p>Now 5. h3 is playable in either line.</p><p>6. Bc4 Nf6 7. Qb3</p>'
+         '<p>Black has to defend.</p><p>7... Qe7 8. Nc3</p>',
+         '<h2>Game 2</h2><p>4. d4 exd4</p>']
+truth = [fragment('1. e4 e5 2. Nf3 d6 3. d4 Bg4', UCI[:6]),
+         fragment('4. dxe5 Bxf3 5. Qxf3 dxe5', UCI[6:10], start=after_bg4),
+         fragment('4. Nc3 Nf6', ['b1c3', 'g8f6'], start=after_bg4),
+         fragment('5. h3', [], unresolved=True),
+         fragment('6. Bc4 Nf6 7. Qb3', UCI[10:13], start=fens[10]),
+         fragment('7... Qe7 8. Nc3', UCI[13:15], start=fens[13]),
+         fragment('4. d4 exd4', [], page=1, unresolved=True)]
+save('continuations.epub', pages, truth, 'continuations')
+# A board printed as text rows ("8 | #R | #Kt| ..."), captioned, with the side to move in prose.
+full = json.loads(subprocess.check_output([str(oracle)], input=json.dumps([dict(name='Opera', pgn=' '.join(SAN))]).encode()))[0]
+placement = full['fens'][20].split()[0]
+names = dict(K='K', Q='Q', R='R', B='B', N='Kt', P='')
+rows = ['+' + '-' * 40 + '+']
+for rank, row in zip(range(8, 0, -1), placement.split('/')):
+    cells = ''.join(' ' * int(c) if c.isdigit() else c for c in row)
+    rows.append(f'{rank} |' + '|'.join(f' {("^" if c.isupper() else "#") + names[c.upper()]:<3}' if c != ' ' else '    ' for c in cells) + '|')
+    rows.append('|' + '-' * 40 + '|')
+rows.append('   a    b    c    d    e    f    g    h')
+text = numbered(SAN)[numbered(SAN).index('11. '):].split(' 12.')[0]
+assert text == '11. Bxb5+ Nbd7'
+save('text-grid.epub', ['<pre>' + '\n'.join(rows) + '</pre><h3>DIAGRAM 1.</h3><p>White to move.</p><p>' + text + '</p>'],
+     [fragment(text, UCI[20:22], start=f'{placement} w - - 0 11')], 'text grid', diagrams=[f'{placement} w - - 0 1'])
+
 output_bytes = sum(p.stat().st_size for p in ROOT.iterdir() if p.name not in ['metrics.json','report.md'])
 assert output_bytes < 2_000_000, output_bytes
 print('Committed fixture bytes:', output_bytes)

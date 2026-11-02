@@ -39,11 +39,14 @@ two columns and page breaks. `image-diagrams.epub` embeds ten diagram images ren
 picture that is not a board. The gate requires zero misread images and at least the five
 screen boards read; the engraved JPEG look currently abstains. Further fixtures cover midgame text diagrams, analysis jumping back 17 plies, an
 EPUB spine break within a game, old-style source qualifiers and descriptive square
-notation. Legacy fixtures retain text/font diagrams, broken/scanned files and promotions. Negative controls contain
+notation. `continuations.epub` resumes a game after prose, jumps back into analysis,
+continues from a black move, abstains where two lines reach the same move with equally
+legal continuations, and resets at a new game heading; `text-grid.epub` seeds a position
+from a captioned board printed as text rows. Legacy fixtures retain text/font diagrams, broken/scanned files and promotions. Negative controls contain
 prose coordinates, page/year numbers, illegal moves and unknown starting plies.
 
-There are 90 materialized fixtures. Bundling each notation matrix into a multi-page
-EPUB keeps all fixture files below 2 MB (about 1.96 MB). Outputs use fixed ZIP timestamps.
+There are 92 materialized fixtures. Bundling each notation matrix into a multi-page
+EPUB keeps all fixture files below 2 MB (about 1.97 MB). Outputs use fixed ZIP timestamps.
 No book downloads or network access participate in regeneration or CI. Current CI
 gates require 82% overall recall, 100% sampled precision, zero wrong positions, exact
 text-diagram accuracy, all deliberately broken cases detected, and a runtime below

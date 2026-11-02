@@ -6,11 +6,11 @@
     {
       "page": 15,
       "anchor": "(1) Sc3-d5.",
-      "start_fen": "rnb1kb1r/ppp2ppp/5q2/4p3/4P3/2N5/PPP2PPP/R2QKBNR w KQkq - 0 1",
+      "start_fen": "r3k1nr/pbp1bppp/1pnp1q2/4p3/2B1P3/2NPBN2/PPP2PPP/R2Q1RK1 w - - 0 1",
       "moves": [
         "c3d5"
       ],
-      "source_note": "Independent transcription of printed moves; shakmaty verifies legality only."
+      "source_note": "Start transcribed square by square from the printed text board DIAGRAM 20; castling rights are not printed."
     },
     {
       "page": 19,

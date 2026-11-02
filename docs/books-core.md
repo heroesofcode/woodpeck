@@ -47,6 +47,20 @@ legal-candidate descriptive matching. `resolve` scores the book under each alpha
 by recovered legal moves. An unresolved ambiguity remains text. A section starts at
 a heading; validated FENs and recognized text diagrams seed positions, numbered
 openings start normally, and known plies allow continuation and analysis branches.
+Every position a game reached is remembered by ply. A fragment that starts at move N
+(white or black) resumes from the position before that ply: the current one inside a
+line, otherwise the single known position there, so a game resumes after prose and an
+analysis that jumps back becomes a variation of the node it branches from. When several
+lines reach that ply, the one whose next moves stay legal longest (up to eight plies) is
+taken, and a tie abstains with "Ambiguous continuation". Labels reset the context:
+"Game 12" or a Roman numeral before move one starts from the opening position, "Example
+3" or "Position 4" waits for its own diagram, and "Diagram 5" or "page 40" are only
+references. Text boards printed as rows ("8 | #R | #Kt| ... |", `#` black, `^` white,
+`Kt` or the book's letters, a bare mark a pawn) seed a position like a recognized image;
+their caption heading ("DIAGRAM 1") keeps it, and moves numbered from one that are legal
+only from the opening position are taken as the game that led to the board. A board that
+cannot be placed still blocks inference, and its rank digits are never move numbers.
+A move that closes a sentence ("2 P-g4.") keeps its full stop out of the notation.
 Nested delimiters save and restore line contexts. Failed moves stop their branch,
 retain a reason and preserve the successfully validated prefix. Invalid explicit
 FENs block inference until a new section or valid explicit position. Descriptive
