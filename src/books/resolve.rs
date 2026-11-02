@@ -1,12 +1,16 @@
 //! Resolve only unique legal moves. A failed candidate ends its line; later numbered fragments
 //! may recover from an explicitly known ply, but never from an invented position.
 use super::{
-    document::{BlockKind, Document},
+    diagram::DiagramRecognizer,
+    document::{Block, BlockKind, Document, Page},
     model::{Book, Fragment, Node, Section, Status},
     notation::{self, Kind, Token},
 };
-use shakmaty::{CastlingMode, Chess, EnPassantMode, Position, fen::Fen, san::SanPlus};
-use std::collections::BTreeMap;
+use shakmaty::{CastlingMode, Chess, Color, EnPassantMode, Position, fen::Fen, san::SanPlus};
+use std::{
+    collections::{BTreeMap, HashMap},
+    num::NonZeroU32,
+};
 
 pub fn fen(pos: &Chess) -> String {
     Fen::from_position(pos, EnPassantMode::Legal).to_string()
@@ -28,11 +32,25 @@ struct Context {
     invalid_start: bool,
     explicit_start: bool,
     unrecognized_image: bool,
+    /// A position read from an image has no move number until the text gives one.
+    floating: bool,
 }
 impl Context {
     fn seek(&mut self, target: u32) -> bool {
         if self.invalid_start {
             return false;
+        }
+        if self.floating {
+            if target % 2 != u32::from(self.pos.turn().is_black()) {
+                return false;
+            }
+            let Some(pos) = renumber(&self.pos, target / 2 + 1) else {
+                return false;
+            };
+            self.pos = pos;
+            self.floating = false;
+            self.known = BTreeMap::from([(target, (self.pos.clone(), None))]);
+            return true;
         }
         if target == ply(&self.pos) {
             return true;
@@ -49,12 +67,62 @@ impl Context {
         }
     }
 }
-pub fn resolve(mut document: Document) -> Book {
+fn renumber(pos: &Chess, fullmoves: u32) -> Option<Chess> {
+    let mut setup = pos.to_setup(EnPassantMode::Legal);
+    setup.fullmoves = NonZeroU32::new(fullmoves)?;
+    setup.position(CastlingMode::Standard).ok()
+}
+pub fn resolve(document: Document) -> Book {
+    resolve_using(
+        document,
+        super::diagram::builtin().map(|p| p as &dyn DiagramRecognizer),
+    )
+}
+/// Resolves with an optional image recognizer; images it cannot read stay unrecognized.
+pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramRecognizer>) -> Book {
     let assets = std::mem::take(&mut document.assets);
+    let mut placements = HashMap::new();
+    if let Some(recognizer) = recognizer {
+        let mut paths: Vec<&String> = Vec::new();
+        for block in document.pages.iter().flat_map(|p| &p.blocks) {
+            if let BlockKind::Image { path, .. } = &block.kind
+                && !paths.contains(&path)
+            {
+                paths.push(path);
+            }
+        }
+        // Images are independent; spread them over a few threads (one decoded image each).
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+        let chunk = paths.len().div_ceil(threads).max(1);
+        let read = |path: &String| {
+            assets
+                .iter()
+                .find(|a| &a.path == path)
+                .and_then(|a| recognizer.placement(&a.bytes))
+        };
+        let results: Vec<Option<String>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = paths
+                .chunks(chunk)
+                .map(|part| {
+                    let handle =
+                        scope.spawn(move || part.iter().map(|p| read(p)).collect::<Vec<_>>());
+                    (part.len(), handle)
+                })
+                .collect();
+            // A failed worker abstains for its own images and keeps the rest aligned.
+            handles
+                .into_iter()
+                .flat_map(|(n, h)| h.join().unwrap_or_else(|_| vec![None; n]))
+                .collect()
+        });
+        for (path, placement) in paths.into_iter().zip(results) {
+            placements.insert(path.clone(), placement);
+        }
+    }
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let mut best = None;
     for (name, alphabet) in notation::ALPHABETS {
-        let candidate = resolve_with(document.clone(), name, alphabet);
+        let candidate = resolve_with(document.clone(), name, alphabet, &placements);
         if best
             .as_ref()
             .is_none_or(|b: &Book| candidate.nodes.len() > b.nodes.len())
@@ -66,7 +134,14 @@ pub fn resolve(mut document: Document) -> Book {
     best.document.assets = assets;
     best
 }
-fn resolve_with(mut document: Document, language: &str, alphabet: &str) -> Book {
+#[allow(clippy::too_many_lines)] // One pass keeps block order, sections and seeding together.
+fn resolve_with(
+    mut document: Document,
+    language: &str,
+    alphabet: &str,
+    placements: &HashMap<String, Option<String>>,
+) -> Book {
+    let recognized = recognized_positions(&document, alphabet, placements);
     let mut book = Book {
         version: 1,
         document: document.clone(),
@@ -82,7 +157,7 @@ fn resolve_with(mut document: Document, language: &str, alphabet: &str) -> Book 
     };
     let mut context = Context::default();
     for (page_index, page) in document.pages.iter_mut().enumerate() {
-        for block in &mut page.blocks {
+        for (block_index, block) in page.blocks.iter_mut().enumerate() {
             if block.kind == BlockKind::Heading {
                 context = Context::default();
                 book.sections.push(Section {
@@ -95,6 +170,22 @@ fn resolve_with(mut document: Document, language: &str, alphabet: &str) -> Book 
             }
             // An unrecognized image may introduce a new diagram position. Carrying an
             // opening position through it can produce legal but entirely wrong endgames.
+            if let BlockKind::Image { path, alt } = &block.kind
+                && let Some(pos) = recognized.get(&(page_index, block_index))
+            {
+                block.kind = BlockKind::RecognizedDiagram {
+                    path: path.clone(),
+                    alt: alt.clone(),
+                    fen: fen(pos),
+                };
+                context = Context {
+                    pos: pos.clone(),
+                    explicit_start: true,
+                    floating: true,
+                    ..Context::default()
+                };
+                continue;
+            }
             if matches!(block.kind, BlockKind::Image { .. }) {
                 context.invalid_start = true;
                 context.unrecognized_image = true;
@@ -226,6 +317,7 @@ fn resolve_tokens(
                 {
                     target += 1;
                 }
+                let floating = context.floating;
                 if n == 0 || !context.seek(target) {
                     let reason = if context.unrecognized_image {
                         format!("Unrecognized image: no verified starting position at move {raw}")
@@ -235,6 +327,10 @@ fn resolve_tokens(
                     fail(fragment, reason);
                     blocked = true;
                 } else if !blocked {
+                    if floating {
+                        // Variations return to the numbered position, not the unnumbered image.
+                        before = context.clone();
+                    }
                     active = true;
                     if fragment.nodes.is_empty() {
                         fragment.start_fen = fen(&context.pos);
@@ -270,7 +366,8 @@ fn resolve_tokens(
                     book.nodes[id].nags.push(raw.into());
                 }
             }
-            Kind::Word if active && !blocked => {
+            // An image position gets its move number from the text before any move is read.
+            Kind::Word if active && !blocked && !context.floating => {
                 if matches!(
                     raw.to_lowercase().as_str(),
                     "ch" | "dbl"
@@ -291,25 +388,7 @@ fn resolve_tokens(
                     i += 1;
                     continue;
                 }
-                let mut found = None;
-                // Longest legal descriptive phrase allows spaced typography without consuming prose.
-                for count in (1..=8.min(ts.len() - i)).rev() {
-                    let group = &ts[i..i + count];
-                    if group.iter().enumerate().any(|(j, t)| {
-                        t.kind != Kind::Word
-                            && !(j > 0
-                                && matches!(t.kind, Kind::Number(_))
-                                && !text[t.span.clone()].contains('.'))
-                    }) {
-                        continue;
-                    }
-                    let span = t.span.start..group.last().expect("nonempty group").span.end;
-                    if let Ok(m) = notation::parse(&context.pos, &text[span.clone()], alphabet) {
-                        found = Some((m, span, count));
-                        break;
-                    }
-                }
-                if let Some((m, span, count)) = found {
+                if let Some((m, span, count)) = parse_move(&context.pos, ts, i, text, alphabet) {
                     before = context.clone();
                     context
                         .known
@@ -360,6 +439,151 @@ fn resolve_tokens(
         }
         i += 1;
     }
+}
+/// Longest legal descriptive phrase allows spaced typography without consuming prose.
+fn parse_move(
+    pos: &Chess,
+    ts: &[Token],
+    i: usize,
+    text: &str,
+    alphabet: &str,
+) -> Option<(shakmaty::Move, std::ops::Range<usize>, usize)> {
+    for count in (1..=8.min(ts.len() - i)).rev() {
+        let group = &ts[i..i + count];
+        if group.iter().enumerate().any(|(j, t)| {
+            t.kind != Kind::Word
+                && !(j > 0
+                    && matches!(t.kind, Kind::Number(_))
+                    && !text[t.span.clone()].contains('.'))
+        }) {
+            continue;
+        }
+        let span = ts[i].span.start..group.last().expect("nonempty group").span.end;
+        if let Ok(m) = notation::parse(pos, &text[span.clone()], alphabet) {
+            return Some((m, span, count));
+        }
+    }
+    None
+}
+fn stated_turn(text: &str) -> Option<Color> {
+    let lower = text.to_lowercase();
+    let says = |side: &str| {
+        [" to play", " to move", "'s move", "\u{2019}s move"]
+            .iter()
+            .any(|verb| lower.contains(&format!("{side}{verb}")))
+    };
+    match (says("white"), says("black")) {
+        (true, false) => Some(Color::White),
+        (false, true) => Some(Color::Black),
+        _ => None,
+    }
+}
+/// Diagram images the recognizer read, keyed by page and block. The side to move comes from the
+/// text ("Black to play", "1. ..."); when moves follow, the first one must be legal for that side,
+/// otherwise the image stays unrecognized rather than seeding a doubtful position.
+fn recognized_positions(
+    document: &Document,
+    alphabet: &str,
+    placements: &HashMap<String, Option<String>>,
+) -> HashMap<(usize, usize), Chess> {
+    let mut out = HashMap::new();
+    for (p, page) in document.pages.iter().enumerate() {
+        for (b, block) in page.blocks.iter().enumerate() {
+            if let BlockKind::Image { path, alt } = &block.kind
+                && let Some(Some(placement)) = placements.get(path)
+                && let Some(pos) = image_position(
+                    page.blocks[b + 1..]
+                        .iter()
+                        .map(|block| (page, block))
+                        // Pagination can put the commentary on the next page.
+                        .chain(document.pages.get(p + 1).into_iter().flat_map(|next| {
+                            next.blocks.iter().map(move |block| (next, block))
+                        }))
+                        .take(4),
+                    alt,
+                    alphabet,
+                    placement,
+                )
+            {
+                out.insert((p, b), pos);
+            }
+        }
+    }
+    out
+}
+fn image_position<'a>(
+    following: impl Iterator<Item = (&'a Page, &'a Block)>,
+    alt: &str,
+    alphabet: &str,
+    placement: &str,
+) -> Option<Chess> {
+    let mut stated = stated_turn(alt);
+    for (page, block) in following {
+        if !matches!(block.kind, BlockKind::Paragraph | BlockKind::Table) {
+            break;
+        }
+        let text = &page.text[block.span.clone()];
+        if find_fen(text).is_some() || diagram(text).is_some() {
+            break;
+        }
+        let ts = notation::tokens(text);
+        // The first move number followed by a move that is legal for the side it names. Other
+        // numbers (square ranks, example numbers, page references) are skipped.
+        let mut found = None;
+        for (n, t) in ts.iter().enumerate() {
+            if !matches!(t.kind, Kind::Number(_)) {
+                continue;
+            }
+            let mut i = n;
+            let mut side = Color::White;
+            if text[t.span.clone()].ends_with("...") {
+                side = Color::Black;
+            }
+            while ts
+                .get(i + 1)
+                .is_some_and(|t| matches!(&text[t.span.clone()], "..." | "…"))
+            {
+                side = Color::Black;
+                i += 1;
+            }
+            if ts.get(i + 1).is_none_or(|t| t.kind != Kind::Word) {
+                continue;
+            }
+            let legal = |side| {
+                placed(placement, side)
+                    .filter(|pos| parse_move(pos, &ts, i + 1, text, alphabet).is_some())
+            };
+            if let Some(pos) = legal(side) {
+                found = Some((n, side, pos));
+                break;
+            }
+            if legal(side.other()).is_some() {
+                // The numbering names one side but only the other can play the move.
+                return None;
+            }
+        }
+        let prose = found
+            .as_ref()
+            .map_or(text, |(n, ..)| &text[..ts[*n].span.start]);
+        if let Some(side) = stated_turn(prose) {
+            if stated.is_some_and(|s| s != side) {
+                return None;
+            }
+            stated = Some(side);
+        }
+        let Some((_, side, pos)) = found else {
+            continue;
+        };
+        if stated.is_some_and(|s| s != side) {
+            return None;
+        }
+        return Some(pos);
+    }
+    // Without a stated side or a move number the side to move is unknown: abstain.
+    placed(placement, stated?)
+}
+fn placed(placement: &str, side: Color) -> Option<Chess> {
+    position(&format!("{placement} {} - - 0 1", side.char()))
 }
 fn looks_like_move(s: &str) -> bool {
     let piece = s.starts_with([
@@ -477,6 +701,165 @@ mod tests {
         let b = book("12. e4 e5");
         assert!(b.nodes.is_empty());
         assert!(matches!(b.fragments[0].status, Status::Unresolved(_)));
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    use crate::books::document::{Asset, Page};
+    /// Reads every image as the same placement, standing in for the trained recognizer.
+    struct Fixed(&'static str);
+    impl DiagramRecognizer for Fixed {
+        fn placement(&self, _: &[u8]) -> Option<String> {
+            Some(self.0.into())
+        }
+    }
+    // White: Ke1, Ra1, Pe2; Black: Ke8, Pe7. Pawns are still on their first squares.
+    const PLACEMENT: &str = "4k3/4p3/8/8/8/8/4P3/R3K3";
+    fn book(alt: &str, texts: &[&str]) -> Book {
+        let mut page = Page::default();
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: alt.into(),
+            },
+        );
+        for text in texts {
+            page.push(text, BlockKind::Paragraph);
+        }
+        let document = Document {
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes: vec![0],
+            }],
+        };
+        resolve_using(document, Some(&Fixed(PLACEMENT)))
+    }
+    fn recognized(b: &Book) -> Option<&str> {
+        b.document.pages[0]
+            .blocks
+            .iter()
+            .find_map(|block| match &block.kind {
+                BlockKind::RecognizedDiagram { fen, .. } => Some(fen.as_str()),
+                _ => None,
+            })
+    }
+    #[test]
+    fn recognized_image_seeds_following_moves() {
+        let b = book("Diagram", &["1. e4 e5 2. Ra8+"]);
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 w - - 0 1"));
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            ["e2e4", "e7e5", "a1a8"]
+        );
+        assert!(matches!(b.fragments[0].status, Status::Resolved));
+    }
+    #[test]
+    fn black_move_number_renumbers_the_position() {
+        let b = book("", &["Black to play.", "23... e5 24. Ra8+"]);
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 b - - 0 1"));
+        assert_eq!(
+            b.fragments[0].start_fen,
+            "4k3/4p3/8/8/8/8/4P3/R3K3 b - - 0 23"
+        );
+        assert_eq!(b.nodes.len(), 2);
+        assert!(b.nodes[1].fen.ends_with(" 24"));
+    }
+    #[test]
+    fn variations_keep_the_image_move_number() {
+        let b = book("", &["7. e4 (7. Ra8+) e5 (Ra8+)"]);
+        let fens: Vec<_> = b.nodes.iter().map(|n| n.fen.as_str()).collect();
+        assert_eq!(
+            fens,
+            [
+                "4k3/4p3/8/8/4P3/8/8/R3K3 b - - 0 7",
+                "R3k3/4p3/8/8/8/8/4P3/4K3 b - - 1 7",
+                "4k3/8/8/4p3/4P3/8/8/R3K3 w - - 0 8",
+            ]
+        );
+        assert_eq!(
+            b.fragments[0].start_fen,
+            "4k3/4p3/8/8/8/8/4P3/R3K3 w - - 0 7"
+        );
+    }
+    #[test]
+    fn unnumbered_moves_do_not_start_an_image_position() {
+        let b = book("White to play", &["(Ra8+) then 1. e4"]);
+        assert_eq!(b.nodes.len(), 1);
+        assert!(b.nodes[0].fen.ends_with(" 1"));
+    }
+    #[test]
+    fn unknown_side_to_move_abstains() {
+        let b = book("Diagram", &["A quiet position."]);
+        assert_eq!(recognized(&b), None);
+    }
+    #[test]
+    fn commentary_on_the_next_page_gives_the_side() {
+        let mut first = Page::default();
+        first.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let mut second = Page::default();
+        second.push("23... e5 24. Ra8+", BlockKind::Paragraph);
+        let b = resolve_using(
+            Document {
+                title: String::new(),
+                author: String::new(),
+                format: "test".into(),
+                pages: vec![first, second],
+                assets: vec![Asset {
+                    path: "images/d.png".into(),
+                    bytes: vec![0],
+                }],
+            },
+            Some(&Fixed(PLACEMENT)),
+        );
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 b - - 0 1"));
+        assert_eq!(b.nodes.len(), 2);
+    }
+    #[test]
+    fn conflicting_side_to_move_abstains() {
+        let b = book("White to play", &["Black to play.", "1... e5"]);
+        assert_eq!(recognized(&b), None);
+        assert!(b.nodes.is_empty());
+    }
+    #[test]
+    fn illegal_first_move_abstains() {
+        // No piece can reach d4: the image is kept rather than trusted.
+        let b = book("", &["1. Nd4 e5"]);
+        assert_eq!(recognized(&b), None);
+        assert!(b.nodes.is_empty());
+    }
+    #[test]
+    fn numbers_that_are_not_move_numbers_are_skipped() {
+        // "Example 8" and the rank in "Ra 5" are not move numbers; "1 ... e5" names Black.
+        let b = book(
+            "",
+            &["Example 8. It is Black's move after Ra 5, and 1 ... e5 follows."],
+        );
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 b - - 0 1"));
+    }
+    #[test]
+    fn move_legal_only_for_the_other_side_abstains() {
+        // "1." names White, but only Black can play e5.
+        let b = book("", &["1. e5"]);
+        assert_eq!(recognized(&b), None);
+    }
+    #[test]
+    fn image_without_moves_still_shows_the_position() {
+        let b = book("White to move", &["A quiet position."]);
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 w - - 0 1"));
+        assert!(b.nodes.is_empty());
     }
 }
 

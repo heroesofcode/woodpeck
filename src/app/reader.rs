@@ -366,7 +366,10 @@ impl Reader {
                                 ui.weak(alt);
                             }
                         }
-                        BlockKind::Diagram { fen } => {
+                        BlockKind::Diagram { fen } | BlockKind::RecognizedDiagram { fen, .. } => {
+                            if matches!(block.kind, BlockKind::RecognizedDiagram { .. }) {
+                                ui.weak("Position read from the book's diagram image");
+                            }
                             if let Some(position) = crate::books::resolve::position(fen) {
                                 let mut board = BoardWidget::default();
                                 board.reader_orientation = Some(self.white);

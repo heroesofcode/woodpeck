@@ -6,8 +6,19 @@ pub enum BlockKind {
     Heading,
     Paragraph,
     Table,
-    Image { path: String, alt: String },
-    Diagram { fen: String },
+    Image {
+        path: String,
+        alt: String,
+    },
+    Diagram {
+        fen: String,
+    },
+    /// A diagram image whose position was read from its pixels and checked against the text.
+    RecognizedDiagram {
+        path: String,
+        alt: String,
+        fen: String,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Block {

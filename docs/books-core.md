@@ -19,8 +19,28 @@ a repeated wide gutter separates two text columns while short White/Black tables
 remain row-major. More complicated layouts, rotated text and marginal notes still
 need evaluation. PDFs with fewer than eight alphanumeric characters on a majority of
 pages return the typed `NoTextLayer` error. A future OCR page source can produce the
-same document without changing the resolver or storage API. OCR, image diagram
-recognition, PDF rasterization and DRM handling are outside this implementation.
+same document without changing the resolver or storage API. OCR, PDF rasterization
+and DRM handling are outside this implementation.
+
+`diagram` reads diagram images on the CPU. It locates the board from the square
+alternation, resamples each square to 32x32, and compares compact features with
+256 bundled prototypes (`diagram_prototypes.bin`, 82 KB, nearest prototype per square
+colour). A board is accepted only when every square is close to a prototype and clearly
+nearer to it than to any other label, the whole image looks like a known style, and the
+material is plausible (one king each, at most eight pawns, none on the first or last
+rank). Engraved kings and queens differ mostly in the crown, so when a side shows two
+kings the one clearly closer to that side's queen prototypes becomes the queen; the
+separation is gated like any other square margin. Anything else abstains and stays an
+image. The resolver then needs the side to move from the text ("Black to play", "It is
+Black's move", "12. ..."), looking at the following paragraphs and the next page. The
+first move number followed by a move legal for the side it names decides; other numbers
+(ranks, example numbers) are skipped, a move legal only for the other side abstains, and
+conflicting statements abstain. Without any evidence the image is kept. A recognized image becomes
+a `RecognizedDiagram` block whose position has no castling or en passant rights, and its
+move numbers are taken from the first following move. `DiagramRecognizer` is the seam
+for an OCR or neural recognizer. Prototypes are rebuilt with
+`cargo run --release --example train_diagrams -- <dir with Gutenberg EPUBs>` from the
+labels in `tests/books/diagram-labels/` plus synthetic boards.
 
 `notation` provides token spans, piece-alphabet tables, algebraic normalization and
 legal-candidate descriptive matching. `resolve` scores the book under each alphabet
@@ -41,7 +61,8 @@ mainline and alternatives. Node IDs are indices stable within the persisted mode
 `text_runs(page)` yields the complete page text, splitting clickable moves from
 ordinary text. Diagram blocks directly carry FENs; image blocks refer to retained
 asset paths and alt text. A reader should display boards only for validated nodes
-or diagram FENs, and show fallback reasons for unresolved fragments.
+or diagram FENs, and show fallback reasons for unresolved fragments. Positions read from
+images are labelled as such in the reader.
 
 Schema 6 adds `books` (SHA-256 deduplication, metadata and zstd-compressed JSON) and
 `book_progress`. Imports of an existing hash preserve the model and progress, so
