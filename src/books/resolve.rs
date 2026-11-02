@@ -37,6 +37,8 @@ struct Context {
     unrecognized_image: bool,
     /// After a board that resembles the current position: only its next move may follow.
     resume: bool,
+    /// A confirmed image may be followed by a caption without starting a new game.
+    confirmed_image: bool,
     /// A position read from an image has no move number until the text gives one.
     floating: bool,
     /// The last block ended in PGN tag pairs, so tags that follow belong to the same header.
@@ -242,6 +244,21 @@ pub fn resolve(document: Document) -> Book {
         super::diagram::builtin().map(|p| p as &dyn DiagramRecognizer),
     )
 }
+/// Expand a gated placement for comparison when its following moves cannot seed a position.
+fn reading_of_placement(placement: &str) -> Option<String> {
+    position(&format!("{placement} w - - 0 1"))
+        .or_else(|| position(&format!("{placement} b - - 0 1")))?;
+    Some(
+        placement
+            .chars()
+            .filter(|c| *c != '/')
+            .flat_map(|c| {
+                c.to_digit(10)
+                    .map_or_else(|| vec![c], |n| vec!['.'; n as usize])
+            })
+            .collect(),
+    )
+}
 /// Resolves with an optional image recognizer; images it cannot read stay unrecognized.
 pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramRecognizer>) -> Book {
     let assets = std::mem::take(&mut document.assets);
@@ -265,7 +282,10 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
                 .iter()
                 .find(|a| &a.path == path)
                 .map_or((None, None), |a| match recognizer.placement(&a.bytes) {
-                    Some(p) => (Some(p), None),
+                    Some(p) => {
+                        let reading = reading_of_placement(&p);
+                        (Some(p), reading)
+                    }
                     None => (None, recognizer.reading(&a.bytes)),
                 })
         };
@@ -333,7 +353,9 @@ fn resolve_with(
         for (block_index, block) in page.blocks.iter_mut().enumerate() {
             if block.kind == BlockKind::Heading {
                 // "DIAGRAM 1" under a board names it; the position stays in force.
-                if !(context.floating && caption(&page.text[block.span.clone()])) {
+                if !((context.floating || context.resume || context.confirmed_image)
+                    && caption(&page.text[block.span.clone()]))
+                {
                     context = Context::default();
                 }
                 book.sections.push(Section {
@@ -344,6 +366,7 @@ fn resolve_with(
                 });
                 continue;
             }
+            context.confirmed_image = false;
             // An unrecognized image may introduce a new diagram position. Carrying an
             // opening position through it can produce legal but entirely wrong endgames.
             if let BlockKind::Image { path, alt } = &block.kind
@@ -397,6 +420,7 @@ fn resolve_with(
                     alt: alt.clone(),
                     fen: fen(&context.pos),
                 };
+                context.confirmed_image = true;
                 continue;
             }
             // A board close to the replayed position but not read exactly: the game may go on
@@ -1531,6 +1555,42 @@ mod image_tests {
             recognized(&b),
             Some("rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2")
         );
+        assert_eq!(b.nodes.len(), 4);
+    }
+    #[test]
+    fn captions_keep_confirmed_and_resume_positions_without_renumbering() {
+        for changes in [vec![4], vec![0, 9, 20, 33, 63]] {
+            let reading = reading_of(AFTER_NF3, &changes);
+            let b = around_image("1. e4 e5 2. Nf3", reading.clone(), "");
+            let mut document = b.document;
+            document.pages[0].blocks[1].kind = BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            };
+            let page = &mut document.pages[0];
+            page.blocks.pop(); // Replace the helper's empty trailing paragraph with the caption.
+            page.push("Fig. 3", BlockKind::Heading);
+            page.push("2... Nc6 3. Bb5", BlockKind::Paragraph);
+            let b = resolve_using(document.clone(), Some(&Reads(reading.clone())));
+            assert_eq!(b.nodes.len(), 5);
+            assert_eq!(b.nodes[3].parent, Some(2));
+            let last = document.pages[0].blocks.last_mut().unwrap();
+            last.span = 0..0;
+            document.pages[0].push("12... Nc6", BlockKind::Paragraph);
+            let b = resolve_using(document, Some(&Reads(reading)));
+            assert_eq!(b.nodes.len(), 3, "caption must not float the move number");
+        }
+    }
+    #[test]
+    fn gated_placement_can_confirm_when_following_moves_reject_it() {
+        // No black king: an ungated reading is still meaningful but is not a legal placement.
+        assert!(reading_of_placement("8/8/8/8/8/8/8/4K3").is_none());
+        assert_eq!(
+            reading_of_placement(AFTER_NF3),
+            Some(reading_of(AFTER_NF3, &[]))
+        );
+        let b = around_image("1. e4 e5 2. Nf3", String::new(), "White to play. 2... Nc6");
+        let b = resolve_using(b.document, Some(&Fixed(AFTER_NF3)));
         assert_eq!(b.nodes.len(), 4);
     }
     fn recognized(b: &Book) -> Option<&str> {
