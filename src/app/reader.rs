@@ -10,7 +10,122 @@ use crate::{
     store::ReadingProgress,
 };
 use eframe::egui::{self, RichText, Ui};
-use std::time::{Duration, Instant};
+use std::{
+    rc::Rc,
+    time::{Duration, Instant},
+};
+
+/// Widest a line of book text is allowed to grow, in points (about 75 characters).
+const MEASURE: f32 = 720.0;
+const BODY_SIZE: f32 = 18.0;
+/// Leading for body text, about 1.5 times the type size.
+const LINE_HEIGHT: f32 = 27.0;
+
+/// The page on screen: text runs (clickable moves or prose) and the fragments that could
+/// not be followed, rebuilt only when the page changes.
+struct PageRuns {
+    runs: Vec<(std::ops::Range<usize>, Option<usize>)>,
+    unresolved: Vec<(std::ops::Range<usize>, String)>,
+}
+
+/// Bold face for headings; it falls back to the regular face when the system has no bold.
+fn bold(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name("bold".into()))
+}
+
+/// Text set in capitals throughout, which reads better letter-spaced at a smaller size.
+fn all_caps(text: &str) -> bool {
+    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+    letters >= 4
+        && text.chars().all(|c| !c.is_lowercase())
+        && text
+            .split(|c: char| !c.is_alphabetic())
+            .any(|word| word.chars().count() >= 4)
+}
+
+/// One run of text in the given face, letter-spaced when it is set in capitals.
+fn styled(
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    wrap: f32,
+) -> egui::text::LayoutJob {
+    let caps = all_caps(text);
+    let size = font.size;
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_owned(),
+        egui::TextFormat {
+            extra_letter_spacing: if caps { size * 0.08 } else { 0.0 },
+            line_height: Some(size * 1.3),
+            font_id: font,
+            color,
+            ..Default::default()
+        },
+    );
+    job.wrap.max_width = wrap;
+    job
+}
+
+/// A heading in the type scale. `rank` 0 is the book's top level (chapters), which opens
+/// with a break; the levels below step down in size so sections stand apart from text.
+fn heading(ui: &mut Ui, text: &str, rank: u8, first: bool, after_heading: bool) {
+    let text = text.trim();
+    if !first && !after_heading {
+        if rank == 0 {
+            ui.add_space(44.0);
+            ui.separator();
+            ui.add_space(36.0);
+        } else {
+            ui.add_space(if rank == 1 { 26.0 } else { 14.0 });
+        }
+    } else if first && rank == 0 {
+        ui.add_space(28.0);
+    }
+    let size = heading_size(rank)
+        * if rank >= 2 && all_caps(text) {
+            0.9
+        } else {
+            1.0
+        };
+    let color = ui.visuals().strong_text_color();
+    let job = styled(text, bold(size), color, ui.available_width());
+    embolden(ui, job);
+    if rank == 0 {
+        // A short accent rule under chapter titles marks the chapter opening.
+        ui.add_space(10.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 3.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 1.5, ui.visuals().selection.stroke.color);
+        ui.add_space(6.0);
+    }
+}
+
+/// Lays out a heading and strikes it twice, a hair apart, so it reads heavier even when the
+/// system only has a variable or regular face (egui cannot pick a weight from those).
+fn embolden(ui: &mut Ui, job: egui::text::LayoutJob) {
+    let size = job
+        .sections
+        .first()
+        .map_or(BODY_SIZE, |s| s.format.font_id.size);
+    let galley = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
+    let (rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let color = ui.visuals().strong_text_color();
+        let painter = ui.painter();
+        painter.galley(rect.min, galley.clone(), color);
+        painter.galley(rect.min + egui::vec2(size * 0.035, 0.0), galley, color);
+    }
+}
+
+/// Type size for a heading rank, from chapter titles down to minor headings.
+fn heading_size(rank: u8) -> f32 {
+    match rank {
+        0 => 40.0,
+        1 => 29.0,
+        2 => 23.0,
+        _ => 20.0,
+    }
+}
 
 pub(super) struct Reader {
     id: i64,
@@ -26,6 +141,31 @@ pub(super) struct Reader {
     follow: bool,
     follow_moves: bool,
     textures: std::collections::HashMap<String, egui::TextureHandle>,
+    /// Text runs of the page on screen, rebuilt only when the page changes.
+    runs: Option<(usize, Rc<PageRuns>)>,
+    /// Chapter headings across the book: (page, level, title).
+    contents: Vec<(usize, u8, String)>,
+    /// Highest heading level the book uses, so its chapters get the chapter style.
+    top_level: u8,
+}
+/// The heading level that marks chapters: the highest imported level used more than once.
+fn chapter_level(pages: &[crate::books::document::Page]) -> u8 {
+    pages
+        .iter()
+        .flat_map(|page| &page.blocks)
+        // Only imported levels count: unknown ones (older imports) read as sections.
+        .filter(|b| b.kind == BlockKind::Heading && b.level > 0)
+        .map(crate::books::document::Block::heading_level)
+        .fold([0usize; 7], |mut counts, level| {
+            counts[usize::from(level)] += 1;
+            counts
+        })
+        .iter()
+        .enumerate()
+        // A level used once is usually the book title; chapters repeat.
+        .find(|(_, count)| **count >= 2)
+        .and_then(|(level, _)| u8::try_from(level).ok())
+        .unwrap_or(1)
 }
 fn asset_image(bytes: &[u8]) -> Option<egui::ColorImage> {
     let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
@@ -105,7 +245,27 @@ impl Reader {
             follow: false,
             follow_moves: false,
             textures: std::collections::HashMap::default(),
+            runs: None,
+            contents: Vec::new(),
+            top_level: 1,
         };
+        reader.contents = reader
+            .book
+            .document
+            .pages
+            .iter()
+            .enumerate()
+            .flat_map(|(index, page)| {
+                page.blocks
+                    .iter()
+                    .filter(|b| b.kind == BlockKind::Heading && b.heading_level() <= 3)
+                    .filter_map(move |b| {
+                        let title = page.text.get(b.span.clone())?.trim();
+                        (!title.is_empty()).then(|| (index, b.heading_level(), title.to_owned()))
+                    })
+            })
+            .collect();
+        reader.top_level = chapter_level(&reader.book.document.pages);
         if let Some(node) = node {
             reader.select(node);
         } else {
@@ -262,24 +422,86 @@ impl Reader {
             }
         }
     }
+    fn page_runs(&mut self) -> Rc<PageRuns> {
+        if let Some((page, runs)) = &self.runs
+            && *page == self.page
+        {
+            return runs.clone();
+        }
+        let runs = Rc::new(PageRuns {
+            runs: self
+                .book
+                .text_runs(self.page)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|run| (run.span, run.node_id))
+                .collect(),
+            unresolved: self
+                .book
+                .fragments
+                .iter()
+                .filter(|f| f.page == self.page)
+                .filter_map(|f| match &f.status {
+                    Status::Partial(reason) | Status::Unresolved(reason) => {
+                        Some((f.span.clone(), reason.clone()))
+                    }
+                    Status::Resolved => None,
+                })
+                .collect(),
+        });
+        self.runs = Some((self.page, runs.clone()));
+        runs
+    }
     fn paragraph(&mut self, ui: &mut Ui, text: &str, span: &std::ops::Range<usize>, follow: bool) {
-        let runs = self.book.text_runs(self.page).unwrap_or_default();
+        let runs = self.page_runs();
+        let plain = text.get(span.clone()).unwrap_or_default().trim();
+        if all_caps(plain)
+            && !runs
+                .runs
+                .iter()
+                .any(|(r, n)| n.is_some() && r.start < span.end && r.end > span.start)
+            && !runs
+                .unresolved
+                .iter()
+                .any(|(r, _)| r.start < span.end && r.end > span.start)
+        {
+            // Display lines set in capitals (summaries, captions, run-in heads) read as
+            // letter-spaced small capitals rather than as shouted body text.
+            let short = plain.len() <= 80 && plain.split_whitespace().count() >= 3;
+            let (font, color) = if short {
+                (bold(BODY_SIZE * 0.9), ui.visuals().strong_text_color())
+            } else {
+                (
+                    egui::FontId::proportional(BODY_SIZE * 0.82),
+                    ui.visuals().weak_text_color(),
+                )
+            };
+            let job = styled(plain, font, color, ui.available_width());
+            if short {
+                embolden(ui, job);
+            } else {
+                ui.add(egui::Label::new(job).wrap());
+            }
+            return;
+        }
         let mut selected = None;
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            ui.spacing_mut().button_padding.x = 1.0;
-            for run in runs {
-                let start = run.span.start.max(span.start);
-                let end = run.span.end.min(span.end);
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, LINE_HEIGHT - BODY_SIZE * 1.2);
+            ui.spacing_mut().button_padding = egui::vec2(1.0, 0.0);
+            ui.spacing_mut().interact_size.y = 0.0;
+            for (run, node) in &runs.runs {
+                let start = run.start.max(span.start);
+                let end = run.end.min(span.end);
                 if start >= end {
                     continue;
                 }
                 let text = &text[start..end];
-                if let Some(id) = run.node_id {
+                if let Some(id) = *node {
                     let response = ui.selectable_label(
                         self.node == Some(id),
                         RichText::new(text)
-                            .size(17.0)
+                            .size(BODY_SIZE)
+                            .line_height(Some(LINE_HEIGHT))
                             .color(if self.node == Some(id) {
                                 ui.visuals().selection.stroke.color
                             } else {
@@ -293,16 +515,14 @@ impl Reader {
                         selected = Some(id);
                     }
                 } else {
-                    let reason = self.book.fragments.iter().find_map(|f| {
-                        if f.page != self.page || f.span.start >= end || f.span.end <= start {
-                            return None;
-                        }
-                        match &f.status {
-                            Status::Partial(reason) | Status::Unresolved(reason) => Some(reason),
-                            Status::Resolved => None,
-                        }
-                    });
-                    let rich = RichText::new(text).size(17.0);
+                    let reason = runs
+                        .unresolved
+                        .iter()
+                        .find(|(f, _)| f.start < end && f.end > start)
+                        .map(|(_, reason)| reason);
+                    let rich = RichText::new(text)
+                        .size(BODY_SIZE)
+                        .line_height(Some(LINE_HEIGHT));
                     let response = ui.add(
                         egui::Label::new(if reason.is_some() {
                             rich.weak().underline()
@@ -330,16 +550,20 @@ impl Reader {
         egui::ScrollArea::vertical()
             .id_salt(("book-page", self.id, self.page))
             .max_height(height)
+            .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.set_max_width(ui.available_width().min(MEASURE));
                 let blocks = if page.blocks.is_empty() {
                     vec![crate::books::document::Block {
                         span: 0..page.text.len(),
                         kind: BlockKind::Paragraph,
+                        level: 0,
                     }]
                 } else {
                     page.blocks.clone()
                 };
-                for block in blocks {
+                let mut previous_heading = false;
+                for (index, block) in blocks.into_iter().enumerate() {
                     match &block.kind {
                         BlockKind::Image { path, alt } => {
                             if !self.textures.contains_key(path)
@@ -389,14 +613,19 @@ impl Reader {
                                 }
                             }
                         }
-                        BlockKind::Heading => {
-                            ui.heading(page.text.get(block.span.clone()).unwrap_or_default());
-                        }
+                        BlockKind::Heading => heading(
+                            ui,
+                            page.text.get(block.span.clone()).unwrap_or_default(),
+                            block.heading_level().saturating_sub(self.top_level),
+                            index == 0,
+                            previous_heading,
+                        ),
                         _ => {
                             self.paragraph(ui, &page.text, &block.span, follow);
                         }
                     }
-                    ui.add_space(14.0);
+                    previous_heading = block.kind == BlockKind::Heading;
+                    ui.add_space(if previous_heading { 10.0 } else { 14.0 });
                 }
                 for fragment in self.book.fragments.iter().filter(|f| f.page == self.page) {
                     if let Status::Partial(reason) | Status::Unresolved(reason) = &fragment.status {
@@ -505,6 +734,38 @@ impl Reader {
             });
     }
 }
+impl Reader {
+    fn contents_menu(&mut self, ui: &mut Ui) {
+        if self.contents.is_empty() {
+            return;
+        }
+        let mut jump = None;
+        ui.menu_button("Contents", |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(420.0)
+                .show(ui, |ui| {
+                    for (page, level, title) in &self.contents {
+                        ui.horizontal(|ui| {
+                            ui.add_space(f32::from(level.saturating_sub(1)) * 14.0);
+                            let text = RichText::new(title);
+                            let text = if *level == 1 { text.strong() } else { text };
+                            if ui
+                                .selectable_label(*page == self.page, text)
+                                .on_hover_text(format!("Page {}", page + 1))
+                                .clicked()
+                            {
+                                jump = Some(*page);
+                                ui.close();
+                            }
+                        });
+                    }
+                });
+        });
+        if let Some(page) = jump {
+            self.change_page(page);
+        }
+    }
+}
 impl Woodpeck {
     pub(super) fn save_reader(&mut self) {
         let Some(reader) = &mut self.books.reader else {
@@ -561,6 +822,7 @@ impl Woodpeck {
                 reader.change_page(page - 1);
             }
             ui.label(format!("/ {}", reader.book.document.pages.len()));
+            reader.contents_menu(ui);
             if ui
                 .add_enabled(
                     reader.page + 1 < reader.book.document.pages.len(),
@@ -579,20 +841,41 @@ impl Woodpeck {
             260.0
         };
         if mode == LayoutMode::Columns {
-            ui.columns(2, |columns| {
-                reader.text(&mut columns[0], height);
-                let size = columns[1]
-                    .available_width()
-                    .min((height - controls_and_moves).max(80.0));
-                reader.position(&mut columns[1], size, &self.settings);
+            // The board takes what the height allows, up to about half the width; the text
+            // keeps the rest and never grows past a comfortable line length.
+            let total = ui.available_width();
+            let gap = 24.0;
+            let board = (height - controls_and_moves).min(total * 0.52).max(80.0);
+            let text_width = (total - board - gap).clamp(200.0, MEASURE + 16.0);
+            let area = ui.available_rect_before_wrap();
+            let column = |x: f32, width: f32| {
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_size(
+                        egui::pos2(area.left() + x, area.top()),
+                        egui::vec2(width, height),
+                    ))
+                    .layout(egui::Layout::top_down(egui::Align::Min))
+            };
+            ui.scope_builder(column(0.0, text_width), |ui| reader.text(ui, height));
+            // The controls and move list get the whole remaining column, not just the board's
+            // width, so a short window does not cramp them.
+            let pane = (total - text_width - gap).max(board);
+            ui.scope_builder(column(text_width + gap, pane), |ui| {
+                reader.position(ui, board, &self.settings);
             });
+            ui.allocate_rect(area, egui::Sense::hover());
         } else {
-            let text_height = (height * 0.32).max(80.0);
-            reader.text(ui, text_height);
-            ui.separator();
+            // Stacked: a board big enough to read, and the rest of the height for the text.
+            let reserve = controls_and_moves - 150.0;
             let size = ui
                 .available_width()
-                .min((height - text_height - controls_and_moves).max(80.0));
+                .min(height * 0.42)
+                .min(420.0)
+                .min(height - reserve - 100.0)
+                .max(80.0);
+            let text_height = (height - size - reserve).max(80.0);
+            reader.text(ui, text_height);
+            ui.separator();
             reader.position(ui, size, &self.settings);
         }
         if previous != reader.node && reader.node.is_some() && self.screenshot.is_none() {
@@ -620,6 +903,29 @@ impl Drop for Woodpeck {
 mod tests {
     use super::*;
     use crate::books::document::{Document, Page};
+    #[test]
+    fn chapters_are_the_repeated_imported_level() {
+        let mut page = Page::default();
+        page.heading("Book title", 1);
+        page.heading("Chapter one", 2);
+        page.heading("Chapter two", 2);
+        page.heading("A section", 3);
+        page.heading("Another section", 3);
+        assert_eq!(chapter_level(std::slice::from_ref(&page)), 2);
+        // Headings without a level (older imports, the demo) stay sections.
+        let mut old = Page::default();
+        old.push("Subtitle", BlockKind::Heading);
+        old.push("Another", BlockKind::Heading);
+        assert_eq!(chapter_level(&[old]), 1);
+    }
+    #[test]
+    fn capitals_are_display_text_but_notation_is_not() {
+        assert!(all_caps("DESCRIPTION OF THE CHESS-BOARD AND MEN."));
+        assert!(all_caps("CHAPTER I."));
+        assert!(!all_caps("Chapter I."));
+        assert!(!all_caps("P-K4 P-K4"));
+        assert!(!all_caps("1. R - K 4 K R - K 1"));
+    }
     fn book() -> Book {
         let mut first = Page::default();
         first.push("1. e4 (1. d4 d5) e5", BlockKind::Paragraph);
