@@ -891,18 +891,22 @@ impl Woodpeck {
             });
             ui.allocate_rect(area, egui::Sense::hover());
         } else {
-            // Stacked: a board big enough to read, and the rest of the height for the text.
-            let reserve = controls_and_moves - 150.0;
-            let size = ui
-                .available_width()
-                .min(height * 0.42)
-                .min(420.0)
-                .min(height - reserve - 100.0)
-                .max(80.0);
-            let text_height = (height - size - reserve).max(80.0);
-            reader.text(ui, text_height);
-            ui.separator();
-            reader.position(ui, size, &self.settings);
+            // Short windows scroll the board and controls together, preserving readable
+            // squares and access to the move list instead of squeezing the board to an icon.
+            egui::ScrollArea::vertical()
+                .id_salt(("reader-stacked", reader.id))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let size = ui.available_width().min(320.0);
+                    let text_height = (height * 0.45).clamp(160.0, 420.0);
+                    reader.text(ui, text_height);
+                    ui.separator();
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(size, size + controls_and_moves),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| reader.position(ui, size, &self.settings),
+                    );
+                });
         }
         if previous != reader.node && reader.node.is_some() && self.screenshot.is_none() {
             crate::sound::play(crate::sound::Event::Move, &self.settings);

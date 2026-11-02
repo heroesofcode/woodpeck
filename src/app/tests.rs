@@ -822,6 +822,38 @@ fn set_creation_queues_once_and_preserves_library_snapshot() {
     assert_eq!(app.screen, Screen::Training);
 }
 
+fn action_is_visible(
+    shape: &egui::epaint::Shape,
+    clip: egui::Rect,
+    viewport: egui::Rect,
+    label: &str,
+) -> bool {
+    match shape {
+        egui::epaint::Shape::Vec(shapes) => shapes
+            .iter()
+            .any(|s| action_is_visible(s, clip, viewport, label)),
+        egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+            let rect = text.galley.rect.translate(text.pos.to_vec2());
+            clip.expand(1.0).contains_rect(rect) && viewport.contains_rect(rect)
+        }
+        _ => false,
+    }
+}
+
+fn readable_board_squares(shape: &egui::epaint::Shape) -> usize {
+    match shape {
+        egui::epaint::Shape::Vec(shapes) => shapes.iter().map(readable_board_squares).sum(),
+        egui::epaint::Shape::Rect(r)
+            if r.rect.width() >= 28.0
+                && r.rect.width() <= 40.0
+                && (r.rect.width() - r.rect.height()).abs() < 0.1 =>
+        {
+            1
+        }
+        _ => 0,
+    }
+}
+
 fn check_visible_action_text(
     shape: &egui::epaint::Shape,
     clip: egui::Rect,
@@ -952,17 +984,63 @@ fn solving_actions_are_visible_in_the_viewport_for_every_size_and_feedback_state
     }
 }
 
+fn check_reader_scroll(ctx: &egui::Context, app: &mut Woodpeck, width: f32, height: f32) {
+    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
+    let mut flip_visible = false;
+    let mut readable_board = false;
+    // A readable board takes more height than the short viewport. Its controls
+    // must be reachable by scrolling the board area, rather than clipped away.
+    for _ in 0..8 {
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(viewport),
+                events: vec![
+                    egui::Event::PointerMoved(egui::pos2(width / 2.0, height - 20.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -100.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| app.draw(ui),
+        );
+        readable_board |= output
+            .shapes
+            .iter()
+            .map(|s| readable_board_squares(&s.shape))
+            .sum::<usize>()
+            >= 8;
+        flip_visible |= output
+            .shapes
+            .iter()
+            .any(|s| action_is_visible(&s.shape, s.clip_rect, viewport, "Flip board"));
+        output.drop_without_applying_deltas();
+    }
+    assert!(
+        flip_visible,
+        "board controls must be reachable by scrolling"
+    );
+    assert!(
+        readable_board,
+        "board squares must remain readable at {width}x{height}"
+    );
+}
+
 #[test]
 fn book_library_and_reader_fit_responsive_windows() {
-    let ctx = egui::Context::default();
-    let mut app = Woodpeck::new(
-        &ctx,
-        demo::service().unwrap(),
-        PathBuf::from("demo.db"),
-        None,
-    );
-    settle(&mut app);
     for (width, height) in [(360.0, 640.0), (900.0, 1000.0), (1920.0, 1080.0)] {
+        let ctx = egui::Context::default();
+        let mut app = Woodpeck::new(
+            &ctx,
+            demo::service().unwrap(),
+            PathBuf::from("demo.db"),
+            None,
+        );
+        settle(&mut app);
         for screen in [Screen::Books, Screen::Reader] {
             if screen == Screen::Reader {
                 app.refresh_books(true);
@@ -992,7 +1070,7 @@ fn book_library_and_reader_fit_responsive_windows() {
                         "A small guide to active pieces",
                     ]
                 } else {
-                    vec!["< Library", "Flip board", "Next page >"]
+                    vec!["< Library", "Next page >"]
                 };
                 let mut found = Vec::new();
                 for shape in &output.shapes {
@@ -1011,6 +1089,9 @@ fn book_library_and_reader_fit_responsive_windows() {
                     );
                 }
                 output.drop_without_applying_deltas();
+            }
+            if screen == Screen::Reader && width < 900.0 {
+                check_reader_scroll(&ctx, &mut app, width, height);
             }
         }
     }
