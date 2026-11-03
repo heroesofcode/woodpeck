@@ -610,7 +610,9 @@ fn resolve_tokens(
                 let floating = context.floating;
                 let fresh = fragment.nodes.is_empty() && !active;
                 let fit = |pos: &Chess| legal_run(pos, ts, i + 1, text, alphabet);
-                let rewound_from_a_move = context.parent.is_some();
+                // A rewind that cannot hang from this fragment must leave the line where it was.
+                let unrewound = (context.parent.is_some() && !fragment.nodes.is_empty())
+                    .then(|| context.clone());
                 let sought = if n == 0 {
                     Err(Miss::Unknown)
                 } else if floating && blocked {
@@ -634,13 +636,13 @@ fn resolve_tokens(
                     };
                     fail(fragment, reason);
                     blocked = true;
-                } else if rewound_from_a_move
-                    && !fragment.nodes.is_empty()
-                    && context.parent.is_none()
-                    && fen(&context.pos) != fragment.start_fen
+                } else if let Some(unrewound) = unrewound
+                    .filter(|_| context.parent.is_none() && fen(&context.pos) != fragment.start_fen)
                 {
                     // An earlier root (a previous diagram or fragment start) has no node to hang
-                    // these moves from, and this fragment already started elsewhere.
+                    // these moves from, and this fragment already started elsewhere. Later blocks
+                    // still follow the line the fragment had reached.
+                    *context = unrewound;
                     fail(fragment, format!("No known position at move {raw}"));
                     blocked = true;
                 } else if !blocked {
@@ -1537,6 +1539,43 @@ mod image_tests {
         resolve_using(document, Some(&Reads(reading)))
     }
     const AFTER_NF3: &str = "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R";
+    #[test]
+    fn a_rejected_rewind_keeps_the_line_for_the_next_image() {
+        let after_bb5 = "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R";
+        let mut page = Page::default();
+        page.push("1. e4 e5 2. Nf3", BlockKind::Paragraph);
+        page.push(
+            "2... Nc6 3. Bb5, but 1. d4 d5 was also good.",
+            BlockKind::Paragraph,
+        );
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes: vec![0],
+            }],
+        };
+        let b = resolve_using(document, Some(&Reads(reading_of(after_bb5, &[]))));
+        assert!(
+            b.document.pages[0].blocks.iter().any(|block| matches!(
+                &block.kind,
+                BlockKind::RecognizedDiagram { fen, .. } if fen.starts_with(after_bb5)
+            )),
+            "the image after the rejected rewind confirms the line it shows"
+        );
+    }
     #[test]
     fn a_near_reading_lets_the_game_resume_at_its_next_move() {
         let b = around_image(
