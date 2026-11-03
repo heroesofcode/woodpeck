@@ -15,116 +15,87 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Widest a line of book text is allowed to grow, in points (about 75 characters).
-const MEASURE: f32 = 720.0;
-const BODY_SIZE: f32 = 18.0;
-/// Leading for body text, about 1.5 times the type size.
-const LINE_HEIGHT: f32 = 27.0;
+use super::{
+    reader_flow::PageRuns,
+    reader_type::{Paragraph, serif},
+};
 
-/// The page on screen: text runs (clickable moves or prose) and the fragments that could
-/// not be followed, rebuilt only when the page changes.
-struct PageRuns {
-    runs: Vec<(std::ops::Range<usize>, Option<usize>)>,
-    unresolved: Vec<(std::ops::Range<usize>, String)>,
-}
+/// About 68 characters in the embedded reading face at the default size.
+const MEASURE: f32 = 660.0;
 
-/// Bold face for headings; it falls back to the regular face when the system has no bold.
-fn bold(size: f32) -> egui::FontId {
-    egui::FontId::new(size, egui::FontFamily::Name("bold".into()))
-}
-
-/// Text set in capitals throughout, which reads better letter-spaced at a smaller size.
-fn all_caps(text: &str) -> bool {
-    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
-    letters >= 4
-        && text.chars().all(|c| !c.is_lowercase())
-        && text
-            .split(|c: char| !c.is_alphabetic())
-            .any(|word| word.chars().count() >= 4)
-}
-
-/// One run of text in the given face, letter-spaced when it is set in capitals.
-fn styled(
-    text: &str,
-    font: egui::FontId,
-    color: egui::Color32,
-    wrap: f32,
-) -> egui::text::LayoutJob {
-    let caps = all_caps(text);
-    let size = font.size;
-    let mut job = egui::text::LayoutJob::single_section(
-        text.to_owned(),
-        egui::TextFormat {
-            extra_letter_spacing: if caps { size * 0.08 } else { 0.0 },
-            line_height: Some(size * 1.3),
-            font_id: font,
-            color,
-            ..Default::default()
-        },
-    );
-    job.wrap.max_width = wrap;
-    job
-}
-
-/// A heading in the type scale. `rank` 0 is the book's top level (chapters), which opens
-/// with a break; the levels below step down in size so sections stand apart from text.
 fn heading(ui: &mut Ui, text: &str, rank: u8, first: bool, after_heading: bool) {
-    let text = text.trim();
-    if !first && !after_heading {
-        if rank == 0 {
-            ui.add_space(44.0);
-            ui.separator();
-            ui.add_space(36.0);
-        } else {
-            ui.add_space(if rank == 1 { 26.0 } else { 14.0 });
-        }
-    } else if first && rank == 0 {
-        ui.add_space(28.0);
+    if first {
+        ui.add_space(12.0);
+    } else if !after_heading {
+        ui.add_space(if rank == 0 { 24.0 } else { 14.0 });
     }
-    let size = heading_size(rank)
-        * if rank >= 2 && all_caps(text) {
-            0.9
-        } else {
-            1.0
-        };
-    let color = ui.visuals().strong_text_color();
-    let job = styled(text, bold(size), color, ui.available_width());
-    embolden(ui, job);
-    if rank == 0 {
-        // A short accent rule under chapter titles marks the chapter opening.
-        ui.add_space(10.0);
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 3.0), egui::Sense::hover());
-        ui.painter()
-            .rect_filled(rect, 1.5, ui.visuals().selection.stroke.color);
-        ui.add_space(6.0);
+    let size = if after_heading {
+        20.0
+    } else {
+        heading_size(rank)
     }
+    .min(ui.available_width() / 7.0);
+    let rich = RichText::new(text.trim())
+        .font(serif(size, rank > 0 && !after_heading))
+        .line_height(Some(size * 1.2));
+    ui.add(egui::Label::new(if after_heading { rich.weak() } else { rich }).wrap());
+    ui.add_space(if rank == 0 { 14.0 } else { 4.0 });
 }
-
-/// Lays out a heading and strikes it twice, a hair apart, so it reads heavier even when the
-/// system only has a variable or regular face (egui cannot pick a weight from those).
-fn embolden(ui: &mut Ui, job: egui::text::LayoutJob) {
-    let size = job
-        .sections
-        .first()
-        .map_or(BODY_SIZE, |s| s.format.font_id.size);
-    let galley = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
-    let (rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
-    if ui.is_rect_visible(rect) {
-        let color = ui.visuals().strong_text_color();
-        let painter = ui.painter();
-        painter.galley(rect.min, galley.clone(), color);
-        painter.galley(rect.min + egui::vec2(size * 0.035, 0.0), galley, color);
-    }
-}
-
-/// Type size for a heading rank, from chapter titles down to minor headings.
 fn heading_size(rank: u8) -> f32 {
     match rank {
-        0 => 40.0,
-        1 => 29.0,
+        0 => 36.0,
+        1 => 27.0,
         2 => 23.0,
         _ => 20.0,
     }
+}
+
+/// Neutral paper and ink remain independent of saturated desktop accent palettes.
+fn paper(ui: &mut Ui, theme: crate::settings::ReadingTheme) -> egui::Color32 {
+    use crate::settings::ReadingTheme;
+    let dark =
+        theme == ReadingTheme::Dark || (theme == ReadingTheme::Auto && ui.visuals().dark_mode);
+    let (background, ink, muted, accent, selection) = if dark {
+        (
+            0x0024_2625,
+            0x00e5_e2da,
+            0x00ab_aea8,
+            0x00a9_ccba,
+            0x0036_4b40,
+        )
+    } else if theme == ReadingTheme::Sepia {
+        (
+            0x00f3_e9d5,
+            0x0030_2b23,
+            0x0071_634f,
+            0x0030_5e50,
+            0x00d7_ddc7,
+        )
+    } else {
+        (
+            0x00fa_f9f6,
+            0x0029_2d2a,
+            0x006b_706a,
+            0x0030_654e,
+            0x00dc_e9df,
+        )
+    };
+    let rgb = |hex: u32| {
+        let bytes = hex.to_be_bytes();
+        egui::Color32::from_rgb(bytes[1], bytes[2], bytes[3])
+    };
+    let visuals = ui.visuals_mut();
+    *visuals = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    visuals.override_text_color = Some(rgb(ink));
+    visuals.weak_text_color = Some(rgb(muted));
+    visuals.hyperlink_color = rgb(accent);
+    visuals.selection.bg_fill = rgb(selection);
+    visuals.selection.stroke.color = rgb(accent);
+    rgb(background)
 }
 
 pub(super) struct Reader {
@@ -142,7 +113,8 @@ pub(super) struct Reader {
     follow_moves: bool,
     textures: std::collections::HashMap<String, egui::TextureHandle>,
     /// Text runs of the page on screen, rebuilt only when the page changes.
-    runs: Option<(usize, Rc<PageRuns>)>,
+    runs: std::collections::VecDeque<(usize, Rc<PageRuns>)>,
+    paragraphs: std::collections::HashMap<(usize, usize), Option<Paragraph>>,
     /// Chapter headings across the book: (page, level, title).
     contents: Vec<(usize, u8, String)>,
     /// Highest heading level the book uses, so its chapters get the chapter style.
@@ -249,7 +221,8 @@ impl Reader {
             follow: false,
             follow_moves: false,
             textures: std::collections::HashMap::default(),
-            runs: None,
+            runs: std::collections::VecDeque::new(),
+            paragraphs: std::collections::HashMap::new(),
             contents: Vec::new(),
             top_level: 1,
             notice: None,
@@ -437,217 +410,182 @@ impl Reader {
         }
     }
     fn page_runs(&mut self) -> Rc<PageRuns> {
-        if let Some((page, runs)) = &self.runs
-            && *page == self.page
-        {
+        if let Some((_, runs)) = self.runs.iter().find(|(page, _)| *page == self.page) {
             return runs.clone();
         }
-        let runs = Rc::new(PageRuns {
-            runs: self
-                .book
-                .text_runs(self.page)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|run| (run.span, run.node_id))
-                .collect(),
-            unresolved: self
-                .book
-                .fragments
-                .iter()
-                .filter(|f| f.page == self.page)
-                .filter_map(|f| match &f.status {
-                    Status::Partial(reason) | Status::Unresolved(reason) => {
-                        Some((f.span.clone(), reason.clone()))
-                    }
-                    Status::Resolved => None,
-                })
-                .collect(),
-        });
-        self.runs = Some((self.page, runs.clone()));
+        let runs = Rc::new(PageRuns::new(&self.book, self.page));
+        if self.runs.len() >= 6
+            && let Some((page, _)) = self.runs.pop_front()
+        {
+            self.paragraphs.retain(|(p, _), _| *p != page);
+        }
+        self.runs.push_back((self.page, runs.clone()));
         runs
     }
-    fn paragraph(&mut self, ui: &mut Ui, text: &str, span: &std::ops::Range<usize>, follow: bool) {
-        let runs = self.page_runs();
-        let plain = text.get(span.clone()).unwrap_or_default().trim();
-        if all_caps(plain)
-            && !runs
+    fn paragraph(
+        &mut self,
+        ui: &mut Ui,
+        page: &PageRuns,
+        span: &std::ops::Range<usize>,
+        size: f32,
+        follow: bool,
+    ) {
+        let text = &page.page.text[span.clone()];
+        if crate::books::reflow::caption(text)
+            && !page
                 .runs
                 .iter()
-                .any(|(r, n)| n.is_some() && r.start < span.end && r.end > span.start)
-            && !runs
-                .unresolved
-                .iter()
-                .any(|(r, _)| r.start < span.end && r.end > span.start)
+                .any(|(run, node)| node.is_some() && run.start < span.end && run.end > span.start)
         {
-            // Display lines set in capitals (summaries, captions, run-in heads) read as
-            // letter-spaced small capitals rather than as shouted body text.
-            let short = plain.len() <= 80 && plain.split_whitespace().count() >= 3;
-            let (font, color) = if short {
-                (bold(BODY_SIZE * 0.9), ui.visuals().strong_text_color())
-            } else {
-                (
-                    egui::FontId::proportional(BODY_SIZE * 0.82),
-                    ui.visuals().weak_text_color(),
-                )
-            };
-            let job = styled(plain, font, color, ui.available_width());
-            if short {
-                embolden(ui, job);
-            } else {
-                ui.add(egui::Label::new(job).wrap());
-            }
+            ui.vertical_centered(|ui| {
+                ui.add(egui::Label::new(RichText::new(text).size(size * 0.8).weak()).wrap());
+            });
             return;
         }
-        let mut selected = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(0.0, LINE_HEIGHT - BODY_SIZE * 1.2);
-            ui.spacing_mut().button_padding = egui::vec2(1.0, 0.0);
-            ui.spacing_mut().interact_size.y = 0.0;
-            for (run, node) in &runs.runs {
-                let start = run.start.max(span.start);
-                let end = run.end.min(span.end);
-                if start >= end {
-                    continue;
-                }
-                let text = &text[start..end];
-                if let Some(id) = *node {
-                    let response = ui.selectable_label(
-                        self.node == Some(id),
-                        RichText::new(text)
-                            .size(BODY_SIZE)
-                            .line_height(Some(LINE_HEIGHT))
-                            .color(if self.node == Some(id) {
-                                ui.visuals().selection.stroke.color
-                            } else {
-                                ui.visuals().hyperlink_color
-                            }),
-                    );
-                    if self.node == Some(id) && follow {
-                        response.scroll_to_me(Some(egui::Align::Center));
-                    }
-                    if response.clicked() {
-                        selected = Some(id);
-                    }
-                } else {
-                    let reason = runs
-                        .unresolved
-                        .iter()
-                        .find(|(f, _)| f.start < end && f.end > start)
-                        .map(|(_, reason)| reason);
-                    let rich = RichText::new(text)
-                        .size(BODY_SIZE)
-                        .line_height(Some(LINE_HEIGHT));
-                    let response = ui.add(
-                        egui::Label::new(if reason.is_some() {
-                            rich.weak().underline()
-                        } else {
-                            rich
-                        })
-                        .wrap(),
-                    );
-                    if let Some(reason) = reason {
-                        response.on_hover_text(format!("Couldn't follow these moves: {reason}"));
-                    }
-                }
-            }
-        });
-        if let Some(id) = selected {
+        let cache = self.paragraphs.entry((self.page, span.start)).or_default();
+        if let Some(id) = Paragraph::show(cache, ui, page, span.clone(), size, self.node, follow) {
             self.select(id);
         }
     }
-    fn text(&mut self, ui: &mut Ui, height: f32) {
-        let Some(page) = self.book.document.pages.get(self.page).cloned() else {
+    fn illustration(
+        &mut self,
+        ui: &mut Ui,
+        block: &crate::books::document::Block,
+        settings: &crate::settings::Settings,
+    ) {
+        match &block.kind {
+            BlockKind::Image { path, alt } => {
+                if !self.textures.contains_key(path)
+                    && let Some(asset) = self.book.document.assets.iter().find(|a| &a.path == path)
+                    && let Some(color) = asset_image(&asset.bytes, 1600)
+                {
+                    self.textures.insert(
+                        path.clone(),
+                        ui.ctx()
+                            .load_texture(path, color, egui::TextureOptions::default()),
+                    );
+                }
+                if let Some(texture) = self.textures.get(path) {
+                    ui.vertical_centered(|ui| {
+                        ui.add(
+                            egui::Image::new(texture)
+                                .max_width(ui.available_width())
+                                .max_height(260.0),
+                        );
+                        if !alt.trim().is_empty() {
+                            ui.small(alt);
+                        }
+                    });
+                } else {
+                    ui.weak(alt);
+                }
+            }
+            BlockKind::Diagram { fen } | BlockKind::RecognizedDiagram { fen, .. } => {
+                if let Some(position) = crate::books::resolve::position(fen) {
+                    ui.vertical_centered(|ui| {
+                        let mut board = BoardWidget::default();
+                        board.reader_orientation = Some(self.white);
+                        board.show(
+                            ui,
+                            &Engine::reading(position),
+                            ui.available_width().min(220.0),
+                            settings.board_theme,
+                            settings.piece_rendering,
+                        );
+                        if board.clicked(ui) || ui.small_button("Explore diagram >").clicked() {
+                            self.fen.clone_from(fen);
+                            self.node = None;
+                            self.dirty = Some(Instant::now());
+                        }
+                        if let BlockKind::RecognizedDiagram { alt, .. } = &block.kind
+                            && !alt.trim().is_empty()
+                        {
+                            ui.small(alt);
+                        }
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    fn text(&mut self, ui: &mut Ui, height: f32, settings: &crate::settings::Settings) {
+        if self.book.document.pages.get(self.page).is_none() {
             ui.label("This book has no pages.");
             return;
-        };
-        let follow = std::mem::take(&mut self.follow);
-        egui::ScrollArea::vertical()
-            .id_salt(("book-page", self.id, self.page))
-            .max_height(height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_max_width(ui.available_width().min(MEASURE));
-                let blocks = if page.blocks.is_empty() {
-                    vec![crate::books::document::Block {
-                        span: 0..page.text.len(),
-                        kind: BlockKind::Paragraph,
-                        level: 0,
-                    }]
-                } else {
-                    page.blocks.clone()
-                };
-                let mut previous_heading = false;
-                for (index, block) in blocks.into_iter().enumerate() {
-                    match &block.kind {
-                        BlockKind::Image { path, alt } => {
-                            if !self.textures.contains_key(path)
-                                && let Some(asset) =
-                                    self.book.document.assets.iter().find(|a| &a.path == path)
-                                && let Some(color) = asset_image(&asset.bytes, 1600)
-                            {
-                                self.textures.insert(
-                                    path.clone(),
-                                    ui.ctx().load_texture(
-                                        path,
-                                        color,
-                                        egui::TextureOptions::default(),
-                                    ),
-                                );
-                            }
-                            if let Some(texture) = self.textures.get(path) {
-                                ui.add(
-                                    egui::Image::new(texture)
-                                        .max_width(ui.available_width())
-                                        .max_height(260.0),
-                                );
-                            } else {
-                                ui.weak(alt);
-                            }
-                        }
-                        BlockKind::Diagram { fen } | BlockKind::RecognizedDiagram { fen, .. } => {
-                            if matches!(block.kind, BlockKind::RecognizedDiagram { .. }) {
-                                ui.weak("Position read from the book's diagram image");
-                            }
-                            if let Some(position) = crate::books::resolve::position(fen) {
-                                let mut board = BoardWidget::default();
-                                board.reader_orientation = Some(self.white);
-                                board.show(
-                                    ui,
-                                    &Engine::reading(position),
-                                    180.0,
-                                    crate::settings::Settings::default().board_theme,
-                                    crate::settings::Settings::default().piece_rendering,
-                                );
-                                if board.clicked(ui)
-                                    || ui.small_button("Explore diagram >").clicked()
-                                {
-                                    self.fen.clone_from(fen);
-                                    self.node = None;
-                                    self.dirty = Some(Instant::now());
+        }
+        let runs = self.page_runs();
+        let page = &runs.page;
+        let size = f32::from(settings.reader_font_size.clamp(16, 28));
+        let margin = if ui.available_width() < 400.0 { 18 } else { 36 };
+        ui.scope(|ui| {
+            let background = paper(ui, settings.reader_theme);
+            egui::Frame::new()
+                .fill(background)
+                .corner_radius(4)
+                .inner_margin(margin)
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    let height = (height - f32::from(margin) * 2.0).max(80.0);
+                    let follow = std::mem::take(&mut self.follow);
+                    egui::ScrollArea::vertical()
+                        .id_salt(("book-page", self.id, self.page))
+                        .max_height(height)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let width = ui.available_width().min(MEASURE * size / 20.0);
+                            let inset = ((ui.available_width() - width) / 2.0).max(0.0);
+                            let rect = egui::Rect::from_min_size(
+                                ui.cursor().min + egui::vec2(inset, 0.0),
+                                egui::vec2(width, 0.0),
+                            );
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                                ui.set_width(width);
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                let blocks = &page.blocks;
+                                let mut previous_heading = false;
+                                for (index, block) in blocks.iter().enumerate() {
+                                    match &block.kind {
+                                        BlockKind::Image { .. }
+                                        | BlockKind::Diagram { .. }
+                                        | BlockKind::RecognizedDiagram { .. } => {
+                                            self.illustration(ui, block, settings);
+                                        }
+                                        BlockKind::Heading => heading(
+                                            ui,
+                                            page.text.get(block.span.clone()).unwrap_or_default(),
+                                            if block.level == 0 && index == 0 {
+                                                0
+                                            } else {
+                                                block.heading_level().saturating_sub(self.top_level)
+                                            },
+                                            index == 0,
+                                            previous_heading,
+                                        ),
+                                        _ => {
+                                            ui.push_id(index, |ui| {
+                                                self.paragraph(
+                                                    ui,
+                                                    &runs,
+                                                    &block.span,
+                                                    size,
+                                                    follow,
+                                                );
+                                            });
+                                        }
+                                    }
+                                    previous_heading = block.kind == BlockKind::Heading;
+                                    ui.add_space(if previous_heading { 8.0 } else { size * 0.65 });
                                 }
-                            }
-                        }
-                        BlockKind::Heading => heading(
-                            ui,
-                            page.text.get(block.span.clone()).unwrap_or_default(),
-                            block.heading_level().saturating_sub(self.top_level),
-                            index == 0,
-                            previous_heading,
-                        ),
-                        _ => {
-                            self.paragraph(ui, &page.text, &block.span, follow);
-                        }
-                    }
-                    previous_heading = block.kind == BlockKind::Heading;
-                    ui.add_space(if previous_heading { 10.0 } else { 14.0 });
-                }
-                for fragment in self.book.fragments.iter().filter(|f| f.page == self.page) {
-                    if let Status::Partial(reason) | Status::Unresolved(reason) = &fragment.status {
-                        ui.weak("··· Unresolved moves")
-                            .on_hover_text(format!("Couldn't follow these moves: {reason}"));
-                    }
-                }
-            });
+                                for (_, reason) in &runs.unresolved {
+                                    ui.weak("··· Unresolved moves").on_hover_text(format!(
+                                        "Couldn't follow these moves: {reason}"
+                                    ));
+                                }
+                                ui.add_space(20.0);
+                            });
+                        });
+                });
+        });
     }
     fn position(&mut self, ui: &mut Ui, size: f32, settings: &crate::settings::Settings) {
         if let Some(position) = crate::books::resolve::position(&self.fen) {
@@ -749,6 +687,143 @@ impl Reader {
     }
 }
 impl Reader {
+    fn layout(&mut self, ui: &mut Ui, mode: LayoutMode, settings: &crate::settings::Settings) {
+        let height = ui.available_height();
+        let controls_and_moves = if self.children().len() > 1 {
+            300.0
+        } else {
+            260.0
+        };
+        if mode == LayoutMode::Columns {
+            // Reserve a bounded analysis pane; the reading page gets the remaining width
+            // and centers its text within a comfortable measure.
+            let total = ui.available_width();
+            let gap = 28.0;
+            let pane = (total * 0.32).clamp(260.0, 420.0);
+            let board = (height - controls_and_moves).min(pane).max(180.0);
+            let text_width = total - pane - gap;
+            let area = ui.available_rect_before_wrap();
+            let column = |x: f32, width: f32| {
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_size(
+                        egui::pos2(area.left() + x, area.top()),
+                        egui::vec2(width, height),
+                    ))
+                    .layout(egui::Layout::top_down(egui::Align::Min))
+            };
+            ui.scope_builder(column(0.0, text_width), |ui| {
+                self.text(ui, height, settings);
+            });
+            // The controls and move list get the whole remaining column, not just the board's
+            // width, so a short window does not cramp them.
+            let pane = (total - text_width - gap).max(board);
+            ui.scope_builder(column(text_width + gap, pane), |ui| {
+                widgets::caption(ui, "EXPLORE THE POSITION");
+                ui.add_space(8.0);
+                self.position(ui, board, settings);
+            });
+            ui.allocate_rect(area, egui::Sense::hover());
+        } else {
+            // Short windows scroll the board and controls together, preserving readable
+            // squares and access to the move list instead of squeezing the board to an icon.
+            egui::ScrollArea::vertical()
+                .id_salt(("reader-stacked", self.id))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let size = ui.available_width().min(320.0);
+                    let text_height = if ui.available_width() < 500.0 {
+                        (height * 0.7).clamp(260.0, 420.0)
+                    } else {
+                        (height * 0.45).clamp(260.0, 420.0)
+                    };
+                    self.text(ui, text_height, settings);
+                    ui.separator();
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(size, size + controls_and_moves),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| self.position(ui, size, settings),
+                    );
+                });
+        }
+    }
+    fn toolbar(&mut self, ui: &mut Ui, settings: &mut crate::settings::Settings) {
+        if let Some(notice) = &self.notice {
+            let mut dismiss = false;
+            widgets::card(ui).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(notice);
+                    dismiss = ui.small_button("Got it").clicked();
+                });
+            });
+            if dismiss {
+                self.notice = None;
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
+            if ui
+                .add_enabled(self.page > 0, egui::Button::new("‹"))
+                .on_hover_text("Previous page · Page Up")
+                .clicked()
+            {
+                self.change_page(self.page - 1);
+            }
+            ui.menu_button(
+                format!("{} / {}", self.page + 1, self.book.document.pages.len()),
+                |ui| {
+                    ui.label("Go to page");
+                    let mut page = self.page + 1;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut page)
+                                .range(1..=self.book.document.pages.len().max(1)),
+                        )
+                        .changed()
+                    {
+                        self.change_page(page - 1);
+                    }
+                },
+            );
+            if ui
+                .add_enabled(
+                    self.page + 1 < self.book.document.pages.len(),
+                    egui::Button::new("›"),
+                )
+                .on_hover_text("Next page · Page Down")
+                .clicked()
+            {
+                self.change_page(self.page + 1);
+            }
+            self.contents_menu(ui);
+            ui.menu_button("Aa", |ui| {
+                ui.spacing_mut().slider_width = 160.0;
+                ui.label("Reading appearance");
+                ui.add(
+                    egui::Slider::new(&mut settings.reader_font_size, 16..=28).text("Text size"),
+                );
+                ui.horizontal(|ui| {
+                    use crate::settings::ReadingTheme;
+                    for (theme, name) in [
+                        (ReadingTheme::Auto, "Auto"),
+                        (ReadingTheme::Light, "Light"),
+                        (ReadingTheme::Sepia, "Sepia"),
+                        (ReadingTheme::Dark, "Dark"),
+                    ] {
+                        ui.selectable_value(&mut settings.reader_theme, theme, name);
+                    }
+                });
+            })
+            .response
+            .on_hover_text("Text size and paper color");
+        });
+        let fraction = (self.page + 1) as f32 / self.book.document.pages.len().max(1) as f32;
+        ui.add(
+            egui::ProgressBar::new(fraction)
+                .desired_height(2.0)
+                .desired_width(ui.available_width()),
+        );
+        ui.add_space(6.0);
+    }
     fn contents_menu(&mut self, ui: &mut Ui) {
         if self.contents.is_empty() {
             return;
@@ -807,8 +882,25 @@ impl Woodpeck {
         }
     }
     pub(super) fn reader_screen(&mut self, ui: &mut Ui, mode: LayoutMode) {
-        if ui.button("< Library").clicked() {
+        let wide = ui.available_width() >= 700.0;
+        let back = ui
+            .horizontal(|ui| {
+                let back = ui.button("< Library").clicked();
+                if wide && let Some(reader) = &self.books.reader {
+                    ui.add_space(12.0);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&reader.book.document.title).font(serif(23.0, false)),
+                        )
+                        .truncate(),
+                    );
+                }
+                back
+            })
+            .inner;
+        if back {
             self.navigate(Screen::Books);
+            return;
         }
         let Some(reader) = &mut self.books.reader else {
             ui.label("Open a book from your Library.");
@@ -816,100 +908,33 @@ impl Woodpeck {
         };
         let previous = reader.node;
         reader.keyboard(ui);
-        widgets::caption(ui, &reader.book.document.author);
-        ui.heading(&reader.book.document.title);
-        if let Some(notice) = &reader.notice {
-            let mut dismiss = false;
-            widgets::card(ui).show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(notice);
-                    dismiss = ui.small_button("Got it").clicked();
-                });
-            });
-            if dismiss {
-                reader.notice = None;
-            }
-        }
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(reader.page > 0, egui::Button::new("< Previous page"))
-                .clicked()
-            {
-                reader.change_page(reader.page - 1);
-            }
-            let mut page = reader.page + 1;
-            if ui
-                .add(
-                    egui::DragValue::new(&mut page)
-                        .range(1..=reader.book.document.pages.len().max(1)),
+        let settings_before = self.settings.clone();
+        if !wide {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(&reader.book.document.title).font(serif(23.0, false)),
                 )
-                .changed()
-            {
-                reader.change_page(page - 1);
-            }
-            ui.label(format!("/ {}", reader.book.document.pages.len()));
-            reader.contents_menu(ui);
-            if ui
-                .add_enabled(
-                    reader.page + 1 < reader.book.document.pages.len(),
-                    egui::Button::new("Next page >"),
-                )
-                .clicked()
-            {
-                reader.change_page(reader.page + 1);
-            }
-        });
-        ui.add_space(16.0);
-        let height = ui.available_height();
-        let controls_and_moves = if reader.children().len() > 1 {
-            300.0
-        } else {
-            260.0
-        };
-        if mode == LayoutMode::Columns {
-            // The board takes what the height allows, up to about half the width; the text
-            // keeps the rest and never grows past a comfortable line length.
-            let total = ui.available_width();
-            let gap = 24.0;
-            let board = (height - controls_and_moves).min(total * 0.52).max(80.0);
-            let text_width = (total - board - gap).clamp(200.0, MEASURE + 16.0);
-            let area = ui.available_rect_before_wrap();
-            let column = |x: f32, width: f32| {
-                egui::UiBuilder::new()
-                    .max_rect(egui::Rect::from_min_size(
-                        egui::pos2(area.left() + x, area.top()),
-                        egui::vec2(width, height),
-                    ))
-                    .layout(egui::Layout::top_down(egui::Align::Min))
-            };
-            ui.scope_builder(column(0.0, text_width), |ui| reader.text(ui, height));
-            // The controls and move list get the whole remaining column, not just the board's
-            // width, so a short window does not cramp them.
-            let pane = (total - text_width - gap).max(board);
-            ui.scope_builder(column(text_width + gap, pane), |ui| {
-                reader.position(ui, board, &self.settings);
-            });
-            ui.allocate_rect(area, egui::Sense::hover());
-        } else {
-            // Short windows scroll the board and controls together, preserving readable
-            // squares and access to the move list instead of squeezing the board to an icon.
-            egui::ScrollArea::vertical()
-                .id_salt(("reader-stacked", reader.id))
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let size = ui.available_width().min(320.0);
-                    let text_height = (height * 0.45).clamp(160.0, 420.0);
-                    reader.text(ui, text_height);
-                    ui.separator();
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(size, size + controls_and_moves),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| reader.position(ui, size, &self.settings),
-                    );
-                });
+                .truncate(),
+            );
         }
+        if ui.available_width() >= 500.0 {
+            widgets::caption(ui, &reader.book.document.author);
+        }
+        reader.toolbar(ui, &mut self.settings);
+        reader.layout(ui, mode, &self.settings);
         if previous != reader.node && reader.node.is_some() && self.screenshot.is_none() {
             crate::sound::play(crate::sound::Event::Move, &self.settings);
+        }
+        if settings_before != self.settings {
+            let settings = self.settings.clone();
+            self.background(
+                move |service| service.set_settings(&settings),
+                |app, result| {
+                    if let Err(error) = result {
+                        app.error(error);
+                    }
+                },
+            );
         }
         self.save_reader();
     }
@@ -947,14 +972,6 @@ mod tests {
         old.push("Subtitle", BlockKind::Heading);
         old.push("Another", BlockKind::Heading);
         assert_eq!(chapter_level(&[old]), 1);
-    }
-    #[test]
-    fn capitals_are_display_text_but_notation_is_not() {
-        assert!(all_caps("DESCRIPTION OF THE CHESS-BOARD AND MEN."));
-        assert!(all_caps("CHAPTER I."));
-        assert!(!all_caps("Chapter I."));
-        assert!(!all_caps("P-K4 P-K4"));
-        assert!(!all_caps("1. R - K 4 K R - K 1"));
     }
     fn book() -> Book {
         let mut first = Page::default();
@@ -1066,5 +1083,26 @@ mod tests {
         store
             .save_reading_progress(id, &restored.progress())
             .unwrap();
+    }
+
+    #[test]
+    fn page_cache_reuses_reflow_and_evicts_its_layout_together() {
+        let mut book = book();
+        book.document.pages.resize(8, Page::default());
+        let mut reader = Reader::new(1, book, None);
+        let first = reader.page_runs();
+        reader.paragraphs.insert((0, 0), None);
+        reader.change_page(1);
+        reader.page_runs();
+        reader.change_page(0);
+        assert!(Rc::ptr_eq(&first, &reader.page_runs()));
+        for page in 2..8 {
+            reader.change_page(page);
+            reader.page_runs();
+        }
+        assert_eq!(reader.runs.len(), 6);
+        assert!(!reader.paragraphs.contains_key(&(0, 0)));
+        reader.change_page(0);
+        assert!(!Rc::ptr_eq(&first, &reader.page_runs()));
     }
 }

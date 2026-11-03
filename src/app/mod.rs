@@ -11,6 +11,8 @@ mod frame_stats;
 mod library;
 mod pieces;
 mod reader;
+mod reader_flow;
+mod reader_type;
 mod screens;
 mod shell;
 mod shortcuts;
