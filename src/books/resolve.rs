@@ -567,6 +567,8 @@ fn resolve_tokens(
     let mut before = context.clone();
     let mut active = false;
     let mut blocked = false;
+    // Set with `blocked` when a rewind was rejected and the line it would have left restored.
+    let mut kept_line = false;
     let mut i = 0;
     while i < ts.len() {
         let t = &ts[i];
@@ -590,6 +592,7 @@ fn resolve_tokens(
                 before = context.clone();
                 active = false;
                 blocked = false;
+                kept_line = false;
             }
         }
         match t.kind {
@@ -613,15 +616,17 @@ fn resolve_tokens(
                 // A rewind that cannot hang from this fragment must leave the line where it was.
                 let unrewound = (context.parent.is_some() && !fragment.nodes.is_empty())
                     .then(|| context.clone());
+                // An earlier number already failed: a later one must not pin the image's ply, nor
+                // move a line kept after a rejected rewind.
+                let held = blocked && (floating || kept_line);
                 let sought = if n == 0 {
                     Err(Miss::Unknown)
-                } else if floating && blocked {
+                } else if held {
                     Ok(())
                 } else {
                     context.seek(target, fresh, &fit)
                 };
-                if floating && blocked {
-                    // An earlier number already failed: a later one must not pin the image's ply.
+                if held {
                 } else if let Err(miss) = sought {
                     let reason = match miss {
                         Miss::Ambiguous(lines) => format!(
@@ -645,6 +650,7 @@ fn resolve_tokens(
                     *context = unrewound;
                     fail(fragment, format!("No known position at move {raw}"));
                     blocked = true;
+                    kept_line = true;
                 } else if !blocked {
                     if floating {
                         // Variations return to the numbered position, not the unnumbered image.
@@ -657,17 +663,19 @@ fn resolve_tokens(
                 }
             }
             Kind::Open => {
-                stack.push((context.clone(), before.clone(), active, blocked));
+                stack.push((context.clone(), before.clone(), active, blocked, kept_line));
                 *context = before.clone();
                 active = true;
                 blocked = false;
+                kept_line = false;
             }
             Kind::Close => {
-                if let Some((saved, previous, a, b)) = stack.pop() {
+                if let Some((saved, previous, a, b, k)) = stack.pop() {
                     *context = saved;
                     before = previous;
                     active = a;
                     blocked = b;
+                    kept_line = k;
                 }
             }
             Kind::Result => {
@@ -701,6 +709,7 @@ fn resolve_tokens(
                 before = context.clone();
                 active = false;
                 blocked = false;
+                kept_line = false;
             }
             Kind::Comment => {
                 if let Some(id) = context.parent {
@@ -1545,7 +1554,7 @@ mod image_tests {
         let mut page = Page::default();
         page.push("1. e4 e5 2. Nf3", BlockKind::Paragraph);
         page.push(
-            "2... Nc6 3. Bb5, but 1. d4 d5 was also good.",
+            "2... Nc6 3. Bb5, but 1. d4 d5 2. c4 was also good.",
             BlockKind::Paragraph,
         );
         page.push(
