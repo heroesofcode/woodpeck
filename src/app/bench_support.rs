@@ -287,3 +287,51 @@ impl PieceTextures {
         }
     }
 }
+
+/// Reader frame construction and tessellation, using only the repository's study notes.
+pub struct ReaderFrame {
+    frame: TrainingFrame,
+    size: egui::Vec2,
+}
+impl ReaderFrame {
+    pub fn new(width: f32, height: f32) -> Self {
+        let mut frame = TrainingFrame::default();
+        frame.app.refresh_books(true);
+        settle(&mut frame.app);
+        let mut reader = Self {
+            frame,
+            size: egui::vec2(width, height),
+        };
+        for _ in 0..5 {
+            reader.frame(None);
+        }
+        reader
+    }
+    pub fn frame(&mut self, key: Option<egui::Key>) {
+        self.frame.time += Duration::from_millis(16);
+        let events = key
+            .map(|key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+            .into_iter()
+            .collect();
+        let mut output = self.frame.ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
+                time: Some(self.frame.time.as_secs_f64()),
+                events,
+                ..Default::default()
+            },
+            |ui| self.frame.app.draw(ui),
+        );
+        let _ = self
+            .frame
+            .ctx
+            .tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
+        output.drop_without_applying_deltas();
+    }
+}

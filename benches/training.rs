@@ -1,7 +1,7 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::{hint::black_box, time::Duration};
 use woodpeck::{
-    app::bench_support::{PieceTextures, TrainingFrame},
+    app::bench_support::{PieceTextures, ReaderFrame, TrainingFrame},
     puzzle::{Engine, Outcome},
     service::AppService,
     sets::{BuilderParams, generate},
@@ -95,6 +95,32 @@ fn benchmarks(c: &mut Criterion) {
         });
     });
     training_frames(c, "frame", TrainingFrame::default);
+    for (name, keys) in [
+        ("reader/idle", [None, None]),
+        (
+            "reader/moves",
+            [
+                Some(eframe::egui::Key::ArrowRight),
+                Some(eframe::egui::Key::ArrowLeft),
+            ],
+        ),
+        (
+            "reader/pages",
+            [
+                Some(eframe::egui::Key::PageDown),
+                Some(eframe::egui::Key::PageUp),
+            ],
+        ),
+    ] {
+        let mut reader = ReaderFrame::new(1920.0, 1080.0);
+        let mut index = 0;
+        c.bench_function(name, |b| {
+            b.iter(|| {
+                reader.frame(keys[index % 2]);
+                index += 1;
+            });
+        });
+    }
     disk_benchmarks(c);
 }
 
