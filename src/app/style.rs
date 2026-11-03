@@ -102,6 +102,25 @@ pub fn fonts(ctx: &egui::Context) {
     {
         fonts.families.insert(FontFamily::Name("bold".into()), bold);
     }
+    for (name, bytes) in [
+        (
+            "book",
+            include_bytes!("../../assets/fonts/SourceSerif4-Regular.ttf").as_slice(),
+        ),
+        (
+            "book-semibold",
+            include_bytes!("../../assets/fonts/SourceSerif4-Semibold.ttf").as_slice(),
+        ),
+    ] {
+        fonts
+            .font_data
+            .insert(name.into(), egui::FontData::from_static(bytes).into());
+        let mut fallback = fonts.families[&FontFamily::Proportional].clone();
+        fallback.insert(0, name.into());
+        fonts
+            .families
+            .insert(FontFamily::Name(name.into()), fallback);
+    }
     ctx.set_fonts(fonts);
 }
 

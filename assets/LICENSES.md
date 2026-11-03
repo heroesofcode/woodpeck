@@ -24,3 +24,19 @@ The piece sets come from the lichess-org/lila repository (`public/piece`, see it
 | Noto Sans Symbols 2 | Google | OFL-1.1 |
 
 Sets under non-free or non-commercial licences were excluded, as were AGPL sets.
+
+# Bundled assets
+
+## Source Serif 4
+
+`fonts/SourceSerif4-Regular.ttf` and `fonts/SourceSerif4-Semibold.ttf` are
+unmodified static fonts from [Adobe Source Serif 4.005R](https://github.com/adobe-fonts/source-serif/tree/4.005R/TTF).
+Copyright 2014–2023 Adobe, with Reserved Font Name “Source”. Licensed under
+[SIL Open Font License 1.1](fonts/SourceSerif4-LICENSE.md), which permits embedding
+and redistribution with this application. The complete copyright and license
+notice accompanies the fonts. These assets are independent of Cargo dependencies;
+`cargo deny check` audits the Rust dependency licenses.
+
+## Chess pieces
+
+See [pieces/LICENSE](pieces/LICENSE) for the cburnett set.
