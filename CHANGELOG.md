@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.0](https://github.com/heroesofcode/woodpeck/compare/v0.5.0...v0.6.0) (2026-11-03)
+
+
+### Features
+
+* **reader:** bundle Source Serif for book typography ([4ab9690](https://github.com/heroesofcode/woodpeck/commit/4ab9690055b71ce45a53022ba75e0906ddeef186))
+* **reader:** typeset book pages with cached interactive text ([08196bc](https://github.com/heroesofcode/woodpeck/commit/08196bc4b5425514ad98490476ec98a4512c7729))
+
+
+### Bug fixes
+
+* **books:** reconstruct PDF paragraphs from line geometry ([9cc787f](https://github.com/heroesofcode/woodpeck/commit/9cc787f0b47cd92e35142fe7f94809fe6cd4036d))
+* **reader:** distinguish captions from ordinary prose ([e50d0fd](https://github.com/heroesofcode/woodpeck/commit/e50d0fdab0c16635d8a8779fda8f6c0b92a1fa02))
+* **reader:** retain punctuated figure captions ([ec1aa31](https://github.com/heroesofcode/woodpeck/commit/ec1aa3198edd807d7b709063fde01ea8e21fc86e))
+
+
+### Performance
+
+* **reader:** benchmark idle frames and book navigation ([e1f24bd](https://github.com/heroesofcode/woodpeck/commit/e1f24bdb37efe8233f0c11ee940a1d4bda113c6a))
+
 ## [0.5.0](https://github.com/heroesofcode/woodpeck/compare/v0.4.0...v0.5.0) (2026-11-03)
 
 
