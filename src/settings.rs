@@ -41,10 +41,21 @@ impl BoardTheme {
         Self::Carbon,
     ];
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadingTheme {
+    #[default]
+    Auto,
+    Light,
+    Sepia,
+    Dark,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub board_theme: BoardTheme,
+    pub reader_font_size: u8,
+    pub reader_theme: ReadingTheme,
     pub piece_rendering: PieceRendering,
     /// Master switch; retain the legacy wire name for compatibility.
     pub completion_sound: bool,
@@ -60,6 +71,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             board_theme: BoardTheme::Peck,
+            reader_font_size: 20,
+            reader_theme: ReadingTheme::Auto,
             piece_rendering: PieceRendering::Vector,
             completion_sound: true,
             sound_volume: 35,
@@ -73,7 +86,9 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> bool {
-        (400..=3000).contains(&self.user_rating) && self.sound_volume <= 100
+        (400..=3000).contains(&self.user_rating)
+            && self.sound_volume <= 100
+            && (16..=28).contains(&self.reader_font_size)
     }
 }
 #[cfg(test)]
@@ -108,6 +123,39 @@ mod tests {
             !Settings {
                 sound_volume: 101,
                 ..legacy
+            }
+            .validate()
+        );
+    }
+    #[test]
+    fn reading_preferences_migrate_validate_and_roundtrip() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.reader_font_size, 20);
+        assert_eq!(old.reader_theme, ReadingTheme::Auto);
+        for reader_theme in [
+            ReadingTheme::Auto,
+            ReadingTheme::Light,
+            ReadingTheme::Sepia,
+            ReadingTheme::Dark,
+        ] {
+            for reader_font_size in [16, 20, 28] {
+                let settings = Settings {
+                    reader_font_size,
+                    reader_theme,
+                    ..old.clone()
+                };
+                assert!(settings.validate());
+                assert_eq!(
+                    serde_json::from_str::<Settings>(&serde_json::to_string(&settings).unwrap())
+                        .unwrap(),
+                    settings
+                );
+            }
+        }
+        assert!(
+            !Settings {
+                reader_font_size: 255,
+                ..old
             }
             .validate()
         );

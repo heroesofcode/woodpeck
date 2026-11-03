@@ -1065,12 +1065,12 @@ fn book_library_and_reader_fit_responsive_windows() {
                     vec![
                         "< Library",
                         "Flip board",
-                        "Next page >",
+                        "›",
                         "1 · The open game",
                         "A small guide to active pieces",
                     ]
                 } else {
-                    vec!["< Library", "Next page >"]
+                    vec!["< Library", "›"]
                 };
                 let mut found = Vec::new();
                 for shape in &output.shapes {
@@ -1093,6 +1093,41 @@ fn book_library_and_reader_fit_responsive_windows() {
             if screen == Screen::Reader && width < 900.0 {
                 check_reader_scroll(&ctx, &mut app, width, height);
             }
+        }
+    }
+}
+
+#[test]
+#[ignore = "manual reader CPU measurements"]
+fn reader_frame_measurements() {
+    use super::bench_support::ReaderFrame;
+    for (width, height) in [(1280.0, 800.0), (1920.0, 1080.0), (360.0, 640.0)] {
+        let mut frame = ReaderFrame::new(width, height);
+        for mode in ["idle", "moves", "pages"] {
+            let mut samples = Vec::new();
+            for index in 0..300 {
+                let key = match mode {
+                    "moves" => Some(if index % 2 == 0 {
+                        egui::Key::ArrowRight
+                    } else {
+                        egui::Key::ArrowLeft
+                    }),
+                    "pages" => Some(if index % 2 == 0 {
+                        egui::Key::PageDown
+                    } else {
+                        egui::Key::PageUp
+                    }),
+                    _ => None,
+                };
+                let start = std::time::Instant::now();
+                frame.frame(key);
+                samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "reader {width}x{height} {mode}: p50={:.3}ms p95={:.3}ms max={:.3}ms",
+                samples[150], samples[285], samples[299]
+            );
         }
     }
 }
