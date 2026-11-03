@@ -60,6 +60,7 @@ pub(super) struct Line {
     pub text: String,
     pub size: f64,
     pub y: f64,
+    pub x: f64,
     /// Number of separately spaced cells on the row (tables, side-by-side columns).
     pub cells: usize,
 }
@@ -273,13 +274,13 @@ fn cells(mut line: Vec<Glyph>) -> Vec<Line> {
     line.sort_by(|a, b| a.x.total_cmp(&b.x));
     let y = line[0].y;
     // Parts split at wide gaps: (text, characters per glyph size).
-    let mut parts = vec![(String::new(), Vec::<(f64, usize)>::new())];
+    let mut parts = vec![(String::new(), Vec::<(f64, usize)>::new(), line[0].x)];
     let mut end = None;
     for glyph in line {
         if let Some(last) = end {
             let gap = glyph.x - last;
             if gap > 48.0 {
-                parts.push((String::new(), Vec::new()));
+                parts.push((String::new(), Vec::new(), glyph.x));
             } else if gap > glyph.size * 0.15 {
                 parts.last_mut().expect("text part").0.push(' ');
             }
@@ -302,14 +303,16 @@ fn cells(mut line: Vec<Glyph>) -> Vec<Line> {
     }
     parts
         .into_iter()
-        .map(|(s, sizes)| {
+        .map(|(s, sizes, x)| {
             (
                 s.split_whitespace().collect::<Vec<_>>().join(" "),
                 dominant(&sizes),
+                x,
             )
         })
-        .filter(|(s, _)| !s.is_empty())
-        .map(|(text, size)| Line {
+        .filter(|(s, _, _)| !s.is_empty())
+        .map(|(text, size, x)| Line {
+            x,
             text,
             size,
             y,
@@ -416,6 +419,7 @@ fn order(mut glyphs: Vec<Glyph>) -> Vec<Line> {
                         .collect::<Vec<_>>(),
                 ),
                 y: row[0].y,
+                x: row[0].x,
                 cells: row.len(),
             })
             .collect()

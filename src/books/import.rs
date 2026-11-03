@@ -57,6 +57,7 @@ impl PageSource for TextImporter {
                 .map(|(i, lines)| {
                     let mut page = Page {
                         source: format!("page:{}", i + 1),
+                        paragraphs: true,
                         ..Page::default()
                     };
                     let outline: Vec<_> = extracted
@@ -331,6 +332,13 @@ fn pdf_page_with(
         .collect();
     gaps.sort_by(f64::total_cmp);
     let leading = gaps.get(gaps.len() / 2).copied().unwrap_or(0.0);
+    let vocabulary = super::reflow::vocabulary(
+        &lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
     let mut paragraph = String::new();
     let mut last: Option<&pdf::Line> = None;
     // Inside a move record: since the last numbered line, every line has been moves.
@@ -403,7 +411,11 @@ fn pdf_page_with(
         let continues = last.is_some_and(|prev| {
             let gap = prev.y - line.y;
             let short = prev.text.chars().count() * 10 < full * 7;
-            !short
+            let sentence = prev.text.ends_with(['.', '!', '?', ':']);
+            (!short || (!scoring && !sentence && line.text.starts_with(char::is_lowercase)))
+                && !super::reflow::caption(&prev.text)
+                && !super::reflow::caption(&line.text)
+                && line.x - prev.x <= body * 0.8
                 && prev.cells == 1
                 && line.cells == 1
                 && !numbered(&line.text)
@@ -420,7 +432,7 @@ fn pdf_page_with(
                 && line.text.starts_with(char::is_lowercase)
             {
                 paragraph.pop();
-            } else {
+            } else if !super::reflow::lost_hyphen(&paragraph, &line.text, &vocabulary) {
                 paragraph.push(' ');
             }
         } else {
@@ -761,6 +773,7 @@ mod tests {
             size,
             y,
             cells: 1,
+            x: 0.0,
         }
     }
     fn blocks(page: &Page) -> Vec<(BlockKind, u8, &str)> {
@@ -878,6 +891,56 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn pdf_indent_and_sentence_end_start_paragraphs() {
+        let mut page = Page::default();
+        let mut lines = [
+            line(
+                "A long first line describes patient development and",
+                10.0,
+                700.0,
+            ),
+            line("finishes the thought.", 10.0, 688.0),
+            line(
+                "A separate idea begins on the following line and",
+                10.0,
+                676.0,
+            ),
+            line(
+                "another indented paragraph must remain separate.",
+                10.0,
+                664.0,
+            ),
+        ];
+        lines[3].x = 16.0;
+        pdf_page(&mut page, &lines, 10.0, &[]);
+        assert_eq!(page.blocks.len(), 3);
+        assert!(page.text.starts_with(
+            "A long first line describes patient development and finishes the thought."
+        ));
+    }
+    #[test]
+    fn pdf_missing_hyphen_requires_independent_word_evidence() {
+        let mut page = Page::default();
+        let lines = [
+            line(
+                "The tournament rewards preparation. In the next tourna",
+                10.0,
+                700.0,
+            ),
+            line("ment patient development matters.", 10.0, 688.0),
+        ];
+        pdf_page(&mut page, &lines, 10.0, &[]);
+        assert!(page.text.contains("next tournament patient"));
+        let mut page = Page::default();
+        let unknown = [
+            line("Consider the unfamiliar word tourna", 10.0, 700.0),
+            line("ment in this example.", 10.0, 688.0),
+        ];
+        pdf_page(&mut page, &unknown, 10.0, &[]);
+        assert!(page.text.contains("tourna ment"));
     }
 
     #[test]
