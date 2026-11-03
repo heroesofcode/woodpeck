@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0](https://github.com/heroesofcode/woodpeck/compare/v0.4.0...v0.5.0) (2026-11-03)
+
+
+### Features
+
+* **books:** read diagram images with two small embedded CNNs ([0bcec3e](https://github.com/heroesofcode/woodpeck/commit/0bcec3e743b42d7a9ef8c23b5c99f1ff88340abb))
+* **books:** share diagram material checks and add an agreeing recognizer ([d0f6b4e](https://github.com/heroesofcode/woodpeck/commit/d0f6b4ef5adc2e278827fdadec93a66027d4092b))
+
+
+### Bug fixes
+
+* **books:** do not hang moves from an earlier root on a later fragment start ([6aaa145](https://github.com/heroesofcode/woodpeck/commit/6aaa1451244aaeead8e085302ff41eeded200b68))
+* **books:** keep the line when a rewind cannot hang from the fragment ([a56341c](https://github.com/heroesofcode/woodpeck/commit/a56341cb98354f20e741706edd7521eec6175302))
+* **books:** keep the restored line when a later number follows a rejected rewind ([c525594](https://github.com/heroesofcode/woodpeck/commit/c5255947ae0d72c933e31dcc5eb419dd105ba902))
+* **books:** read a figurine printed with a space before its square as one move ([5b07f8a](https://github.com/heroesofcode/woodpeck/commit/5b07f8a3f396c234531b6620019cbe3f998a8696))
+* **books:** read a move number printed with a Unicode ellipsis as Black's move ([ec30195](https://github.com/heroesofcode/woodpeck/commit/ec301957c946c20d27103a5aae577e4dc354d56e))
+
+
+### Refactoring
+
+* **books:** satisfy pedantic lints in the diagram classifier ([bfa2561](https://github.com/heroesofcode/woodpeck/commit/bfa2561ba1a4d67cedee247605b41075d3c95a2e))
+
 ## [0.4.0](https://github.com/heroesofcode/woodpeck/compare/v0.3.0...v0.4.0) (2026-11-02)
 
 
