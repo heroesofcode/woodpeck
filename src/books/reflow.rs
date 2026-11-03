@@ -55,21 +55,23 @@ pub(crate) fn caption(text: &str) -> bool {
     if text.split_whitespace().take(11).count() > 10 {
         return false;
     }
-    let mut words = text.split_whitespace();
-    let Some(label) = words.next() else {
-        return false;
-    };
-    if ["diagram", "figure", "fig."]
+    let end = text
+        .find(|c: char| !c.is_ascii_alphabetic())
+        .unwrap_or(text.len());
+    let label = &text[..end];
+    if ["diagram", "figure", "fig"]
         .iter()
         .any(|prefix| label.eq_ignore_ascii_case(prefix))
     {
-        return words.next().is_none_or(|number| {
+        let rest =
+            text[end..].trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '.' | ':'));
+        return rest.split_whitespace().next().is_none_or(|number| {
             let number = number.trim_matches(['(', ')', '.', ':']);
             number.starts_with(|c: char| c.is_ascii_digit())
                 || (!number.is_empty() && number.chars().all(|c| "IVXLCDM".contains(c)))
         });
     }
-    if !["white", "black", "white's", "black's"]
+    if !["white", "black"]
         .iter()
         .any(|prefix| label.eq_ignore_ascii_case(prefix))
     {
@@ -101,6 +103,11 @@ mod tests {
             "Diagram 1",
             "Figure IV. The position after the exchange",
             "Fig. (2)",
+            "Fig.1",
+            "Figure: 2. The open file",
+            "Figure:",
+            "DIAGRAM.",
+            "Diagram(3)",
             "DIAGRAM",
             "White to move.",
             "BLACK TO PLAY AND WIN",
@@ -112,6 +119,9 @@ mod tests {
             "Figures show several possible plans",
             "Diagramming the position helps us find",
             "Figure out where the knight belongs",
+            "Figure: out where the knight belongs",
+            "Fig.ment of the imagination",
+            "Diagram-based teaching encourages exploration",
             "White to attack the centre must first develop",
             "White's movement restricts the bishop",
             "Black to play the knight instead of the bishop",
