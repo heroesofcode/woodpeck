@@ -46,6 +46,10 @@ impl Block {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Page {
     pub source: String,
+    /// PDF paragraphs already reconstructed with geometric evidence. Older imports default
+    /// to false so the reader can repair physical line blocks without changing source spans.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paragraphs: bool,
     pub text: String,
     pub blocks: Vec<Block>,
 }
