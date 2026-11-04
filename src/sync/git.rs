@@ -66,7 +66,9 @@ impl Repository {
             )))
         }
     }
-    pub fn fetch(&self) -> Result<(String, Option<String>)> {
+}
+impl super::remote::Remote for Repository {
+    fn fetch(&self) -> Result<(String, Option<String>)> {
         if !self
             .try_git(&[
                 "fetch",
@@ -106,7 +108,7 @@ impl Repository {
             result.success.then(|| result.stdout.trim().into()),
         ))
     }
-    pub fn read(&self, revision: &str) -> Result<State> {
+    fn read(&self, revision: &str) -> Result<State> {
         let paths = self.git(&["ls-tree", "-r", "--name-only", revision])?;
         let mut files = BTreeMap::new();
         // Check the manifest first, before interpreting any other files.
@@ -135,7 +137,7 @@ impl Repository {
             State::from_files(&files)
         }
     }
-    pub fn commit(&self, state: &State, remote: Option<&str>) -> Result<String> {
+    fn commit(&self, state: &State, remote: Option<&str>) -> Result<String> {
         let head = self.try_git(&["rev-parse", "--verify", "HEAD"])?;
         let local = head.success.then(|| head.stdout.trim().to_owned());
         if let Some(base) = remote.or(local.as_deref()) {
@@ -186,7 +188,7 @@ impl Repository {
         self.git(&["symbolic-ref", "HEAD", "refs/heads/main"])?;
         Ok(commit)
     }
-    pub fn push(&self, commit: &str, branch: &str) -> Result<bool> {
+    fn push(&self, commit: &str, branch: &str) -> Result<bool> {
         Ok(self
             .try_git(&["push", "origin", &format!("{commit}:refs/heads/{branch}")])?
             .success)
