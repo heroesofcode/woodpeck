@@ -7,19 +7,23 @@
 #![allow(clippy::struct_excessive_bools)]
 // UI geometry is bounded before pixel conversion.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod app;
 pub mod books;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod layout;
 pub mod motivation;
 pub mod puzzle;
 pub mod review;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod service;
 pub mod sets;
 pub mod settings;
 pub mod sound;
 pub mod source;
 pub mod stats;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 pub mod sync;
 // Color conversion rounds and clamps floating-point channels to the byte range.
