@@ -7,8 +7,10 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 use thiserror::Error;
+mod fontboard;
 mod pdf;
 mod picture;
+mod raster;
 
 #[derive(Debug, Error)]
 pub enum ImportError {
@@ -45,6 +47,10 @@ impl PageSource for TextImporter {
                     .count()
                     * 2
                     > texts.len()
+                // Pages with no text can still carry diagrams: found on a scan or drawing, or
+                // as diagram pictures throughout the book.
+                && extracted.boards == 0
+                && extracted.pictures.iter().map(Vec::len).sum::<usize>() < 8
             {
                 return Err(ImportError::NoTextLayer);
             }

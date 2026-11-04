@@ -35,6 +35,7 @@ sha2 = "0.10.9"
 pdf-extract = "0.12.1"
 lopdf = { version = "0.42", default-features = false }
 hayro-jbig2 = { version = "0.3", default-features = false }
+hayro = { version = "0.9", default-features = false }
 
 # Desktop-only: native C libraries, processes, audio devices, and the filesystem.
 # Gated by target so the default desktop build resolves exactly as before.
