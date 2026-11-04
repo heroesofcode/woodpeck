@@ -1,15 +1,15 @@
 use super::local::EventSender;
 use super::{
-    Command, Event, Job, JobOutput, Result, SharedStore, create_set, fallback_request, lock,
+    Command, Event, Job, JobOutput, Result, SharedStore, create_set, fallback_request, in_band,
+    lock, save_single, save_valid, starter,
 };
 use crate::{
     sets::generate,
     source::{
-        CancelFlag, ImportOptions, LibrarySize, PuzzleFetcher, STARTER_BYTES, STARTER_VERSION,
-        SourceError, import_stream, import_stream_options, open_location,
+        CancelFlag, ImportOptions, PuzzleFetcher, SourceError, import_stream_options, open_location,
     },
 };
-use std::{io::Cursor, sync::mpsc};
+use std::sync::mpsc;
 
 pub(super) fn run(
     store: &SharedStore,
@@ -53,19 +53,7 @@ fn execute(
         Ok(())
     };
     match job {
-        Job::ImportStarter { force } => {
-            if !force
-                && lock(store)?.setting("starter_version")?.as_deref() == Some(STARTER_VERSION)
-            {
-                return Ok(JobOutput::Imported(crate::source::ImportProgress::default()));
-            }
-            let result = import_stream(Cursor::new(STARTER_BYTES), cancel, progress, save)?;
-            cancel.check()?;
-            let store = lock(store)?;
-            store.set_setting("starter_version", STARTER_VERSION)?;
-            store.record_library_import(LibrarySize::Starter, chrono::Utc::now().timestamp())?;
-            Ok(JobOutput::Imported(result))
-        }
+        Job::ImportStarter { force } => starter(store, force, cancel, progress),
         Job::ImportLibrary {
             location,
             size,
@@ -90,19 +78,13 @@ fn execute(
                 cancel,
             )?;
             cancel.check()?;
-            let puzzles: Vec<_> = puzzles
-                .into_iter()
-                .filter(|p| p.validate().is_ok())
-                .collect();
-            lock(store)?.upsert_puzzles(&puzzles)?;
+            let inserted = save_valid(store, puzzles)?;
             let _ = events.send(Event::FetchProgress {
                 id,
                 batches: 1,
-                inserted: puzzles.len(),
+                inserted,
             });
-            Ok(JobOutput::Fetched {
-                inserted: puzzles.len(),
-            })
+            Ok(JobOutput::Fetched { inserted })
         }
         Job::FetchDaily | Job::FetchById { .. } => {
             let daily = matches!(job, Job::FetchDaily);
@@ -112,15 +94,7 @@ fn execute(
                 fetcher.daily(cancel)?
             };
             cancel.check()?;
-            puzzle
-                .validate()
-                .map_err(|e| SourceError::Invalid(e.to_string()))?;
-            lock(store)?.upsert_puzzles(std::slice::from_ref(&puzzle))?;
-            Ok(if daily {
-                JobOutput::Daily(puzzle)
-            } else {
-                JobOutput::Puzzle(puzzle)
-            })
+            save_single(store, puzzle, daily)
         }
         Job::CreateSetWithFallback { params, seed, now } => fallback(
             store,
@@ -164,14 +138,7 @@ fn fallback(
         let (theme, difficulty) = fallback_request(params, batches);
         let puzzles = fetcher.batch(theme, difficulty, params.size.min(100), cancel)?;
         cancel.check()?;
-        let puzzles: Vec<_> = puzzles
-            .into_iter()
-            .filter(|p| {
-                params.rating_in_range(p.rating)
-                    && params.theme_filter().matches(&p.themes)
-                    && p.validate().is_ok()
-            })
-            .collect();
+        let puzzles = in_band(params, puzzles);
         lock(store)?.upsert_puzzles(&puzzles)?;
         inserted += puzzles.len();
         report(batches, inserted);
