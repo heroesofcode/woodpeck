@@ -1,4 +1,5 @@
 //! Opt-in progress synchronization. The portable format is independent of Git and SQLite.
+use web_time::Instant;
 pub mod format;
 mod git;
 pub mod merge;
@@ -27,11 +28,7 @@ pub type Result<T> = std::result::Result<T, SyncError>;
 
 use crate::store::Store;
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::{fs, path::Path, time::Duration};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Status {

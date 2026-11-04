@@ -10,10 +10,8 @@ use crate::{
     store::ReadingProgress,
 };
 use eframe::egui::{self, RichText, Ui};
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use super::{
     reader_flow::PageRuns,
