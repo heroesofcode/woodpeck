@@ -44,6 +44,53 @@ pub fn exchange(storage: &mut impl SyncStorage, remote: &impl Remote) -> Result<
     Err(SyncError::Offline)
 }
 
+/// [`Remote`] for transports that can only wait asynchronously, such as `fetch` in a browser.
+#[allow(async_fn_in_trait)]
+pub trait AsyncRemote {
+    async fn fetch(&self) -> Result<(String, Option<String>)>;
+    async fn read(&self, revision: &str) -> Result<State>;
+    async fn commit(&self, state: &State, parent: Option<&str>) -> Result<String>;
+    async fn push(&self, commit: &str, branch: &str) -> Result<bool>;
+}
+
+/// [`exchange`] over an [`AsyncRemote`], with the same merge, retry and result.
+pub async fn exchange_async(
+    storage: &mut impl SyncStorage,
+    remote: &impl AsyncRemote,
+) -> Result<(i64, bool)> {
+    let mut changed = false;
+    for _ in 0..3 {
+        let (branch, head) = remote.fetch().await?;
+        if let Some(head) = &head {
+            let theirs = remote.read(head).await?;
+            let before = storage.export_sync()?;
+            let merged = storage.import_sync(&theirs)?;
+            changed |= merged != before;
+        }
+        let (snapshot, generation) = storage.export_sync_snapshot()?;
+        let commit = remote.commit(&snapshot, head.as_deref()).await?;
+        if remote.push(&commit, &branch).await? {
+            return Ok((generation, changed));
+        }
+    }
+    Err(SyncError::Offline)
+}
+
+/// The branch sync uses among a remote's branches, chosen as the desktop Git transport does.
+pub fn choose_branch<'a>(branches: &[&'a str]) -> Result<&'a str> {
+    if branches.contains(&"main") || branches.is_empty() {
+        Ok("main")
+    } else if branches.contains(&"master") {
+        Ok("master")
+    } else if branches.len() == 1 {
+        Ok(branches[0])
+    } else {
+        Err(SyncError::Invalid(
+            "Remote has multiple branches and no main branch.".into(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +168,48 @@ mod tests {
             Err(SyncError::Offline)
         ));
         assert_eq!(local.imports, 3);
+    }
+
+    #[allow(clippy::unused_async_trait_impl)]
+    impl AsyncRemote for Memory {
+        async fn fetch(&self) -> Result<(String, Option<String>)> {
+            Remote::fetch(self)
+        }
+        async fn read(&self, revision: &str) -> Result<State> {
+            Remote::read(self, revision)
+        }
+        async fn commit(&self, state: &State, parent: Option<&str>) -> Result<String> {
+            Remote::commit(self, state, parent)
+        }
+        async fn push(&self, commit: &str, branch: &str) -> Result<bool> {
+            Remote::push(self, commit, branch)
+        }
+    }
+
+    #[test]
+    fn async_exchange_matches_the_blocking_one() {
+        let remote = Memory::default();
+        remote.rejects.set(2);
+        let mut local = Local {
+            state: State::default(),
+            imports: 0,
+        };
+        let result = pollster::block_on(exchange_async(&mut local, &remote)).unwrap();
+        assert_eq!(result, (7, false));
+        assert_eq!(*remote.head.borrow(), Some(2));
+        remote.rejects.set(3);
+        assert!(matches!(
+            pollster::block_on(exchange_async(&mut local, &remote)),
+            Err(SyncError::Offline)
+        ));
+    }
+
+    #[test]
+    fn branch_choice_prefers_main_then_master_then_the_only_branch() {
+        assert_eq!(choose_branch(&[]).unwrap(), "main");
+        assert_eq!(choose_branch(&["master", "main"]).unwrap(), "main");
+        assert_eq!(choose_branch(&["dev", "master"]).unwrap(), "master");
+        assert_eq!(choose_branch(&["data"]).unwrap(), "data");
+        assert!(choose_branch(&["a", "b"]).is_err());
     }
 }
