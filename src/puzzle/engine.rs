@@ -65,6 +65,8 @@ pub struct Engine {
     sounds: Vec<crate::sound::Event>,
 }
 impl Engine {
+    // The book reader is desktop-only for now.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn reading(position: Chess) -> Self {
         Self {
             state: State::Loading,
@@ -100,6 +102,7 @@ impl Engine {
         }
     }
     /// Rebase a prepared, still-loading engine when it becomes visible.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn start_at(&mut self, now: Duration) {
         debug_assert_eq!(self.state, State::Loading);
         self.deadline = now;
