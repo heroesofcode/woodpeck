@@ -98,6 +98,62 @@ fn reconstruct(entry: Entry) -> Result<Puzzle, SourceError> {
         .map_err(|e| SourceError::Invalid(e.to_string()))?;
     Ok(puzzle)
 }
+pub(super) const API_BASE: &str = "https://lichess.org/api/puzzle";
+/// Lichess `difficulty` levels and the puzzle ratings each one targets for an anonymous
+/// (1500-rated) client, as inclusive windows that tile the whole rating scale.
+const LEVELS: [(&str, u16, u16); 5] = [
+    ("easiest", 0, 1100),
+    ("easier", 1101, 1350),
+    ("normal", 1351, 1649),
+    ("harder", 1650, 1899),
+    ("hardest", 1900, u16::MAX),
+];
+pub fn difficulty(target: u16) -> &'static str {
+    LEVELS
+        .iter()
+        .find(|(_, low, high)| (*low..=*high).contains(&target))
+        .map_or("hardest", |(level, ..)| level)
+}
+/// Every level whose window overlaps the inclusive range, widest overlap first (ties easiest
+/// first). The API cannot filter by rating, so callers must still filter results locally.
+pub fn difficulties(min: u16, max: u16) -> Vec<&'static str> {
+    let mut levels: Vec<_> = LEVELS
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (level, low, high))| {
+            let overlap = max.min(*high).checked_sub(min.max(*low))?;
+            Some((std::cmp::Reverse(overlap), i, *level))
+        })
+        .collect();
+    levels.sort_unstable();
+    levels.into_iter().map(|(.., level)| level).collect()
+}
+/// Lichess API path for one batch; identifiers are validated before they reach the URL.
+pub(super) fn batch_path(
+    theme: Option<&str>,
+    difficulty: &str,
+    count: u32,
+) -> Result<String, SourceError> {
+    let angle = identifier(theme.unwrap_or("mix"))?;
+    let difficulty = identifier(difficulty)?;
+    Ok(format!(
+        "batch/{angle}?nb={}&difficulty={}",
+        count.clamp(1, 100),
+        difficulty
+    ))
+}
+pub(super) fn identifier(value: &str) -> Result<&str, SourceError> {
+    if value.is_empty()
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        Err(SourceError::Invalid("Invalid Lichess identifier.".into()))
+    } else {
+        Ok(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

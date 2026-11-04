@@ -1,39 +1,16 @@
-use super::{CancelFlag, SourceError, parse_batch, parse_puzzle};
+use super::{
+    CancelFlag, SourceError,
+    api::{batch_path, identifier},
+    parse_batch, parse_puzzle,
+};
 use crate::puzzle::Puzzle;
 use std::{sync::Mutex, time::Duration};
 
-const API_BASE: &str = "https://lichess.org/api/puzzle";
+use super::api::API_BASE;
+#[cfg(test)]
+use super::{difficulties, difficulty};
 static API_SERIAL: Mutex<()> = Mutex::new(());
 
-/// Lichess `difficulty` levels and the puzzle ratings each one targets for an anonymous
-/// (1500-rated) client, as inclusive windows that tile the whole rating scale.
-const LEVELS: [(&str, u16, u16); 5] = [
-    ("easiest", 0, 1100),
-    ("easier", 1101, 1350),
-    ("normal", 1351, 1649),
-    ("harder", 1650, 1899),
-    ("hardest", 1900, u16::MAX),
-];
-pub fn difficulty(target: u16) -> &'static str {
-    LEVELS
-        .iter()
-        .find(|(_, low, high)| (*low..=*high).contains(&target))
-        .map_or("hardest", |(level, ..)| level)
-}
-/// Every level whose window overlaps the inclusive range, widest overlap first (ties easiest
-/// first). The API cannot filter by rating, so callers must still filter results locally.
-pub fn difficulties(min: u16, max: u16) -> Vec<&'static str> {
-    let mut levels: Vec<_> = LEVELS
-        .iter()
-        .enumerate()
-        .filter_map(|(i, (level, low, high))| {
-            let overlap = max.min(*high).checked_sub(min.max(*low))?;
-            Some((std::cmp::Reverse(overlap), i, *level))
-        })
-        .collect();
-    levels.sort_unstable();
-    levels.into_iter().map(|(.., level)| level).collect()
-}
 /// Injectable boundary for offline service/fallback tests. Implementations must honor cancellation.
 pub trait PuzzleFetcher: Send {
     fn batch(
@@ -128,17 +105,6 @@ impl LichessClient {
         Ok(json)
     }
 }
-fn identifier(value: &str) -> Result<&str, SourceError> {
-    if value.is_empty()
-        || !value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    {
-        Err(SourceError::Invalid("Invalid Lichess identifier.".into()))
-    } else {
-        Ok(value)
-    }
-}
 impl PuzzleFetcher for LichessClient {
     fn batch(
         &mut self,
@@ -147,16 +113,7 @@ impl PuzzleFetcher for LichessClient {
         count: u32,
         cancel: &CancelFlag,
     ) -> Result<Vec<Puzzle>, SourceError> {
-        let angle = identifier(theme.unwrap_or("mix"))?;
-        let difficulty = identifier(difficulty)?;
-        parse_batch(&self.json(
-            &format!(
-                "batch/{angle}?nb={}&difficulty={}",
-                count.clamp(1, 100),
-                difficulty
-            ),
-            cancel,
-        )?)
+        parse_batch(&self.json(&batch_path(theme, difficulty, count)?, cancel)?)
     }
     fn daily(&mut self, cancel: &CancelFlag) -> Result<Puzzle, SourceError> {
         parse_puzzle(&self.json("daily", cancel)?)
