@@ -139,6 +139,10 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
             super::fontboard::boards(&marks)
         })
         .collect();
+    // A diagram-font board becomes a picture; its glyphs (and its frame rows) are not text.
+    for (glyphs, boards) in layout.pages.iter_mut().zip(&fonts) {
+        glyphs.retain(|g| !boards.iter().any(|b| b.covers(g.x, g.y, g.size)));
+    }
     let pages: Vec<_> = layout.pages.into_iter().map(order).collect();
     let pictures = pictures(&doc, bytes, &fonts);
     Ok(Extracted {
