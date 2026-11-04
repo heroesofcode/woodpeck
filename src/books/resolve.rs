@@ -734,7 +734,19 @@ fn resolve_tokens(
                         .and_then(|group| choose_move(&context.pos, ts, i, text, alphabet, group))
                         .ok_or(())
                 });
-                if let Ok((m, span, count)) = read {
+                // A root move must start from the fragment's own position, or the tree edge
+                // would not replay from it.
+                let rootless = read.is_ok()
+                    && context.parent.is_none()
+                    && !fragment.nodes.is_empty()
+                    && fen(&context.pos) != fragment.start_fen;
+                if rootless {
+                    fail(fragment, format!("No known position at move {raw}"));
+                    blocked = true;
+                } else if let Ok((m, span, count)) = read {
+                    if fragment.nodes.is_empty() {
+                        fragment.start_fen = fen(&context.pos);
+                    }
                     before = context.clone();
                     context.remember();
                     let san = SanPlus::from_move(context.pos.clone(), m).to_string();
