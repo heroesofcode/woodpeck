@@ -7,7 +7,6 @@
 #![allow(clippy::struct_excessive_bools)]
 // UI geometry is bounded before pixel conversion.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-#[cfg(not(target_arch = "wasm32"))]
 pub mod app;
 pub mod books;
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,3 +27,5 @@ pub mod sync;
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub mod theme;
 pub mod timer;
+#[cfg(target_arch = "wasm32")]
+pub mod web;

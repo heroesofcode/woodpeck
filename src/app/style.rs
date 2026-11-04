@@ -135,6 +135,13 @@ impl ThemeWatcher {
         let (sender, receiver) = std::sync::mpsc::channel();
         let alive = std::sync::Arc::new(());
         let weak = std::sync::Arc::downgrade(&alive);
+        // No desktop theme files in the browser: the chosen palette is applied once.
+        #[cfg(target_arch = "wasm32")]
+        {
+            drop((weak, ctx));
+            let _ = sender.send(crate::theme::select(choice, None));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         let _ = std::thread::Builder::new()
             .name("woodpeck-theme".into())
             .spawn(move || {

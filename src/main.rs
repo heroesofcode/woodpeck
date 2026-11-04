@@ -1,10 +1,18 @@
 //! Native desktop and import/screenshot command entry point.
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::ExitCode;
+#[cfg(not(target_arch = "wasm32"))]
 use woodpeck::{
     cli::{self, Command},
     source::{CancelFlag, ImportOptions, import_location_options},
     store::{Store, database_path},
 };
+/// Browser build: the page loads this module and the web shell takes over.
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    woodpeck::web::start();
+}
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> ExitCode {
     let command = match cli::parse(std::env::args().skip(1)) {
         Ok(command) => command,
@@ -19,6 +27,7 @@ fn main() -> ExitCode {
     }
     ExitCode::SUCCESS
 }
+#[cfg(not(target_arch = "wasm32"))]
 fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Command::BookImport(path) => {
@@ -88,6 +97,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_sync(command: cli::SyncCommand) -> Result<(), Box<dyn std::error::Error>> {
     let path = database_path().ok_or("Could not find the application data directory.")?;
     let data = path.parent().ok_or("Invalid data directory.")?;

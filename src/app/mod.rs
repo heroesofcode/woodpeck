@@ -1,12 +1,14 @@
 //! Native, responsive desktop interface over `AppService`.
 use web_time::Instant;
 mod background;
+#[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub mod bench_support;
 mod board;
 mod books;
 mod charts;
 mod covers;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod demo;
 mod frame_stats;
 mod library;
@@ -68,6 +70,7 @@ impl Screen {
             _ => None,
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
     const ALL: [(Self, &'static str); 7] = [
         (Self::Dashboard, "Dashboard"),
         (Self::Training, "Train"),
@@ -76,6 +79,16 @@ impl Screen {
         (Self::Builder, "New set"),
         (Self::Settings, "Settings"),
         (Self::Books, "Library"),
+    ];
+    /// Books are not part of the web version yet.
+    #[cfg(target_arch = "wasm32")]
+    const ALL: [(Self, &'static str); 6] = [
+        (Self::Dashboard, "Dashboard"),
+        (Self::Training, "Train"),
+        (Self::Review, "Review"),
+        (Self::Progress, "Progress"),
+        (Self::Builder, "New set"),
+        (Self::Settings, "Settings"),
     ];
 }
 #[derive(Clone, Debug)]
@@ -141,7 +154,9 @@ pub struct Woodpeck {
     toast: Option<(String, Instant)>,
     delete: Option<i64>,
     collapsed: bool,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     export_path: String,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     sync_remote: String,
     data_path: PathBuf,
     theme: style::ThemeWatcher,
@@ -769,6 +784,28 @@ impl eframe::App for Woodpeck {
         self.frame_stats.record(self.frame_started.elapsed());
     }
 }
+/// Starts the browser app on a canvas. The store has already been restored from `IndexedDB`.
+#[cfg(target_arch = "wasm32")]
+pub async fn run_web(
+    canvas: web_sys::HtmlCanvasElement,
+    service: AppService,
+) -> Result<(), wasm_bindgen::JsValue> {
+    eframe::WebRunner::new()
+        .start(
+            canvas,
+            eframe::WebOptions::default(),
+            Box::new(move |cc| {
+                Ok(Box::new(Woodpeck::new(
+                    &cc.egui_ctx,
+                    service,
+                    PathBuf::new(),
+                    None,
+                )))
+            }),
+        )
+        .await
+}
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run(screenshot: Option<Screenshot>) -> Result<(), Box<dyn std::error::Error>> {
     let path = AppService::default_database_path().ok_or("Could not locate data directory")?;
     let service = if screenshot.is_some() {

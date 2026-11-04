@@ -1,10 +1,9 @@
 //! Local book collection and cancellable import presentation.
 use super::{Screen, Woodpeck, reader::Reader, widgets};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::books::import::{PageSource, TextImporter};
 use crate::{
-    books::{
-        import::{ImportError, PageSource, TextImporter},
-        model::Book,
-    },
+    books::{import::ImportError, model::Book},
     source::CancelFlag,
     store::ReadingProgress,
 };
@@ -24,7 +23,7 @@ use std::{
 ///
 /// The dialog is created on the UI thread (macOS requires it) but awaited on a worker, so no
 /// modal loop ever runs inside the window's event handling.
-#[cfg(not(test))]
+#[cfg(not(any(test, target_arch = "wasm32")))]
 fn pick_book() -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
     let chosen = rfd::AsyncFileDialog::new()
         .set_title("Import a chess book")
@@ -32,7 +31,7 @@ fn pick_book() -> impl std::future::Future<Output = Option<PathBuf>> + Send + 's
         .pick_file();
     async move { chosen.await.map(|file| file.path().to_path_buf()) }
 }
-#[cfg(test)]
+#[cfg(any(test, target_arch = "wasm32"))]
 fn pick_book() -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
     std::future::ready(None)
 }
@@ -56,6 +55,7 @@ pub(super) struct Library {
     message: String,
     pub covers: super::covers::Covers,
 }
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(super) fn import_error(error: &ImportError) -> String {
     match error {
         ImportError::NoTextLayer => {
@@ -168,10 +168,16 @@ impl Woodpeck {
         let (send, receive) = mpsc::channel();
         let ctx = ctx.clone();
         let chosen = pick_book();
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
             let _ = send.send(pollster::block_on(chosen));
             ctx.request_repaint();
         });
+        #[cfg(target_arch = "wasm32")]
+        {
+            drop((chosen, ctx));
+            let _ = send.send(None);
+        }
         self.books.picking = Some(receive);
     }
     fn start_import(&mut self, ctx: &egui::Context, path: PathBuf) {
@@ -184,6 +190,12 @@ impl Woodpeck {
         let stage = Arc::new(AtomicU8::new(0));
         let worker_stage = stage.clone();
         let ctx = ctx.clone();
+        #[cfg(target_arch = "wasm32")]
+        {
+            drop((path, flag, worker_stage, ctx));
+            let _ = send.send(Err("Books are not available in the web version yet.".into()));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
             use sha2::{Digest, Sha256};
             let result = (|| {
