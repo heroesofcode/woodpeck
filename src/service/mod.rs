@@ -3,7 +3,7 @@ mod local;
 mod plan;
 #[cfg(test)]
 mod tests;
-use plan::fallback_request;
+use plan::{fallback_request, in_band, save_single, save_valid, starter};
 mod worker;
 pub(crate) use local::Wake;
 #[doc(hidden)]

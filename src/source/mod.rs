@@ -1,5 +1,7 @@
 //! Source formats and quality filtering. Network/import job orchestration is added separately.
 mod api;
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
 #[cfg(not(target_arch = "wasm32"))]
 mod client;
 mod csv;
