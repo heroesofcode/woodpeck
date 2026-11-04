@@ -74,6 +74,8 @@ pub(super) struct Extracted {
     pub cover: Option<Vec<u8>>,
     /// Pictures per page, top to bottom.
     pub pictures: Vec<Vec<super::picture::Placed>>,
+    /// Board crops found by rendering pages (scans, drawings), included in `pictures`.
+    pub boards: usize,
 }
 pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
     let doc = lopdf::Document::load_mem(bytes)?;
@@ -117,19 +119,73 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
         let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
         (!value.is_empty()).then_some(value)
     };
+    let fonts: Vec<Vec<super::fontboard::FontBoard>> = layout
+        .pages
+        .iter()
+        .map(|glyphs| {
+            let marks: Vec<super::fontboard::Mark> = glyphs
+                .iter()
+                .filter_map(|g| {
+                    let mut chars = g.text.chars();
+                    let ch = chars.next()?;
+                    chars.next().is_none().then_some(super::fontboard::Mark {
+                        x: g.x,
+                        y: g.y,
+                        size: g.size,
+                        ch,
+                    })
+                })
+                .collect();
+            super::fontboard::boards(&marks)
+        })
+        .collect();
     let pages: Vec<_> = layout.pages.into_iter().map(order).collect();
+    let pictures = pictures(&doc, bytes, &fonts);
     Ok(Extracted {
         outline: chapters(outline, pages.len()),
         pages,
         title: info(b"Title"),
         author: info(b"Author"),
         cover: first_page_picture(&doc),
-        pictures: doc
-            .get_pages()
-            .values()
-            .map(|&page| super::picture::pictures(&doc, page))
-            .collect(),
+        boards: pictures.iter().flatten().filter(|p| p.rendered).count(),
+        pictures,
     })
+}
+/// Pictures per page. A page with no picture, or whose picture is the whole page (a scan), is
+/// rendered and searched for boards; board crops found there replace the page scan.
+fn pictures(
+    doc: &lopdf::Document,
+    bytes: &[u8],
+    fonts: &[Vec<super::fontboard::FontBoard>],
+) -> Vec<Vec<super::picture::Placed>> {
+    let renderer = super::raster::Renderer::new(bytes);
+    doc.get_pages()
+        .values()
+        .enumerate()
+        .map(|(i, &page)| {
+            let mut placed = super::picture::pictures(doc, page);
+            let Some((renderer, area)) = renderer.as_ref().and_then(|r| Some((r, r.area(i)?)))
+            else {
+                return placed;
+            };
+            let scan = |p: &super::picture::Placed| p.area >= 0.5 * area;
+            let fonts = fonts.get(i).map_or(&[][..], Vec::as_slice);
+            let scanned = placed.iter().all(scan);
+            if scanned || !fonts.is_empty() {
+                let mut boards = renderer.boards(i, fonts);
+                // Beside embedded pictures, only boards confirmed by their glyphs are added.
+                if !scanned {
+                    boards.retain(|b| crate::books::diagram::stated_placement(&b.bytes).is_some());
+                }
+                if !boards.is_empty() {
+                    placed.retain(|p| !scan(p));
+                    placed.extend(boards);
+                    placed.sort_by(|a, b| b.top.total_cmp(&a.top));
+                }
+            }
+            placed
+        })
+        .collect()
 }
 /// The largest image on page 1 when it is big enough to be a cover: JPEG streams as they
 /// are, 8-bit gray or RGB streams re-encoded as PNG. Other encodings are skipped.
