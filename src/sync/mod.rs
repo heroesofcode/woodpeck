@@ -18,7 +18,6 @@ pub enum SyncError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[cfg(not(target_arch = "wasm32"))]
     #[error(transparent)]
     Store(#[from] crate::store::StoreError),
     #[error("Sync schema version {0} is newer than supported; update woodpeck before syncing.")]

@@ -23,7 +23,6 @@ pub mod settings;
 pub mod sound;
 pub mod source;
 pub mod stats;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 pub mod sync;
 // Color conversion rounds and clamps floating-point channels to the byte range.

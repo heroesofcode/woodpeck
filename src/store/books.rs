@@ -24,7 +24,7 @@ impl Store {
     /// Duplicate file hashes return the existing book without replacing progress or node IDs.
     pub fn save_book(&self, book: &Book, hash: &str, imported_at: i64) -> Result<i64> {
         let json = serde_json::to_vec(book)?;
-        let blob = zstd::stream::encode_all(json.as_slice(), 3)?;
+        let blob = compress(&json)?;
         self.connection.execute("INSERT OR IGNORE INTO books(title,author,format,file_hash,imported_at,model) VALUES(?1,?2,?3,?4,?5,?6)", params![book.document.title, book.document.author, book.document.format, hash, imported_at, blob])?;
         Ok(self
             .connection
@@ -40,7 +40,7 @@ impl Store {
         blob.map(|blob| {
             use std::io::Read;
             let mut json = Vec::new();
-            zstd::stream::read::Decoder::new(blob.as_slice())?
+            decoder(&blob)?
                 .take(640 * 1024 * 1024 + 1)
                 .read_to_end(&mut json)?;
             if json.len() > 640 * 1024 * 1024 {
@@ -214,4 +214,22 @@ mod cover_tests {
         store.delete_book(id).unwrap();
         assert_eq!(store.book_covers().unwrap(), vec![]);
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn compress(json: &[u8]) -> Result<Vec<u8>> {
+    Ok(zstd::stream::encode_all(json, 3)?)
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn decoder(blob: &[u8]) -> Result<impl std::io::Read + '_> {
+    Ok(zstd::stream::read::Decoder::new(blob)?)
+}
+/// Books are not part of the browser build yet.
+#[cfg(target_arch = "wasm32")]
+fn compress(_: &[u8]) -> Result<Vec<u8>> {
+    Err(StoreError::InvalidData("Books are not available in the web version yet.".into()))
+}
+#[cfg(target_arch = "wasm32")]
+fn decoder(_: &[u8]) -> Result<std::io::Empty> {
+    Err(StoreError::InvalidData("Books are not available in the web version yet.".into()))
 }
