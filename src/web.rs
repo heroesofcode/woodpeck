@@ -61,11 +61,31 @@ async fn load(database: &IdbDatabase) -> Result<Option<Vec<u8>>, JsValue> {
     Ok((!value.is_undefined() && !value.is_null())
         .then(|| js_sys::Uint8Array::new(&value).to_vec()))
 }
-fn save(database: &IdbDatabase, image: &[u8]) -> Result<(), JsValue> {
-    let objects = database
-        .transaction_with_str_and_mode(OBJECTS, IdbTransactionMode::Readwrite)?
-        .object_store(OBJECTS)?;
-    objects.put_with_key(&js_sys::Uint8Array::from(image), &JsValue::from_str(KEY))?;
+/// Starts a write and calls `done` with whether the transaction committed.
+fn save(
+    database: &IdbDatabase,
+    image: &[u8],
+    done: impl FnOnce(bool) + 'static,
+) -> Result<(), JsValue> {
+    let transaction =
+        database.transaction_with_str_and_mode(OBJECTS, IdbTransactionMode::Readwrite)?;
+    transaction
+        .object_store(OBJECTS)?
+        .put_with_key(&js_sys::Uint8Array::from(image), &JsValue::from_str(KEY))?;
+    let done = std::rc::Rc::new(std::cell::RefCell::new(Some(done)));
+    let finish = move |ok: bool| {
+        let done = done.clone();
+        Closure::once_into_js(move || {
+            if let Some(done) = done.borrow_mut().take() {
+                done(ok);
+            }
+        })
+    };
+    let complete = finish(true);
+    let failed = finish(false);
+    transaction.set_oncomplete(Some(complete.unchecked_ref()));
+    transaction.set_onerror(Some(failed.unchecked_ref()));
+    transaction.set_onabort(Some(failed.unchecked_ref()));
     Ok(())
 }
 /// Asks the browser not to evict the database under storage pressure (Safari especially).
@@ -98,14 +118,28 @@ fn loading(message: Option<&str>) {
 /// Saves after changes and when the page is hidden or closed, so a phone that kills the tab
 /// keeps the last puzzle.
 fn keep_saved(database: &IdbDatabase, service: crate::service::LocalService) {
-    let saved = std::rc::Rc::new(std::cell::Cell::new(None::<u64>));
+    use std::{cell::Cell, rc::Rc};
+    // A revision counts as saved only once IndexedDB commits it; one write runs at a time.
+    let saved = Rc::new(Cell::new(None::<u64>));
+    let writing = Rc::new(Cell::new(false));
     let flush = {
-        let (database, saved) = (database.clone(), saved.clone());
+        let database = database.clone();
         move || {
-            if let Ok(Some((revision, image))) = service.browser_image(saved.get())
-                && save(&database, &image).is_ok()
-            {
-                saved.set(Some(revision));
+            if writing.get() {
+                return;
+            }
+            if let Ok(Some((revision, image))) = service.browser_image(saved.get()) {
+                let (saved, writing_done) = (saved.clone(), writing.clone());
+                writing.set(true);
+                let started = save(&database, &image, move |ok| {
+                    if ok {
+                        saved.set(Some(revision));
+                    }
+                    writing_done.set(false);
+                });
+                if started.is_err() {
+                    writing.set(false);
+                }
             }
         }
     };
@@ -170,6 +204,18 @@ pub fn download(name: &str, text: &str) -> Result<(), String> {
         .map_err(|_| "Could not create a link.")?;
     anchor.set_href(&url);
     anchor.set_download(name);
+    let body = window()
+        .map_err(fail)?
+        .document()
+        .and_then(|d| d.body())
+        .ok_or("No page body.")?;
+    body.append_child(&anchor).map_err(fail)?;
     anchor.click();
-    web_sys::Url::revoke_object_url(&url).map_err(fail)
+    anchor.remove();
+    // Revoke later so the browser has time to start reading the file.
+    gloo_timers::callback::Timeout::new(60_000, move || {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    })
+    .forget();
+    Ok(())
 }
