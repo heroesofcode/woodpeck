@@ -84,12 +84,11 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
         let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             pdf_extract::output_doc_page(&doc, &mut layout, page)
         }));
-        match read {
-            Ok(result) => result?,
-            Err(_) => {
-                layout.pages.truncate(i);
-                layout.pages.push(vec![]);
-            }
+        if let Ok(result) = read {
+            result?;
+        } else {
+            layout.pages.truncate(i);
+            layout.pages.push(vec![]);
         }
     }
     let outline = doc
