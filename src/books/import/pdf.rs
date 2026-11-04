@@ -78,7 +78,20 @@ pub(super) struct Extracted {
 pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
     let doc = lopdf::Document::load_mem(bytes)?;
     let mut layout = Layout::default();
-    pdf_extract::output_doc(&doc, &mut layout)?;
+    // pdf-extract panics on some malformed content streams (a path op with no current
+    // point); such a page is kept as an empty page instead of losing the whole book.
+    for (i, page) in doc.get_pages().into_keys().enumerate() {
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pdf_extract::output_doc_page(&doc, &mut layout, page)
+        }));
+        match read {
+            Ok(result) => result?,
+            Err(_) => {
+                layout.pages.truncate(i);
+                layout.pages.push(vec![]);
+            }
+        }
+    }
     let outline = doc
         .get_toc()
         .map(|toc| {
