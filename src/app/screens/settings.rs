@@ -212,6 +212,13 @@ impl Woodpeck {
                 {
                     job.cancel.cancel();
                 }
+            } else if cfg!(target_arch = "wasm32") {
+                ui.small("Larger libraries are available in the desktop app.");
+                ui.add_enabled_ui(self.library.can_start(), |ui| {
+                    if ui.button("Re-import starter pack").clicked() {
+                        self.start_library(LibrarySize::Starter);
+                    }
+                });
             } else {
                 ui.add_enabled_ui(self.library.can_start(), |ui| {
                     if self.library.selected == LibrarySize::Starter {

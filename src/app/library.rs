@@ -186,6 +186,32 @@ impl Woodpeck {
         }
         self.welcome_keyboard(ui);
     }
+    /// The browser keeps the bundled starter pack; larger libraries stay desktop-only for now.
+    #[cfg(target_arch = "wasm32")]
+    fn welcome_choices(&mut self, ui: &mut Ui) {
+        widgets::title(
+            ui,
+            "A WORLD OF PATTERNS",
+            "Your puzzle library",
+            "The web version starts with the bundled starter pack.",
+        );
+        ui.label("Free puzzles from Lichess, filtered for quality and playable solutions.");
+        ui.hyperlink_to(
+            "Lichess puzzle database · CC0",
+            "https://database.lichess.org/#puzzles",
+        );
+        ui.small("Stored only in this browser. Nothing is uploaded.");
+        ui.strong(format!(
+            "{} puzzles available offline",
+            widgets::grouped_count(self.library.count)
+        ));
+        ui.small("Larger libraries are available in the desktop app.");
+        ui.add_space(18.0);
+        if widgets::primary(ui, "Start with the starter pack").clicked() {
+            self.skip_welcome();
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     fn welcome_choices(&mut self, ui: &mut Ui) {
         widgets::title(
             ui,
@@ -260,6 +286,13 @@ impl Woodpeck {
             }
         }
         if self.library.step != WelcomeStep::Choose {
+            return;
+        }
+        // Only the starter pack is offered in the browser.
+        if cfg!(target_arch = "wasm32") {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                self.skip_welcome();
+            }
             return;
         }
         let next = ctx.input_mut(|i| {

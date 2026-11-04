@@ -239,10 +239,7 @@ impl Woodpeck {
             toast: None,
             delete: None,
             collapsed: false,
-            export_path: std::env::temp_dir()
-                .join("woodpeck-set.pgn")
-                .display()
-                .to_string(),
+            export_path: default_export_path(),
             sync_remote,
             data_path,
             theme,
@@ -855,3 +852,17 @@ pub fn run(screenshot: Option<Screenshot>) -> Result<(), Box<dyn std::error::Err
 
 #[cfg(test)]
 mod tests;
+/// The browser has no temporary directory; its export downloads a file instead.
+fn default_export_path() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::temp_dir()
+            .join("woodpeck-set.pgn")
+            .display()
+            .to_string()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        String::new()
+    }
+}
