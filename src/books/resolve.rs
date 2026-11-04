@@ -736,8 +736,10 @@ fn resolve_tokens(
                 });
                 // A root move must start from the fragment's own position, or the tree edge
                 // would not replay from it.
+                // A PGN header starts a new game inside the same fragment on purpose.
                 let rootless = read.is_ok()
                     && context.parent.is_none()
+                    && !context.header
                     && !fragment.nodes.is_empty()
                     && fen(&context.pos) != fragment.start_fen;
                 if rootless {
