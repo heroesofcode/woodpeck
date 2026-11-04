@@ -261,7 +261,7 @@ impl Woodpeck {
                     move |service| service.export_pgn(id, &path),
                     |app, result| match result {
                         Ok(()) => {
-                            app.toast = Some(("PGN exported".into(), std::time::Instant::now()));
+                            app.toast = Some(("PGN exported".into(), web_time::Instant::now()));
                         }
                         Err(error) => app.error(error),
                     },

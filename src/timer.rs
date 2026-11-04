@@ -1,5 +1,6 @@
 //! Per-puzzle elapsed time; update at state transitions, repaint every 100 ms.
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 pub const TICK: Duration = Duration::from_millis(100);
 pub trait Clock {
     fn now(&self) -> Duration;
