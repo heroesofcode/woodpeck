@@ -1,8 +1,10 @@
 # Diagram classifier training sources
 
 `src/books/diagram_cnn.bin` holds the weights of the two small square classifiers in
-`src/books/cnn.rs`. They were trained only on synthetic boards rendered from the freely licensed
-piece sets and fonts below; no scanned or copyrighted book pages were used for training.
+`src/books/cnn.rs`. They were trained mostly on synthetic boards rendered from the freely licensed
+piece sets and fonts below. The latest round also fine-tuned them on square crops of diagrams
+from chess books that the maintainer bought and holds privately. Those books, their pages and
+the crops are not part of this repository and are not distributed; only the learned weights are.
 The piece sets come from the lichess-org/lila repository (`public/piece`, see its `COPYING.md`).
 
 ## Piece sets

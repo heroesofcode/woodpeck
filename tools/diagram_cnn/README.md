@@ -1,8 +1,9 @@
 # Diagram square classifier training
 
-Rebuilds `src/books/diagram_cnn.bin`, the weights used by `books::cnn`. Training is
-synthetic only: boards are drawn from the freely licensed piece sets and fonts listed in
-`assets/LICENSES.md`. No book pages or crops are needed or used. Inference is plain Rust and
+Rebuilds `src/books/diagram_cnn.bin`, the weights used by `books::cnn`. Steps 1 to 6
+are synthetic only: boards are drawn from the freely licensed piece sets and fonts listed in
+`assets/LICENSES.md`. Step 7 also used square crops from privately held, purchased chess books;
+those are not distributed, so that step can only be repeated with your own labelled diagrams. Inference is plain Rust and
 needs none of this; these scripts need Python 3 with numpy, scipy, Pillow, cairosvg and PyTorch.
 
 1. Put the SVG sets (`cburnett`, `celtic`, `chessnut`, `fantasy`, `merida`, `mpchess`,
@@ -37,6 +38,18 @@ needs none of this; these scripts need Python 3 with numpy, scipy, Pillow, cairo
 
 6. Train the second network the same way (`train.py 16,32,64 8 net_b.pt ...`), then
    `python export.py ../../src/books/diagram_cnn.bin net.pt 12,24,48 net_b.pt 16,32,64`
+
+7. Round 4 (real diagrams) fine-tunes the round 3 networks for four epochs at `MAXLR=1e-3` on
+   `t4001` to `t4004` plus a `real.npz` of labelled board crops from purchased books, listed twice.
+   `real.npz` has the same layout as the generated sets (`X` uint8 `N x 64 x 32 x 32` cells as cut
+   by the Rust locator, `Y` int64 `N x 64`); a square that was not checked by hand is `-1` and is
+   ignored by the loss. Whole books were held out for testing, and the thresholds were left as they
+   were because the held-out books and the Gutenberg suite gave no wrong position with them.
+
+   ```sh
+   INIT=net3.pt MAXLR=1e-3 THREADS=3 python train.py 12,24,48 4 net4.pt val4.npz t400[1-4].npz real.npz real.npz
+   INIT=net3_b.pt MAXLR=1e-3 THREADS=3 python train.py 16,32,64 4 net4_b.pt val4.npz t400[1-4].npz real.npz real.npz
+   ```
 
 Class 13 is "junk": a square cut by a misplaced frame. The acceptance thresholds in
 `src/books/cnn.rs` were chosen on a separate set of real diagrams, so a retrained network
