@@ -7,6 +7,7 @@ pub mod notation;
 pub mod resolve;
 
 pub mod cnn;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cover;
 pub mod coverage;
 pub mod diagram;

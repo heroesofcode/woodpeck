@@ -1,10 +1,14 @@
 //! Opt-in progress synchronization. The portable format is independent of Git and SQLite.
+#[cfg(not(target_arch = "wasm32"))]
 use web_time::Instant;
 pub mod format;
+#[cfg(not(target_arch = "wasm32"))]
 mod git;
 pub mod merge;
+#[cfg(not(target_arch = "wasm32"))]
 mod process;
 pub mod remote;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod worker;
 use thiserror::Error;
 
@@ -14,6 +18,7 @@ pub enum SyncError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[cfg(not(target_arch = "wasm32"))]
     #[error(transparent)]
     Store(#[from] crate::store::StoreError),
     #[error("Sync schema version {0} is newer than supported; update woodpeck before syncing.")]
@@ -27,8 +32,10 @@ pub enum SyncError {
 }
 pub type Result<T> = std::result::Result<T, SyncError>;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::store::Store;
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path, time::Duration};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +74,7 @@ pub struct Config {
     pub status: Status,
     pub synced_generation: i64,
 }
+#[cfg(not(target_arch = "wasm32"))]
 pub fn config(store: &Store) -> Result<Config> {
     let mut config: Config = store
         .setting("sync_config")?
@@ -81,6 +89,7 @@ pub fn config(store: &Store) -> Result<Config> {
     }
     Ok(config)
 }
+#[cfg(not(target_arch = "wasm32"))]
 /// Hold the write lock from the read through the update, including across connections.
 fn update_config(store: &Store, update: impl FnOnce(&mut Config) -> Result<()>) -> Result<Config> {
     let transaction = store.immediate_transaction()?;
@@ -92,6 +101,7 @@ fn update_config(store: &Store, update: impl FnOnce(&mut Config) -> Result<()>) 
         .map_err(crate::store::StoreError::from)?;
     Ok(cfg)
 }
+#[cfg(not(target_arch = "wasm32"))]
 /// Worker snapshots own runtime fields only; discard results for obsolete settings.
 fn save_runtime(store: &Store, runtime: &Config) -> Result<Config> {
     update_config(store, |latest| {
@@ -105,6 +115,7 @@ fn save_runtime(store: &Store, runtime: &Config) -> Result<Config> {
         Ok(())
     })
 }
+#[cfg(not(target_arch = "wasm32"))]
 pub fn configure(store: &Store, remote: &str, enabled: bool) -> Result<Config> {
     if enabled || !remote.is_empty() {
         git::validate_remote(remote)?;
@@ -126,13 +137,16 @@ pub fn configure(store: &Store, remote: &str, enabled: bool) -> Result<Config> {
         Ok(())
     })
 }
+#[cfg(not(target_arch = "wasm32"))]
 pub fn init(store: &mut Store, data: &Path, remote: Option<&str>) -> Result<Config> {
     crate::store::ensure_external_data_dir(data)?;
     let url = remote.map_or_else(|| git::create_remote(data), |s| Ok(s.to_owned()))?;
     configure(store, &url, true)?;
     synchronize(store, data, Duration::from_secs(45))
 }
+#[cfg(not(target_arch = "wasm32"))]
 struct Lease(std::path::PathBuf);
+#[cfg(not(target_arch = "wasm32"))]
 impl Lease {
     fn acquire(data: &Path) -> Result<Self> {
         let path = data.join("sync.lock");
@@ -159,11 +173,13 @@ impl Lease {
         Ok(Self(path))
     }
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Lease {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
     }
 }
+#[cfg(not(target_arch = "wasm32"))]
 /// Blocking API for CLI/tests and the background worker; never call from the UI thread.
 pub fn synchronize(store: &mut Store, data: &Path, budget: Duration) -> Result<Config> {
     let deadline = Instant::now() + budget;
@@ -219,6 +235,7 @@ pub fn synchronize(store: &mut Store, data: &Path, budget: Duration) -> Result<C
     let latest = save_runtime(store, &latest)?;
     result.map(|_| latest)
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl remote::SyncStorage for Store {
     fn export_sync(&self) -> Result<format::State> {
         Ok(Store::export_sync(self)?)
@@ -230,6 +247,7 @@ impl remote::SyncStorage for Store {
         Store::import_sync(self, remote)
     }
 }
+#[cfg(not(target_arch = "wasm32"))]
 fn synchronize_inner(
     store: &mut Store,
     data: &Path,
@@ -242,6 +260,7 @@ fn synchronize_inner(
     remote::exchange(store, &repo)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
     use super::*;
