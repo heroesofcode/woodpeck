@@ -148,7 +148,8 @@ The API fallback is offered explicitly when local generation is short; it makes 
 
 `woodpeck book import <book.epub|book.pdf>` imports text-layer chess books into a
 separate local store. Book reading screens will follow in a later release. Scanned
-PDFs return a clear unsupported status. `woodpeck book eval <directory>` measures
+PDFs without diagrams return a clear unsupported status; diagrams on scanned, drawn or
+diagram-font pages are found and read, but their move text needs a text layer. `woodpeck book eval <directory>` measures
 annotated books and writes Markdown/JSON reports. See the [core design](docs/books-core.md)
 and [reproducible evaluation corpus](tests/books/README.md) for supported notation,
 known limitations, and the optional Gutenberg benchmark.
@@ -297,7 +298,7 @@ the system file chooser (the XDG desktop portal on Linux, with zenity as a fallb
 the native dialog on macOS and Windows). If no chooser is available, type the file
 path in the field below it. Extraction and move resolution run in the background, with
 stage progress and cancellation. Duplicate imports resume the existing book.
-Scanned and DRM-protected books are not supported.
+DRM-protected books are not supported. Scanned books contribute only the diagrams found on their pages.
 
 Select moves in the text or move list to explore them on the board. Use Left/Right
 to step, Up/Down to choose a continuation, Home/End for the line, and
