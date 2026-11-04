@@ -21,6 +21,17 @@ pub(super) struct FontBoard {
     pub placement: String,
 }
 
+impl FontBoard {
+    /// Whether a glyph of `size` at baseline point (x, y) belongs to the board: its squares
+    /// or its border rows, all set in the diagram font at the cell size.
+    pub fn covers(&self, x: f64, y: f64, size: f64) -> bool {
+        let cell = (self.right - self.left) / 10.0;
+        (size - cell).abs() <= 0.2 * cell
+            && (self.left - 0.5 * cell..=self.right + 0.5 * cell).contains(&x)
+            && (self.bottom - cell..=self.top + 0.5 * cell).contains(&y)
+    }
+}
+
 /// Font characters are often exposed in the symbol private-use range (U+F020 is the font's
 /// space); fold them back to the font's ASCII codes.
 fn code(ch: char) -> char {

@@ -239,6 +239,8 @@ pub fn label_kind(word: &str) -> Option<LabelKind> {
 fn label_word(word: &str) -> bool {
     label_kind(word).is_some()
 }
+/// Figurine fonts that type their pieces on Latin-1 codes, in KQRBNP order.
+const FONT_FIGURINES: [&str; 2] = ["¢£¶•§ß", "¢£¦¥¤"];
 fn role_letter(c: char, alphabet: &str) -> char {
     if let Some(i) = "♔♕♖♗♘♙"
         .chars()
@@ -247,8 +249,10 @@ fn role_letter(c: char, alphabet: &str) -> char {
     {
         return "KQRBNP".chars().nth(i).expect("piece index");
     }
-    if let Some(i) = "¢£¶•§ß".chars().position(|p| p == c) {
-        return "KQRBNP".chars().nth(i).expect("font piece index");
+    for font in FONT_FIGURINES {
+        if let Some(i) = font.chars().position(|p| p == c) {
+            return "KQRBNP".chars().nth(i).expect("font piece index");
+        }
     }
     alphabet
         .chars()
@@ -264,7 +268,10 @@ pub fn normalize(text: &str, alphabet: &str) -> String {
     let mut result = String::new();
     for c in text.chars().filter(|c| !c.is_whitespace()) {
         result.push(
-            if c.is_uppercase() || ('♔'..='♟').contains(&c) || "¢£¶•§ß".contains(c) {
+            if c.is_uppercase()
+                || ('♔'..='♟').contains(&c)
+                || FONT_FIGURINES.iter().any(|f| f.contains(c))
+            {
                 role_letter(c, alphabet)
             } else {
                 c
@@ -678,7 +685,7 @@ mod typography_tests {
                 .to_string(),
             "b1c3"
         );
-        for text in ["§f3", "Kt-KB3", "K. Kt. to B's 3d."] {
+        for text in ["§f3", "¤f3", "Kt-KB3", "K. Kt. to B's 3d."] {
             assert_eq!(
                 parse(&Chess::default(), text, "KQRBN")
                     .unwrap()
