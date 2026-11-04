@@ -72,20 +72,23 @@ fn save(
     transaction
         .object_store(OBJECTS)?
         .put_with_key(&js_sys::Uint8Array::from(image), &JsValue::from_str(KEY))?;
+    // One handler per event; whichever fires first reports, later ones do nothing.
     let done = std::rc::Rc::new(std::cell::RefCell::new(Some(done)));
-    let finish = move |ok: bool| {
+    let finish = |ok: bool| {
         let done = done.clone();
-        Closure::once_into_js(move || {
+        Closure::<dyn FnMut()>::new(move || {
             if let Some(done) = done.borrow_mut().take() {
                 done(ok);
             }
         })
+        .into_js_value()
     };
     let complete = finish(true);
     let failed = finish(false);
+    let aborted = finish(false);
     transaction.set_oncomplete(Some(complete.unchecked_ref()));
     transaction.set_onerror(Some(failed.unchecked_ref()));
-    transaction.set_onabort(Some(failed.unchecked_ref()));
+    transaction.set_onabort(Some(aborted.unchecked_ref()));
     Ok(())
 }
 /// Asks the browser not to evict the database under storage pressure (Safari especially).
@@ -119,27 +122,19 @@ fn loading(message: Option<&str>) {
 /// keeps the last puzzle.
 fn keep_saved(database: &IdbDatabase, service: crate::service::LocalService) {
     use std::{cell::Cell, rc::Rc};
-    // A revision counts as saved only once IndexedDB commits it; one write runs at a time.
+    // A revision counts as saved only once IndexedDB commits it. Writes are never skipped:
+    // IndexedDB commits same-store transactions in order, so the newest snapshot lands last.
     let saved = Rc::new(Cell::new(None::<u64>));
-    let writing = Rc::new(Cell::new(false));
     let flush = {
         let database = database.clone();
         move || {
-            if writing.get() {
-                return;
-            }
             if let Ok(Some((revision, image))) = service.browser_image(saved.get()) {
-                let (saved, writing_done) = (saved.clone(), writing.clone());
-                writing.set(true);
-                let started = save(&database, &image, move |ok| {
-                    if ok {
+                let saved = saved.clone();
+                let _ = save(&database, &image, move |ok| {
+                    if ok && saved.get().is_none_or(|known| known < revision) {
                         saved.set(Some(revision));
                     }
-                    writing_done.set(false);
                 });
-                if started.is_err() {
-                    writing.set(false);
-                }
             }
         }
     };
