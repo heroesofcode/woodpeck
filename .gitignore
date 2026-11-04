@@ -8,3 +8,4 @@
 /tests/books/gutenberg/report.md
 /tests/books/gutenberg/*.epub
 __pycache__/
+/web/dist/
