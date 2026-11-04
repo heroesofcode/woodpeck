@@ -1384,6 +1384,17 @@ mod tests {
         );
     }
     #[test]
+    fn latin_one_font_figurines_are_read_as_moves() {
+        let b = book("1.e4 e5 2.¤f3 ¤c6 3.¥b5 a6 4.¥a4 ¤f6 5.0-0 ¥e7 6.¦e1 b5 7.¥b3 d6 8.£e2 ¢f8");
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            [
+                "e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4", "g8f6", "e1g1", "f8e7",
+                "f1e1", "b7b5", "a4b3", "d7d6", "d1e2", "e8f8"
+            ]
+        );
+    }
+    #[test]
     fn pgn_headers_start_a_new_game_and_are_not_moves() {
         let b = book(
             "[Event \"?\"] [PlyCount \"39\"] 1. e4 e5 2. Nf3 1-0 \
