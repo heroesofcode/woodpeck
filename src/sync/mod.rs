@@ -4,6 +4,7 @@ pub mod format;
 mod git;
 pub mod merge;
 mod process;
+pub mod remote;
 pub mod worker;
 use thiserror::Error;
 
@@ -218,6 +219,17 @@ pub fn synchronize(store: &mut Store, data: &Path, budget: Duration) -> Result<C
     let latest = save_runtime(store, &latest)?;
     result.map(|_| latest)
 }
+impl remote::SyncStorage for Store {
+    fn export_sync(&self) -> Result<format::State> {
+        Ok(Store::export_sync(self)?)
+    }
+    fn export_sync_snapshot(&self) -> Result<(format::State, i64)> {
+        Ok(Store::export_sync_snapshot(self)?)
+    }
+    fn import_sync(&mut self, remote: &format::State) -> Result<format::State> {
+        Store::import_sync(self, remote)
+    }
+}
 fn synchronize_inner(
     store: &mut Store,
     data: &Path,
@@ -227,23 +239,7 @@ fn synchronize_inner(
     crate::store::ensure_external_data_dir(data)?;
     let _lease = Lease::acquire(data)?;
     let repo = git::Repository::open(data, remote, deadline)?;
-    let mut changed = false;
-    for _ in 0..3 {
-        let (branch, head) = repo.fetch()?;
-        if let Some(head) = &head {
-            let remote = repo.read(head)?;
-            let before = store.export_sync()?;
-            let merged = store.import_sync(&remote)?;
-            changed |= merged != before;
-        }
-        let (snapshot, generation) = store.export_sync_snapshot()?;
-        let commit = repo.commit(&snapshot, head.as_deref())?;
-        if repo.push(&commit, &branch)? {
-            return Ok((generation, changed));
-        }
-        // Re-fetch and repeat the semantic union after a concurrent non-fast-forward push.
-    }
-    Err(SyncError::Offline)
+    remote::exchange(store, &repo)
 }
 
 #[cfg(test)]
