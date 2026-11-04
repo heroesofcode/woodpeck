@@ -16,7 +16,6 @@ pub mod layout;
 pub mod motivation;
 pub mod puzzle;
 pub mod review;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod service;
 pub mod sets;
 pub mod settings;

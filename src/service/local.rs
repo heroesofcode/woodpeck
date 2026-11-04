@@ -1,7 +1,7 @@
 //! Serial local operations run independently of network downloads.
 use super::{
     Attempt, AttemptKind, BTreeMap, BuilderParams, CycleSummary, Event, Motivation, Mutex, Outcome,
-    Path, RecordedAttempt, Result, ReviewCard, ReviewSort, SetCreation, SetProgress, SetSummary,
+    RecordedAttempt, Result, ReviewCard, ReviewSort, SetCreation, SetProgress, SetSummary,
     Settings, SharedStore, StoreError, TrainingPosition, create_set, lock, mpsc, progress,
     training_position,
 };
@@ -41,6 +41,7 @@ impl EventSender {
 pub struct LocalService {
     pub(super) store: SharedStore,
 }
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) type Task = Box<dyn FnOnce(&LocalService) + Send>;
 #[doc(hidden)]
 #[derive(Clone)]
@@ -53,6 +54,7 @@ impl Shutdown {
         }
     }
 }
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn start(local: LocalService) -> Result<(mpsc::Sender<Task>, Shutdown)> {
     let (sender, receiver) = mpsc::channel::<Task>();
     let shutdown = Shutdown(Arc::new((Mutex::new(false), Condvar::new())));
@@ -114,6 +116,7 @@ impl LocalService {
         Ok(lock(&self.store)?.save_reading_progress(id, progress)?)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn configure_sync(&self, remote: &str, enabled: bool) -> Result<crate::sync::Config> {
         Ok(crate::sync::configure(
             &*lock(&self.store)?,
@@ -276,13 +279,20 @@ impl LocalService {
             .map_err(StoreError::from)?
             .unwrap_or_default())
     }
-    pub fn export_pgn(&self, set_id: i64, path: &Path) -> Result<()> {
-        let store = lock(&self.store)?;
-        let set = store.set(set_id)?.ok_or(StoreError::NotFound)?;
-        let pgn = crate::source::export_pgn(&set.params.name, &store.set_puzzles(set_id)?)?;
-        drop(store);
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn export_pgn(&self, set_id: i64, path: &std::path::Path) -> Result<()> {
+        let pgn = self.pgn(set_id)?;
         std::fs::write(path, pgn)?;
         Ok(())
+    }
+    /// The set as PGN text, for saving to a file or a browser download.
+    pub fn pgn(&self, set_id: i64) -> Result<String> {
+        let store = lock(&self.store)?;
+        let set = store.set(set_id)?.ok_or(StoreError::NotFound)?;
+        Ok(crate::source::export_pgn(
+            &set.params.name,
+            &store.set_puzzles(set_id)?,
+        )?)
     }
     pub fn delete_set(&self, set_id: i64) -> Result<()> {
         Ok(lock(&self.store)?.delete_set(set_id)?)

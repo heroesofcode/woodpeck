@@ -31,7 +31,6 @@ pub enum SyncError {
 }
 pub type Result<T> = std::result::Result<T, SyncError>;
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::store::Store;
 use serde::{Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
@@ -73,7 +72,6 @@ pub struct Config {
     pub status: Status,
     pub synced_generation: i64,
 }
-#[cfg(not(target_arch = "wasm32"))]
 pub fn config(store: &Store) -> Result<Config> {
     let mut config: Config = store
         .setting("sync_config")?

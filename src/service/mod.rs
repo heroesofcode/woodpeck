@@ -1,27 +1,33 @@
 //! Application operations and a serial background worker, with no GUI dependencies.
+#[cfg(target_arch = "wasm32")]
+mod browser;
 mod local;
 mod plan;
 #[cfg(test)]
 mod tests;
 use plan::{fallback_request, in_band, save_single, save_valid, starter};
+#[cfg(not(target_arch = "wasm32"))]
 mod worker;
 pub(crate) use local::Wake;
 #[doc(hidden)]
 pub use local::{LocalService, Shutdown as LocalShutdown};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::source::{LichessClient, PuzzleFetcher};
 use crate::{
     motivation::Motivation,
     puzzle::{Outcome, Puzzle},
     review::{ReviewCard, ReviewSort},
     sets::{BuilderParams, GenerationError, generate},
     settings::Settings,
-    source::{CancelFlag, ImportProgress, LichessClient, PuzzleFetcher, SourceError},
+    source::{CancelFlag, ImportProgress, SourceError},
     stats::{Attempt, AttemptKind, CycleStats, CycleSummary, ProgressReport, progress},
     store::{CycleRecord, RecordedAttempt, Store, StoreError, StoredSet},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::{Path, PathBuf};
 use std::{
     collections::BTreeMap,
-    path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, mpsc},
 };
 use thiserror::Error;
@@ -153,7 +159,9 @@ fn lock(store: &SharedStore) -> Result<MutexGuard<'_, Store>> {
 
 pub struct AppService {
     local: LocalService,
+    #[cfg(not(target_arch = "wasm32"))]
     local_commands: mpsc::Sender<local::Task>,
+    #[cfg(not(target_arch = "wasm32"))]
     local_shutdown: LocalShutdown,
     wake: Wake,
     commands: mpsc::Sender<Command>,
@@ -161,9 +169,14 @@ pub struct AppService {
     pending: BTreeMap<u64, CancelFlag>,
     imports: BTreeMap<u64, ImportStatus>,
     next_id: u64,
+    #[cfg(not(target_arch = "wasm32"))]
     sync: Option<crate::sync::worker::Worker>,
+    /// Phase 2 seam: the browser will sync through the GitHub API behind `sync::remote`.
+    #[cfg(target_arch = "wasm32")]
+    executor: browser::Executor,
 }
 impl AppService {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn open(path: &Path) -> Result<Self> {
         let mut service = Self::new(Store::open(path)?)?;
         let config = crate::sync::config(&*lock(&service.store)?)?;
@@ -175,9 +188,36 @@ impl AppService {
         Ok(service)
     }
     /// Starts the worker and queues the versioned, idempotent first-run starter import.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(store: Store) -> Result<Self> {
         Self::with_fetcher(store, Box::<LichessClient>::default())
     }
+    /// Browser service: jobs run on the page's event loop and the Lichess API is fetched.
+    #[cfg(target_arch = "wasm32")]
+    pub fn new(store: Store) -> Result<Self> {
+        let store = Arc::new(Mutex::new(store));
+        let (commands, receiver) = mpsc::channel();
+        let (sender, events) = mpsc::channel();
+        let wake = Wake::default();
+        let event_sender = local::EventSender {
+            sender,
+            wake: wake.clone(),
+        };
+        let executor = browser::Executor::new(store.clone(), receiver, event_sender);
+        let mut service = Self {
+            local: LocalService { store },
+            wake,
+            commands,
+            events,
+            pending: BTreeMap::new(),
+            imports: BTreeMap::new(),
+            next_id: 0,
+            executor,
+        };
+        service.submit(Job::ImportStarter { force: false })?;
+        Ok(service)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_fetcher(store: Store, fetcher: Box<dyn PuzzleFetcher>) -> Result<Self> {
         let store = Arc::new(Mutex::new(store));
         let (commands, receiver) = mpsc::channel();
@@ -213,6 +253,7 @@ impl AppService {
     pub fn set_waker(&self, wake: impl Fn() + Send + Sync + 'static) {
         self.wake.set(wake);
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn background<T: Send + 'static>(
         &self,
         work: impl FnOnce(&LocalService) -> Result<T> + Send + 'static,
@@ -227,11 +268,25 @@ impl AppService {
             .map_err(|_| ServiceError::WorkerUnavailable)?;
         Ok(receiver)
     }
+    /// The browser has no worker thread: local work runs now and the result is ready to poll.
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unnecessary_wraps)]
+    pub(crate) fn background<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&LocalService) -> Result<T> + Send + 'static,
+    ) -> Result<mpsc::Receiver<Result<T>>> {
+        let (sender, receiver) = mpsc::channel();
+        let _ = sender.send(work(&self.local));
+        self.wake.notify();
+        Ok(receiver)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn sync_configured(&mut self, config: crate::sync::Config) {
         if let Some(worker) = &mut self.sync {
             worker.update(config);
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn sync_status(&self) -> crate::sync::Config {
         self.sync
             .as_ref()
@@ -239,6 +294,7 @@ impl AppService {
                 worker.status().clone()
             })
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn configure_sync(&mut self, remote: &str, enabled: bool) -> Result<()> {
         let config = crate::sync::configure(&*lock(&self.store)?, remote, enabled)?;
         if let Some(worker) = &mut self.sync {
@@ -246,23 +302,44 @@ impl AppService {
         }
         Ok(())
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn sync_now(&self) {
         if let Some(worker) = &self.sync {
             worker.request();
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn poll_sync(&mut self) -> bool {
         self.sync
             .as_mut()
             .is_some_and(crate::sync::worker::Worker::poll)
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn local_shutdown(&self) -> LocalShutdown {
         self.local_shutdown.clone()
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn sync_shutdown(&self) -> Option<crate::sync::worker::Shutdown> {
         self.sync
             .as_ref()
             .map(crate::sync::worker::Worker::shutdown_handle)
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unused_self)]
+    pub(crate) fn sync_configured(&mut self, _config: crate::sync::Config) {}
+    /// Sync is not available in the browser until phase 2.
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unused_self)]
+    pub fn sync_status(&self) -> crate::sync::Config {
+        crate::sync::Config::default()
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unused_self)]
+    pub fn sync_now(&self) {}
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unused_self)]
+    pub fn poll_sync(&mut self) -> bool {
+        false
     }
     pub fn submit(&mut self, job: Job) -> Result<JobHandle> {
         self.next_id += 1;
@@ -281,6 +358,8 @@ impl AppService {
                 job,
             })
             .map_err(|_| ServiceError::WorkerUnavailable)?;
+        #[cfg(target_arch = "wasm32")]
+        self.executor.kick();
         self.pending.insert(handle.id, handle.cancel.clone());
         if let Some(size) = size {
             self.imports.insert(
@@ -344,6 +423,7 @@ impl AppService {
         }
         events
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn default_database_path() -> Option<PathBuf> {
         crate::store::database_path()
     }
