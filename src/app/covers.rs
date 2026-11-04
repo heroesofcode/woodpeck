@@ -108,6 +108,9 @@ impl Woodpeck {
         let (send, receive) = mpsc::channel();
         covers.lookups = Some(receive);
         let ctx = ctx.clone();
+        #[cfg(target_arch = "wasm32")]
+        drop((send, ctx, wanted));
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
             for (index, (id, title, author, isbn)) in wanted.into_iter().enumerate() {
                 if index > 0 {

@@ -61,7 +61,7 @@ gloo-timers = { version = "0.4", features = ["futures"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Navigator", "StorageManager", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Element", "console", "Storage", "IdbFactory", "IdbDatabase", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "IdbObjectStore", "IdbVersionChangeEvent", "Event", "EventTarget", "DomException", "VisibilityState"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Navigator", "StorageManager", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Element", "console", "Storage", "IdbFactory", "IdbDatabase", "DomStringList", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "IdbObjectStore", "IdbVersionChangeEvent", "Event", "EventTarget", "DomException", "VisibilityState"] }
 
 [dev-dependencies]
 tempfile = "3"

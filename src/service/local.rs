@@ -294,6 +294,16 @@ impl LocalService {
             &store.set_puzzles(set_id)?,
         )?)
     }
+    /// The database image when it changed since `saved`, with its revision, for the web shell.
+    #[cfg(target_arch = "wasm32")]
+    pub fn browser_image(&self, saved: Option<u64>) -> Result<Option<(u64, Vec<u8>)>> {
+        let store = lock(&self.store)?;
+        let revision = store.revision();
+        if saved == Some(revision) {
+            return Ok(None);
+        }
+        Ok(Some((revision, store.image()?)))
+    }
     pub fn delete_set(&self, set_id: i64) -> Result<()> {
         Ok(lock(&self.store)?.delete_set(set_id)?)
     }

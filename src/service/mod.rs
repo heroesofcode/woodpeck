@@ -325,7 +325,7 @@ impl AppService {
             .map(crate::sync::worker::Worker::shutdown_handle)
     }
     #[cfg(target_arch = "wasm32")]
-    #[allow(clippy::unused_self)]
+    #[allow(clippy::unused_self, dead_code)]
     pub(crate) fn sync_configured(&mut self, _config: crate::sync::Config) {}
     /// Sync is not available in the browser until phase 2.
     #[cfg(target_arch = "wasm32")]

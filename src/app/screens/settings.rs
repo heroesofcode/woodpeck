@@ -45,6 +45,16 @@ impl Woodpeck {
         ui.small("Puzzles from the Lichess puzzle database (CC0)");
         ui.small("cburnett pieces · GPLv2+ / CC BY-SA 3.0 · Colin M.L. Burnett");
     }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unused_self)]
+    fn sync_settings(&mut self, ui: &mut Ui) {
+        widgets::card(ui).show(ui, |ui| {
+            ui.set_width((ui.available_width() - 1.0).max(0.0));
+            ui.heading("Sync");
+            ui.label("Progress is saved in this browser. Sync with your GitHub repository is coming in a later version.");
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     fn sync_settings(&mut self, ui: &mut Ui) {
         let config = self.service.sync_status();
         widgets::card(ui).show(ui, |ui| {
@@ -237,6 +247,39 @@ impl Woodpeck {
             ui.small("Local to this computer · puzzle library never synced");
         });
     }
+    /// Browser variant: the PGN is offered as a download instead of written to a path.
+    #[cfg(target_arch = "wasm32")]
+    fn export_settings(&mut self, ui: &mut Ui) {
+        widgets::card(ui).show(ui, |ui| {
+            ui.set_width((ui.available_width() - 1.0).max(0.0));
+            ui.heading("Export a set");
+            ui.label("Download your fixed positions and solution lines as PGN.");
+            self.set_selector(ui, "export-set");
+            if ui
+                .add_enabled(
+                    self.selected_set.is_some(),
+                    egui::Button::new("Download set PGN"),
+                )
+                .clicked()
+                && let Some(id) = self.selected_set
+            {
+                self.background(
+                    move |service| service.pgn(id),
+                    |app, result| match result {
+                        Ok(pgn) => match crate::web::download("woodpeck-set.pgn", &pgn) {
+                            Ok(()) => {
+                                app.toast =
+                                    Some(("PGN downloaded".into(), web_time::Instant::now()));
+                            }
+                            Err(error) => app.error(error),
+                        },
+                        Err(error) => app.error(error),
+                    },
+                );
+            }
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     fn export_settings(&mut self, ui: &mut Ui) {
         widgets::card(ui).show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.0).max(0.0));

@@ -130,6 +130,7 @@ pub struct BoardWidget {
     last_state: Option<State>,
 }
 impl BoardWidget {
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) fn drag_origin(&self, engine: &Engine) -> Pos2 {
         let position = engine.position().unwrap();
         let from = position.legal_moves().first().unwrap().from().unwrap();
@@ -140,6 +141,7 @@ impl BoardWidget {
         )
         .center()
     }
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) fn is_selected(&self) -> bool {
         self.selected.is_some()
     }
