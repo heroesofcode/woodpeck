@@ -7,6 +7,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// While the app stays open, other devices' changes are pulled at this interval.
+const REFRESH: Duration = Duration::from_secs(300);
+/// Local changes are coalesced for this long before they are pushed.
+const DEBOUNCE: Duration = Duration::from_secs(10);
+
+/// When to run again after a successful round: soon if work is left, otherwise a periodic pull.
+fn next_after_success(pending: bool, now: Instant) -> Instant {
+    now + if pending { DEBOUNCE } else { REFRESH }
+}
+
 enum Message {
     Now,
     Close(Instant),
@@ -150,7 +160,7 @@ fn run(
         {
             observed = generation;
             if !force && !halted {
-                next = Some(Instant::now() + Duration::from_secs(10));
+                next = Some(Instant::now() + DEBOUNCE);
             }
             if cfg.enabled {
                 cfg.pending = true;
@@ -182,9 +192,7 @@ fn run(
             observed = store.sync_generation().unwrap_or(observed);
             match &result {
                 Ok(cfg) => {
-                    next = cfg
-                        .pending
-                        .then(|| Instant::now() + Duration::from_secs(10));
+                    next = Some(next_after_success(cfg.pending, Instant::now()));
                     backoff = Duration::from_secs(5);
                 }
                 Err(super::SyncError::NewerSchema(_)) => {
@@ -210,6 +218,14 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn successful_round_schedules_debounced_push_or_periodic_pull() {
+        let now = Instant::now();
+        assert_eq!(next_after_success(true, now), now + DEBOUNCE);
+        assert_eq!(next_after_success(false, now), now + REFRESH);
+        assert!(DEBOUNCE < REFRESH);
+    }
 
     #[test]
     fn close_queued_during_sync_does_not_repeat_successful_work() {
