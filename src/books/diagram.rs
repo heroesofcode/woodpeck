@@ -377,7 +377,8 @@ pub fn locate(g: &Gray) -> Option<Frame> {
         return None;
     }
     // A page of several boards is not one diagram: which board the text means is unknown.
-    let apart = |f: &Frame| f[0] >= frame[2] || f[2] <= frame[0] || f[1] >= frame[3] || f[3] <= frame[1];
+    let apart =
+        |f: &Frame| f[0] >= frame[2] || f[2] <= frame[0] || f[1] >= frame[3] || f[3] <= frame[1];
     if boards.iter().any(apart) {
         return None;
     }
@@ -800,5 +801,41 @@ mod tests {
             "second reading first"
         );
         assert_eq!(read(&a, &none).as_deref(), Some("8888888K6k"));
+    }
+
+    /// A white canvas with empty bordered boards (gray dark squares) at the given corners.
+    fn canvas(width: usize, height: usize, boards: &[(usize, usize)], side: usize) -> Gray {
+        let mut px = vec![1.0f32; width * height];
+        for &(x0, y0) in boards {
+            for y in 0..side + 2 {
+                for x in 0..side + 2 {
+                    let border = x == 0 || y == 0 || x == side + 1 || y == side + 1;
+                    let (r, c) = ((y.max(1) - 1) * 8 / side, (x.max(1) - 1) * 8 / side);
+                    px[(y0 + y) * width + x0 + x] = if border {
+                        0.0
+                    } else if dark_square(r.min(7), c.min(7)) {
+                        0.7
+                    } else {
+                        1.0
+                    };
+                }
+            }
+        }
+        Gray { width, height, px }
+    }
+
+    #[test]
+    fn a_small_board_beside_wide_margins_is_located() {
+        let g = canvas(520, 300, &[(131, 22)], 256);
+        let frame = locate(&g).expect("board inside its border lines");
+        for (got, want) in frame.iter().zip([132, 23, 388, 279]) {
+            assert!((got - want).abs() <= 3, "{frame:?}");
+        }
+    }
+
+    #[test]
+    fn several_boards_in_one_image_abstain() {
+        let g = canvas(620, 300, &[(10, 22), (330, 22)], 256);
+        assert_eq!(locate(&g), None);
     }
 }
