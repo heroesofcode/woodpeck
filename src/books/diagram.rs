@@ -355,10 +355,14 @@ fn refine(g: &Gray, mut frame: Frame) -> Frame {
 #[allow(clippy::cast_precision_loss)]
 pub fn locate(g: &Gray) -> Option<Frame> {
     let mut best: Option<((usize, f32), Frame)> = None;
+    let mut boards: Vec<Frame> = Vec::new();
     for frame in candidates(g) {
         let Some((agree, dark, light)) = checker(g, frame) else {
             continue;
         };
+        if agree >= 56 && light - dark >= 0.05 {
+            boards.push(frame);
+        }
         let key = (agree, light - dark);
         if best
             .as_ref()
@@ -370,6 +374,11 @@ pub fn locate(g: &Gray) -> Option<Frame> {
     let ((agree, gap), frame) = best?;
     let (w, h) = ((frame[2] - frame[0]) as f32, (frame[3] - frame[1]) as f32);
     if agree < 56 || gap < 0.05 || w < 96.0 || !(0.85..=1.18).contains(&(w / h)) {
+        return None;
+    }
+    // A page of several boards is not one diagram: which board the text means is unknown.
+    let apart = |f: &Frame| f[0] >= frame[2] || f[2] <= frame[0] || f[1] >= frame[3] || f[3] <= frame[1];
+    if boards.iter().any(apart) {
         return None;
     }
     Some(refine(g, frame))
