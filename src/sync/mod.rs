@@ -4,6 +4,7 @@ use web_time::Instant;
 pub mod format;
 #[cfg(not(target_arch = "wasm32"))]
 mod git;
+pub mod github;
 pub mod merge;
 #[cfg(not(target_arch = "wasm32"))]
 mod process;
@@ -232,7 +233,6 @@ pub fn synchronize(store: &mut Store, data: &Path, budget: Duration) -> Result<C
     let latest = save_runtime(store, &latest)?;
     result.map(|_| latest)
 }
-#[cfg(not(target_arch = "wasm32"))]
 impl remote::SyncStorage for Store {
     fn export_sync(&self) -> Result<format::State> {
         Ok(Store::export_sync(self)?)
