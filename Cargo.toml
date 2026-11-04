@@ -54,7 +54,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "wasm
 # The same SQLite schema and queries in the browser, compiled to wasm by sqlite-wasm-rs.
 rusqlite = { version = "0.40", features = ["bundled", "serialize"] }
 # Pure-Rust zstd decoder for the bundled starter puzzles.
-ruzstd = "0.8"
+ruzstd = "0.9.1"
 # Browser shell: async fetch, timers, IndexedDB persistence, and the egui web runner glue.
 ehttp = "0.7"
 gloo-timers = { version = "0.4", features = ["futures"] }
