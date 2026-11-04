@@ -81,7 +81,7 @@ pub fn import_stream_options(
     );
     let input = Cursor::new(prefix).chain(buffered);
     let decoded: Box<dyn Read + '_> = if compressed {
-        Box::new(zstd::stream::read::Decoder::new(input)?)
+        zstd_decoder(input)?
     } else {
         Box::new(input)
     };
@@ -126,6 +126,17 @@ pub fn import_stream_options(
     cancel.check()?;
     Ok(result)
 }
+#[cfg(not(target_arch = "wasm32"))]
+fn zstd_decoder<'a>(input: impl Read + 'a) -> std::io::Result<Box<dyn Read + 'a>> {
+    Ok(Box::new(zstd::stream::read::Decoder::new(input)?))
+}
+/// Pure-Rust decoder in the browser, where the C zstd library is not built.
+#[cfg(target_arch = "wasm32")]
+fn zstd_decoder<'a>(input: impl Read + 'a) -> std::io::Result<Box<dyn Read + 'a>> {
+    ruzstd::decoding::StreamingDecoder::new(input)
+        .map(|decoder| Box::new(decoder) as Box<dyn Read + 'a>)
+        .map_err(std::io::Error::other)
+}
 pub fn import_reader(
     store: &mut Store,
     reader: impl Read,
@@ -161,6 +172,7 @@ fn import_starter_version(
     store.record_library_import(LibrarySize::Starter, chrono::Utc::now().timestamp())?;
     Ok(result)
 }
+#[cfg(not(target_arch = "wasm32"))]
 pub fn import_location(
     store: &mut Store,
     location: &str,
@@ -176,6 +188,7 @@ pub fn import_location(
         progress,
     )
 }
+#[cfg(not(target_arch = "wasm32"))]
 pub fn import_location_options(
     store: &mut Store,
     location: &str,
@@ -192,6 +205,7 @@ pub fn import_location_options(
     store.record_library_import(size, chrono::Utc::now().timestamp())?;
     Ok(result)
 }
+#[cfg(not(target_arch = "wasm32"))]
 pub fn open_location(
     location: &str,
     cancel: &CancelFlag,

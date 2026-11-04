@@ -3,7 +3,6 @@ mod api;
 #[cfg(not(target_arch = "wasm32"))]
 mod client;
 mod csv;
-#[cfg(not(target_arch = "wasm32"))]
 mod import;
 mod library;
 pub use library::*;
@@ -12,7 +11,6 @@ pub use api::{parse_batch, parse_puzzle};
 #[cfg(not(target_arch = "wasm32"))]
 pub use client::*;
 pub use csv::{CsvPuzzles, ImportProgress, passes_quality};
-#[cfg(not(target_arch = "wasm32"))]
 pub use import::*;
 pub use pgn::export_pgn;
 use thiserror::Error;
@@ -27,7 +25,6 @@ pub enum SourceError {
     Io(#[from] std::io::Error),
     #[error("Operation cancelled.")]
     Cancelled,
-    #[cfg(not(target_arch = "wasm32"))]
     #[error(transparent)]
     Store(#[from] crate::store::StoreError),
     #[error("Network error: {0}")]

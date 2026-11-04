@@ -1,6 +1,8 @@
 //! SQLite repositories. Recording an attempt and changing review membership are atomic.
 mod attempts;
 mod books;
+#[cfg(target_arch = "wasm32")]
+mod browser;
 mod library;
 mod puzzles;
 mod schema;
@@ -40,6 +42,7 @@ impl Store {
     pub fn memory() -> Result<Self> {
         Self::from_connection(Connection::open_in_memory()?)
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn open(path: &Path) -> Result<Self> {
         ensure_external_data_dir(path)?;
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -71,6 +74,7 @@ impl Store {
         self.connection.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[key,value])?;
         Ok(())
     }
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn immediate_transaction(&self) -> Result<rusqlite::Transaction<'_>> {
         Ok(rusqlite::Transaction::new_unchecked(
             &self.connection,
@@ -110,6 +114,7 @@ impl Store {
         Ok(())
     }
 }
+#[cfg(not(target_arch = "wasm32"))]
 /// Platform data discovery for the application. Directory creation happens when opening the DB.
 pub fn database_path() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("WOODPECK_DATA_DIR") {
@@ -130,6 +135,7 @@ fn unsigned(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Refuse databases and sync state inside the public application's source checkout.
 pub fn ensure_external_data_dir(path: &Path) -> Result<()> {
     let absolute = if path.is_absolute() {
