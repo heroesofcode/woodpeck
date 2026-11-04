@@ -24,6 +24,8 @@ The piece sets come from the lichess-org/lila repository (`public/piece`, see it
 | Noto Sans Symbols 2 | Google | OFL-1.1 |
 
 Sets under non-free or non-commercial licences were excluded, as were AGPL sets.
+The printed-book styles of `tools/diagram_cnn/gen4.py` (hatched squares, print and scan wear) are
+drawn procedurally from the same sets and fonts; no new piece set or font was added.
 
 # Bundled assets
 
