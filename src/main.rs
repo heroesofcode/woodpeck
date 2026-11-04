@@ -56,7 +56,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             let mut store = Store::open(&path)?;
             let cancel = CancelFlag::default();
             {
-                let started = std::time::Instant::now();
+                let started = web_time::Instant::now();
                 let result = import_location_options(
                     &mut store,
                     &location,

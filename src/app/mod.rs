@@ -1,4 +1,5 @@
 //! Native, responsive desktop interface over `AppService`.
+use web_time::Instant;
 mod background;
 #[doc(hidden)]
 pub mod bench_support;
@@ -29,12 +30,7 @@ use crate::{
     timer::{Clock, Timer, TimerConditions},
 };
 use eframe::egui::{self, Ui};
-use std::{
-    cell::Cell,
-    path::PathBuf,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{cell::Cell, path::PathBuf, rc::Rc, time::Duration};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Screen {

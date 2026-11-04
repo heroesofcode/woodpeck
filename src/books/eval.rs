@@ -3,7 +3,8 @@
 use super::{document::BlockKind, import, model::Status, resolve};
 use serde::{Deserialize, Serialize};
 use shakmaty::{CastlingMode, Position, uci::UciMove};
-use std::{error::Error, path::Path, time::Instant};
+use std::{error::Error, path::Path};
+use web_time::Instant;
 
 #[derive(Debug, Deserialize)]
 pub struct Truth {

@@ -1,5 +1,6 @@
 //! Opt-in CPU time for application logic and UI construction (excluding GPU presentation).
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 pub(super) struct FrameStats {
     enabled: bool,

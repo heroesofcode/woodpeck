@@ -141,7 +141,7 @@ impl ThemeWatcher {
                 let home = std::env::var_os("HOME")
                     .map_or_else(std::path::PathBuf::new, std::path::PathBuf::from);
                 let mut poller = crate::theme::ThemePoller::new(home, choice);
-                let origin = std::time::Instant::now();
+                let origin = web_time::Instant::now();
                 let mut palette = crate::theme::select(choice, None);
                 let mut sent = None;
                 loop {

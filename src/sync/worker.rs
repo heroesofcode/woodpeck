@@ -4,8 +4,9 @@ use crate::store::Store;
 use std::{
     path::Path,
     sync::{Arc, Condvar, Mutex, mpsc},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 /// While the app stays open, other devices' changes are pulled at this interval.
 const REFRESH: Duration = Duration::from_secs(300);

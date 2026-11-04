@@ -5,7 +5,7 @@ use crate::{
     source::{ImportProgress, LICHESS_DATABASE_URL, LibrarySize, RATING_BANDS},
 };
 use eframe::egui::{self, Color32, RichText, Ui};
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum WelcomeStep {

@@ -65,8 +65,8 @@ pub(super) fn agent() -> ureq::Agent {
         .into()
 }
 fn wait(duration: Duration, cancel: &CancelFlag) -> Result<(), SourceError> {
-    let deadline = std::time::Instant::now() + duration;
-    while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+    let deadline = web_time::Instant::now() + duration;
+    while let Some(left) = deadline.checked_duration_since(web_time::Instant::now()) {
         cancel.check()?;
         std::thread::sleep(left.min(Duration::from_millis(100)));
     }

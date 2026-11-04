@@ -11,18 +11,19 @@ use eframe::egui;
 use shakmaty::{Color, Piece, Role};
 use std::{
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 fn settle(app: &mut Woodpeck) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let deadline = web_time::Instant::now() + Duration::from_secs(20);
     loop {
         app.poll();
         if app.background.is_empty() && !app.service.is_busy() {
             break;
         }
         assert!(
-            std::time::Instant::now() < deadline,
+            web_time::Instant::now() < deadline,
             "background fixture timeout"
         );
         std::thread::sleep(Duration::from_millis(1));
