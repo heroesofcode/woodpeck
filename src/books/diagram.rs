@@ -45,6 +45,40 @@ pub struct Gray {
 }
 
 impl Gray {
+    /// An 8-bit gray raster, row-major.
+    pub fn from_luma(width: usize, height: usize, luma: &[u8]) -> Option<Self> {
+        (luma.len() == width * height && width > 0 && height > 0).then(|| Self {
+            width,
+            height,
+            px: luma.iter().map(|v| f32::from(*v) / 255.0).collect(),
+        })
+    }
+    /// The pixels inside `frame`, clamped to the image.
+    pub fn crop(&self, frame: Frame) -> Option<Self> {
+        let clamp = |v: i64, max: usize| usize::try_from(v.max(0)).unwrap_or(0).min(max);
+        let (x0, y0) = (clamp(frame[0], self.width), clamp(frame[1], self.height));
+        let (x1, y1) = (clamp(frame[2], self.width), clamp(frame[3], self.height));
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let mut px = Vec::with_capacity((x1 - x0) * (y1 - y0));
+        for y in y0..y1 {
+            px.extend_from_slice(&self.px[y * self.width + x0..y * self.width + x1]);
+        }
+        Some(Self {
+            width: x1 - x0,
+            height: y1 - y0,
+            px,
+        })
+    }
+    /// 8-bit gray bytes, row-major.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn luma(&self) -> Vec<u8> {
+        self.px
+            .iter()
+            .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+            .collect()
+    }
     pub fn decode(bytes: &[u8]) -> Option<Self> {
         let image = image::load_from_memory(bytes).ok()?.to_luma8();
         let (width, height) = (image.width() as usize, image.height() as usize);
@@ -383,6 +417,215 @@ pub fn locate(g: &Gray) -> Option<Frame> {
         return None;
     }
     Some(refine(g, frame))
+}
+
+/// PNG text keyword carrying a placement read from a diagram font, not from pixels.
+const PLACEMENT_KEY: &[u8] = b"woodpeck-placement";
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for b in bytes {
+        crc ^= u32::from(*b);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// A PNG with the FEN placement stored beside the pixels (a text chunk after the header).
+pub fn with_placement(png: &[u8], placement: &str) -> Vec<u8> {
+    // Signature (8) + IHDR chunk (4 length + 4 type + 13 data + 4 CRC).
+    const HEADER: usize = 8 + 25;
+    if png.len() < HEADER || !png.starts_with(b"\x89PNG\r\n\x1a\n") || &png[12..16] != b"IHDR" {
+        return png.to_vec();
+    }
+    let mut data = PLACEMENT_KEY.to_vec();
+    data.push(0);
+    data.extend_from_slice(placement.as_bytes());
+    let mut chunk = u32::try_from(data.len())
+        .unwrap_or(0)
+        .to_be_bytes()
+        .to_vec();
+    let mut body = b"tEXt".to_vec();
+    body.extend_from_slice(&data);
+    chunk.extend_from_slice(&body);
+    chunk.extend_from_slice(&crc32(&body).to_be_bytes());
+    let mut out = png[..HEADER].to_vec();
+    out.extend_from_slice(&chunk);
+    out.extend_from_slice(&png[HEADER..]);
+    out
+}
+
+/// The placement stored by [`with_placement`], if the image carries one.
+pub fn stated_placement(bytes: &[u8]) -> Option<String> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
+    let mut at = 8;
+    while at + 12 <= bytes.len() {
+        let len = usize::try_from(u32::from_be_bytes(bytes[at..at + 4].try_into().ok()?)).ok()?;
+        let kind = &bytes[at + 4..at + 8];
+        let data = bytes.get(at + 8..at + 8 + len)?;
+        if kind == b"tEXt" {
+            if let Some(text) = data
+                .strip_prefix(PLACEMENT_KEY)
+                .and_then(|d| d.strip_prefix(&[0]))
+            {
+                let text = std::str::from_utf8(text).ok()?;
+                return (text.split('/').count() == 8
+                    && text.chars().all(|c| {
+                        c == '/' || ('1'..='8').contains(&c) || "PNBRQKpnbrqk".contains(c)
+                    }))
+                .then(|| text.to_owned());
+            }
+        } else if kind == b"IDAT" {
+            return None;
+        }
+        at += 12 + len;
+    }
+    None
+}
+
+/// Boards on a whole page (a scan or a rendered page): square clusters of connected ink, each
+/// confirmed by [`locate`] on its own crop. Returned as crop boxes with a small margin, top to
+/// bottom, so each crop can go through the same diagram gate as a picture.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss
+)]
+pub fn page_boards(g: &Gray) -> Vec<Frame> {
+    let (w, h) = (g.width as i64, g.height as i64);
+    let min_side = (g.width.min(g.height) / 9).max(64);
+    let mut out: Vec<Frame> = Vec::new();
+    for b in ink_boxes(g, min_side / 2) {
+        let (bw, bh) = (b[2] - b[0], b[3] - b[1]);
+        let side = bw.max(bh);
+        if side < min_side as i64 || side as f32 > 0.95 * w as f32 || 2 * bw.min(bh) < side {
+            continue;
+        }
+        // A broken border leaves part of the board outside its cluster: square it up on
+        // either side of the short dimension.
+        let squares = if bw >= bh {
+            vec![
+                [b[0], b[1], b[2], b[1] + side],
+                [b[0], b[3] - side, b[2], b[3]],
+            ]
+        } else {
+            vec![
+                [b[0], b[1], b[0] + side, b[3]],
+                [b[2] - side, b[1], b[2], b[3]],
+            ]
+        };
+        for s in squares {
+            let margin = side / 25 + 2;
+            let crop = [
+                (s[0] - margin).max(0),
+                (s[1] - margin).max(0),
+                (s[2] + margin).min(w),
+                (s[3] + margin).min(h),
+            ];
+            let overlaps = |f: &Frame| {
+                let ix = (f[2].min(crop[2]) - f[0].max(crop[0])).max(0);
+                let iy = (f[3].min(crop[3]) - f[1].max(crop[1])).max(0);
+                4 * ix * iy > (crop[2] - crop[0]) * (crop[3] - crop[1])
+            };
+            if out.iter().any(overlaps) {
+                break;
+            }
+            let Some(frame) = g.crop(crop).as_ref().and_then(locate) else {
+                continue;
+            };
+            // The board must fill most of the crop, not be a corner of a larger figure.
+            if 4 * (frame[2] - frame[0]).min(frame[3] - frame[1]) < 3 * side {
+                continue;
+            }
+            out.push(crop);
+            break;
+        }
+    }
+    out.sort_by_key(|f| (f[1], f[0]));
+    out
+}
+
+/// Root of a union-find set, halving paths on the way.
+fn root(parents: &mut [u32], mut node: u32) -> u32 {
+    while parents[node as usize] != node {
+        parents[node as usize] = parents[parents[node as usize] as usize];
+        node = parents[node as usize];
+    }
+    node
+}
+
+/// Bounding boxes of 8-connected dark components at least `min_side` on both sides, largest
+/// first.
+#[allow(clippy::cast_possible_wrap)]
+fn ink_boxes(image: &Gray, min_side: usize) -> Vec<Frame> {
+    let (width, height) = (image.width, image.height);
+    let mut parents: Vec<u32> = Vec::new();
+    let mut labels = vec![u32::MAX; width * height];
+    for row in 0..height {
+        for col in 0..width {
+            if image.at(col, row) >= 0.55 {
+                continue;
+            }
+            let mut mine = u32::MAX;
+            let neighbours = [
+                (col > 0).then(|| (col - 1, row)),
+                (row > 0 && col > 0).then(|| (col - 1, row - 1)),
+                (row > 0).then(|| (col, row - 1)),
+                (row > 0 && col + 1 < width).then(|| (col + 1, row - 1)),
+            ];
+            for (nc, nr) in neighbours.into_iter().flatten() {
+                let label = labels[nr * width + nc];
+                if label == u32::MAX {
+                    continue;
+                }
+                let found = root(&mut parents, label);
+                if mine == u32::MAX {
+                    mine = found;
+                } else if found != mine {
+                    let (low, high) = (mine.min(found), mine.max(found));
+                    parents[high as usize] = low;
+                    mine = low;
+                }
+            }
+            if mine == u32::MAX {
+                mine = u32::try_from(parents.len()).unwrap_or(u32::MAX - 1);
+                parents.push(mine);
+            }
+            labels[row * width + col] = mine;
+        }
+    }
+    let mut boxes: std::collections::HashMap<u32, Frame> = std::collections::HashMap::new();
+    for row in 0..height {
+        for col in 0..width {
+            let label = labels[row * width + col];
+            if label == u32::MAX {
+                continue;
+            }
+            let id = root(&mut parents, label);
+            let (x, y) = (col as i64, row as i64);
+            let frame = boxes.entry(id).or_insert([x, y, x + 1, y + 1]);
+            frame[0] = frame[0].min(x);
+            frame[1] = frame[1].min(y);
+            frame[2] = frame[2].max(x + 1);
+            frame[3] = frame[3].max(y + 1);
+        }
+    }
+    let min = min_side as i64;
+    let mut out: Vec<Frame> = boxes
+        .into_values()
+        .filter(|f| f[2] - f[0] >= min && f[3] - f[1] >= min)
+        .collect();
+    // Largest first, so an outer frame claims its board before inner fragments do.
+    out.sort_by_key(|f| std::cmp::Reverse((f[2] - f[0]) * (f[3] - f[1])));
+    out
 }
 
 /// Triangle-filter weights mapping `len` source pixels onto `CELL` outputs.

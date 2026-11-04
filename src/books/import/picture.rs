@@ -7,7 +7,11 @@ use lopdf::{Document, Object, ObjectId, Stream};
 /// bytes as PNG or JPEG.
 pub(super) struct Placed {
     pub top: f64,
+    /// Area covered on the page, in square points.
+    pub area: f64,
     pub bytes: Vec<u8>,
+    /// Cropped from a rendered page rather than embedded as a picture.
+    pub rendered: bool,
 }
 /// Smallest side, in pixels, of a picture worth keeping (icons and rules are skipped).
 const MIN_SIDE: i64 = 120;
@@ -64,7 +68,13 @@ pub(super) fn pictures(doc: &Document, page: ObjectId) -> Vec<Placed> {
                         .flat_map(|&x| [0.0, 1.0].map(move |y: f64| (x, y)))
                         .map(|(x, y): (f64, f64)| ctm[1] * x + ctm[3] * y + ctm[5])
                         .fold(f64::MIN, f64::max);
-                    out.push(Placed { top, bytes });
+                    let area = (ctm[0] * ctm[3] - ctm[1] * ctm[2]).abs();
+                    out.push(Placed {
+                        top,
+                        area,
+                        bytes,
+                        rendered: false,
+                    });
                 }
             }
             _ => {}

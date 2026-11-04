@@ -285,12 +285,16 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             assets
                 .iter()
                 .find(|a| &a.path == path)
-                .map_or((None, None), |a| match recognizer.placement(&a.bytes) {
-                    Some(p) => {
-                        let reading = reading_of_placement(&p);
-                        (Some(p), reading)
+                .map_or((None, None), |a| {
+                    match super::diagram::stated_placement(&a.bytes)
+                        .or_else(|| recognizer.placement(&a.bytes))
+                    {
+                        Some(p) => {
+                            let reading = reading_of_placement(&p);
+                            (Some(p), reading)
+                        }
+                        None => (None, recognizer.reading(&a.bytes)),
                     }
-                    None => (None, recognizer.reading(&a.bytes)),
                 })
         };
         let results: Vec<(Option<String>, Option<String>)> = std::thread::scope(|scope| {
