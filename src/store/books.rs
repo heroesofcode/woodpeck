@@ -227,9 +227,13 @@ fn decoder(blob: &[u8]) -> Result<impl std::io::Read + '_> {
 /// Books are not part of the browser build yet.
 #[cfg(target_arch = "wasm32")]
 fn compress(_: &[u8]) -> Result<Vec<u8>> {
-    Err(StoreError::InvalidData("Books are not available in the web version yet.".into()))
+    Err(StoreError::InvalidData(
+        "Books are not available in the web version yet.".into(),
+    ))
 }
 #[cfg(target_arch = "wasm32")]
 fn decoder(_: &[u8]) -> Result<std::io::Empty> {
-    Err(StoreError::InvalidData("Books are not available in the web version yet.".into()))
+    Err(StoreError::InvalidData(
+        "Books are not available in the web version yet.".into(),
+    ))
 }

@@ -1,7 +1,9 @@
 //! Application operations and a serial background worker, with no GUI dependencies.
 mod local;
+mod plan;
 #[cfg(test)]
 mod tests;
+use plan::fallback_request;
 mod worker;
 pub(crate) use local::Wake;
 #[doc(hidden)]

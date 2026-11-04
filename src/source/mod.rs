@@ -7,7 +7,7 @@ mod import;
 mod library;
 pub use library::*;
 mod pgn;
-pub use api::{parse_batch, parse_puzzle};
+pub use api::{difficulties, difficulty, parse_batch, parse_puzzle};
 #[cfg(not(target_arch = "wasm32"))]
 pub use client::*;
 pub use csv::{CsvPuzzles, ImportProgress, passes_quality};
