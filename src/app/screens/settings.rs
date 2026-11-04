@@ -46,12 +46,49 @@ impl Woodpeck {
         ui.small("cburnett pieces · GPLv2+ / CC BY-SA 3.0 · Colin M.L. Burnett");
     }
     #[cfg(target_arch = "wasm32")]
-    #[allow(clippy::unused_self)]
     fn sync_settings(&mut self, ui: &mut Ui) {
+        let config = self.service.sync_status();
         widgets::card(ui).show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.0).max(0.0));
             ui.heading("Sync");
-            ui.label("Progress is saved in this browser. Sync with your GitHub repository is coming in a later version.");
+            ui.label("Keep progress in step with the desktop app through your PRIVATE GitHub repository.");
+            widgets::caption(ui, "REPOSITORY");
+            ui.add(egui::TextEdit::singleline(&mut self.sync_remote).desired_width(ui.available_width()).hint_text("owner/woodpeck-data"));
+            widgets::caption(ui, "ACCESS TOKEN");
+            let id = egui::Id::unique("sync-token");
+            let mut token: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+            let saved = crate::sync::browser::has_token();
+            ui.add(egui::TextEdit::singleline(&mut token).password(true).desired_width(ui.available_width()).hint_text(if saved { "Saved in this browser · enter a new one to replace it" } else { "Fine-grained token with Contents read and write" }));
+            ui.data_mut(|d| d.insert_temp(id, token.clone()));
+            let mut enabled = config.enabled;
+            let toggled = ui.checkbox(&mut enabled, "Enable GitHub sync").changed();
+            let apply = ui.button("Save repository and token").clicked();
+            if toggled || apply {
+                if !token.trim().is_empty() {
+                    match crate::sync::browser::set_token(&token) {
+                        Ok(()) => ui.data_mut(|d| d.remove::<String>(id)),
+                        Err(error) => self.error(error),
+                    }
+                }
+                let remote = self.sync_remote.trim().to_owned();
+                self.background(move |service| service.configure_sync(&remote, enabled), |app, result| match result {
+                    Ok(config) => app.service.sync_configured(config),
+                    Err(error) => app.error(error),
+                });
+            }
+            ui.horizontal(|ui| {
+                if ui.add_enabled(config.enabled && config.status != crate::sync::Status::Syncing, egui::Button::new("Sync now")).clicked() { self.service.sync_now(); }
+                self.sync_indicator(ui);
+            });
+            let last = config.last_sync.and_then(|at| chrono::DateTime::from_timestamp(at, 0)).map_or_else(|| "Never".into(), |at| at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string());
+            ui.small(format!("Last sync: {last}"));
+            if let Some(error) = &config.last_error { ui.colored_label(style::color(self.palette.semantic().incorrect), format!("Last error: {error}")); }
+            if saved && ui.small_button("Forget the token in this browser").clicked()
+                && let Err(error) = crate::sync::browser::set_token("")
+            {
+                self.error(error);
+            }
+            ui.small("The token stays in this browser only. Syncs on open, after changes and every 2 minutes.");
         });
     }
     #[cfg(not(target_arch = "wasm32"))]
