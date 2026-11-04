@@ -124,6 +124,15 @@ impl LocalService {
             enabled,
         )?)
     }
+    /// `remote` is the GitHub repository as `owner/name`.
+    #[cfg(target_arch = "wasm32")]
+    pub fn configure_sync(&self, remote: &str, enabled: bool) -> Result<crate::sync::Config> {
+        Ok(crate::sync::browser::configure(
+            &*lock(&self.store)?,
+            remote,
+            enabled,
+        )?)
+    }
     pub fn local_setting(&self, key: &str) -> Result<Option<String>> {
         Ok(lock(&self.store)?.setting(key)?)
     }

@@ -171,9 +171,10 @@ pub struct AppService {
     next_id: u64,
     #[cfg(not(target_arch = "wasm32"))]
     sync: Option<crate::sync::worker::Worker>,
-    /// Phase 2 seam: the browser will sync through the GitHub API behind `sync::remote`.
     #[cfg(target_arch = "wasm32")]
     executor: browser::Executor,
+    #[cfg(target_arch = "wasm32")]
+    sync: crate::sync::browser::Scheduler,
 }
 impl AppService {
     #[cfg(not(target_arch = "wasm32"))]
@@ -204,6 +205,10 @@ impl AppService {
             wake: wake.clone(),
         };
         let executor = browser::Executor::new(store.clone(), receiver, event_sender);
+        let sync = crate::sync::browser::Scheduler::start(store.clone(), {
+            let wake = wake.clone();
+            move || wake.notify()
+        });
         let mut service = Self {
             local: LocalService { store },
             wake,
@@ -213,6 +218,7 @@ impl AppService {
             imports: BTreeMap::new(),
             next_id: 0,
             executor,
+            sync,
         };
         service.submit(Job::ImportStarter { force: false })?;
         Ok(service)
@@ -324,22 +330,22 @@ impl AppService {
             .as_ref()
             .map(crate::sync::worker::Worker::shutdown_handle)
     }
+    /// The settings changed: the browser scheduler reads them and syncs now.
     #[cfg(target_arch = "wasm32")]
-    #[allow(clippy::unused_self, dead_code)]
-    pub(crate) fn sync_configured(&mut self, _config: crate::sync::Config) {}
-    /// Sync is not available in the browser until phase 2.
-    #[cfg(target_arch = "wasm32")]
-    #[allow(clippy::unused_self)]
-    pub fn sync_status(&self) -> crate::sync::Config {
-        crate::sync::Config::default()
+    pub(crate) fn sync_configured(&mut self, _config: crate::sync::Config) {
+        self.sync.request();
     }
     #[cfg(target_arch = "wasm32")]
-    #[allow(clippy::unused_self)]
-    pub fn sync_now(&self) {}
+    pub fn sync_status(&self) -> crate::sync::Config {
+        self.sync.status()
+    }
     #[cfg(target_arch = "wasm32")]
-    #[allow(clippy::unused_self)]
+    pub fn sync_now(&self) {
+        self.sync.request();
+    }
+    #[cfg(target_arch = "wasm32")]
     pub fn poll_sync(&mut self) -> bool {
-        false
+        self.sync.poll()
     }
     pub fn submit(&mut self, job: Job) -> Result<JobHandle> {
         self.next_id += 1;

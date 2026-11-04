@@ -1,6 +1,8 @@
 //! Opt-in progress synchronization. The portable format is independent of Git and SQLite.
 #[cfg(not(target_arch = "wasm32"))]
 use web_time::Instant;
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
 pub mod format;
 #[cfg(not(target_arch = "wasm32"))]
 mod git;
@@ -87,7 +89,6 @@ pub fn config(store: &Store) -> Result<Config> {
     }
     Ok(config)
 }
-#[cfg(not(target_arch = "wasm32"))]
 /// Hold the write lock from the read through the update, including across connections.
 fn update_config(store: &Store, update: impl FnOnce(&mut Config) -> Result<()>) -> Result<Config> {
     let transaction = store.immediate_transaction()?;
@@ -99,7 +100,6 @@ fn update_config(store: &Store, update: impl FnOnce(&mut Config) -> Result<()>) 
         .map_err(crate::store::StoreError::from)?;
     Ok(cfg)
 }
-#[cfg(not(target_arch = "wasm32"))]
 /// Worker snapshots own runtime fields only; discard results for obsolete settings.
 fn save_runtime(store: &Store, runtime: &Config) -> Result<Config> {
     update_config(store, |latest| {
