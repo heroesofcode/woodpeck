@@ -270,19 +270,18 @@ impl Woodpeck {
                 .clicked()
                 && let Some(id) = self.selected_set
             {
-                self.background(
-                    move |service| service.pgn(id),
-                    |app, result| match result {
-                        Ok(pgn) => match crate::web::download("woodpeck-set.pgn", &pgn) {
-                            Ok(()) => {
-                                app.toast =
-                                    Some(("PGN downloaded".into(), web_time::Instant::now()));
-                            }
-                            Err(error) => app.error(error),
-                        },
-                        Err(error) => app.error(error),
-                    },
-                );
+                // Browsers only allow a download inside the click that asked for it.
+                match self
+                    .service
+                    .pgn(id)
+                    .map_err(|e| e.to_string())
+                    .and_then(|pgn| crate::web::download("woodpeck-set.pgn", &pgn))
+                {
+                    Ok(()) => {
+                        self.toast = Some(("PGN downloaded".into(), web_time::Instant::now()));
+                    }
+                    Err(error) => self.error(error),
+                }
             }
         });
     }
