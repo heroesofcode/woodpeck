@@ -43,7 +43,9 @@ jobs:
       - run: cargo clippy --all-targets --no-default-features --locked -- -D warnings
       # The portable core must keep building for the browser.
       - run: rustup target add wasm32-unknown-unknown
-      - run: cargo clippy --target wasm32-unknown-unknown --no-default-features --lib --locked -- -D warnings
+      - run: cargo clippy --target wasm32-unknown-unknown --no-default-features --bins --lib --locked -- -D warnings
+        env:
+          CC_wasm32_unknown_unknown: clang
 
   tests:
     name: tests
