@@ -132,12 +132,19 @@ impl Woodpeck {
         } else {
             format!("Sync · {}", config.status.label())
         };
-        ui.colored_label(style::color(color), label).on_hover_text(
-            config
-                .last_error
-                .as_deref()
-                .unwrap_or(config.status.label()),
-        );
+        let last = config
+            .last_sync
+            .and_then(|at| chrono::DateTime::from_timestamp(at, 0))
+            .map_or_else(
+                || "never".to_owned(),
+                |at| at.with_timezone(&chrono::Local).format("%H:%M").to_string(),
+            );
+        let detail = config
+            .last_error
+            .as_deref()
+            .unwrap_or(config.status.label());
+        ui.colored_label(style::color(color), label)
+            .on_hover_text(format!("{detail} · last sync {last}"));
     }
     fn top_navigation(&mut self, ui: &mut Ui) {
         let accent = style::color(self.palette.semantic().accent);
