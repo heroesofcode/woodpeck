@@ -7,6 +7,7 @@ use super::picture::Placed;
 use crate::books::diagram::{self, Gray};
 use hayro::hayro_interpret::InterpreterSettings;
 use hayro::hayro_syntax::Pdf;
+use hayro::hayro_syntax::page::Rotation;
 use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::{PixmapSettings, RenderCache, RenderSettings};
 use std::sync::Arc;
@@ -48,6 +49,10 @@ impl Renderer {
         let Some(page) = pages.get(index) else {
             return Vec::new();
         };
+        // Crops are mapped back through the unrotated crop box; a rotated page is left as is.
+        if !matches!(page.rotation(), Rotation::None) {
+            return Vec::new();
+        }
         let (pw, ph) = page.render_dimensions();
         if !(pw > 1.0 && ph > 1.0) {
             return Vec::new();

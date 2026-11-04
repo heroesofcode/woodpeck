@@ -182,7 +182,9 @@ fn pictures(
                     boards.retain(|b| crate::books::diagram::stated_placement(&b.bytes).is_some());
                 }
                 if !boards.is_empty() {
-                    placed.retain(|p| !scan(p));
+                    if scanned {
+                        placed.clear();
+                    }
                     placed.extend(boards);
                     placed.sort_by(|a, b| b.top.total_cmp(&a.top));
                 }
