@@ -228,6 +228,70 @@ fn candidates(g: &Gray) -> Vec<Frame> {
             out.push([c.0, r.0, c.1, r.1]);
         }
     }
+    out.extend(line_frames(g));
+    out
+}
+
+/// Longest run of dark pixels along each row (`vertical` false) or column.
+fn runs(g: &Gray, vertical: bool) -> Vec<usize> {
+    let (outer, inner) = if vertical {
+        (g.width, g.height)
+    } else {
+        (g.height, g.width)
+    };
+    (0..outer)
+        .map(|o| {
+            let (mut best, mut run) = (0, 0);
+            for i in 0..inner {
+                let v = if vertical { g.at(o, i) } else { g.at(i, o) };
+                run = if v < 0.5 { run + 1 } else { 0 };
+                best = best.max(run);
+            }
+            best
+        })
+        .collect()
+}
+
+/// Groups of adjacent long lines, as (first, last) index of each group.
+fn line_groups(runs: &[usize], min: usize) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for (i, r) in runs.iter().enumerate() {
+        if *r < min {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if last.1 + 1 == i => last.1 = i,
+            _ => out.push((i, i)),
+        }
+    }
+    out
+}
+
+/// Square frames bounded by two long vertical and two long horizontal border lines, so a board
+/// beside coordinates, captions or empty margin is found even when it fills little of the image.
+#[allow(clippy::cast_precision_loss)]
+fn line_frames(g: &Gray) -> Vec<Frame> {
+    let min = (g.width.min(g.height) / 3).max(64);
+    let cols = line_groups(&runs(g, true), min);
+    let rows = line_groups(&runs(g, false), min);
+    if cols.len() > 6 || rows.len() > 6 {
+        return vec![];
+    }
+    let mut out = Vec::new();
+    for (i, a) in cols.iter().enumerate() {
+        for b in &cols[i + 1..] {
+            for (j, c) in rows.iter().enumerate() {
+                for d in &rows[j + 1..] {
+                    let (x0, x1, y0, y1) = (a.1 + 1, b.0, c.1 + 1, d.0);
+                    let (w, h) = ((x1 - x0) as f32, (y1 - y0) as f32);
+                    if w >= 96.0 && (0.85..=1.18).contains(&(w / h)) {
+                        let f = [x0, y0, x1, y1].map(|v| i64::try_from(v).unwrap_or(i64::MAX));
+                        out.push(f);
+                    }
+                }
+            }
+        }
+    }
     out
 }
 
