@@ -538,7 +538,11 @@ pub fn evaluate(path: &Path, truth: &Truth) -> Result<Metrics, Box<dyn Error>> {
             })
             .ok_or("Missing root FEN")?;
         let pos = resolve::position(before).ok_or("Invalid emitted FEN")?;
-        let m = node.uci.parse::<UciMove>()?.to_move(&pos)?;
+        let m = node
+            .uci
+            .parse::<UciMove>()?
+            .to_move(&pos)
+            .map_err(|e| format!("{e}: page {} {} from {before}", node.page, node.uci))?;
         let after = pos.play(m)?;
         if resolve::fen(&after) != node.fen {
             return Err(format!(
