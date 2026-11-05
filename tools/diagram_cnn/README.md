@@ -51,6 +51,16 @@ needs none of this; these scripts need Python 3 with numpy, scipy, Pillow, cairo
    INIT=net3_b.pt MAXLR=1e-3 THREADS=3 python train.py 16,32,64 4 net4_b.pt val4.npz t400[1-4].npz real.npz real.npz
    ```
 
+8. Round 5 (scanned and drawn pages) fine-tunes the round 4 networks the same way, adding a
+   `real6.npz` of board crops cut from rendered scanned, vector-drawn and diagram-font PDF pages,
+   also listed twice. Boards set in a diagram font were labelled from their decoded glyphs. Whole
+   scanned books were again held out for testing, and the thresholds are unchanged.
+
+   ```sh
+   INIT=net4.pt MAXLR=1e-3 THREADS=3 python train.py 12,24,48 4 net5.pt val4.npz t400[1-4].npz real.npz real.npz real6.npz real6.npz
+   INIT=net4_b.pt MAXLR=1e-3 THREADS=3 python train.py 16,32,64 4 net5_b.pt val4.npz t400[1-4].npz real.npz real.npz real6.npz real6.npz
+   ```
+
 Class 13 is "junk": a square cut by a misplaced frame. The acceptance thresholds in
 `src/books/cnn.rs` were chosen on a separate set of real diagrams, so a retrained network
 must be checked again before its thresholds are trusted.
