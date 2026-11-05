@@ -259,7 +259,8 @@ impl Engine {
         Ok(())
     }
     /// Apply any legal move while in sandbox mode (`line` is absent), then freeze.
-    pub fn play_any(&mut self, input: &str) -> Result<(), InputError> {
+    /// `success` chooses the board flash: `Complete` (green) or `Incorrect` (red).
+    pub fn play_any(&mut self, input: &str, success: bool) -> Result<(), InputError> {
         if self.state != State::PlayerTurn || self.line.is_some() {
             return Err(InputError::NotInteractive);
         }
@@ -269,10 +270,17 @@ impl Engine {
         let mut after = position.clone();
         after.play_unchecked(m);
         self.sounds.push(crate::sound::Event::from_move(m));
+        if !success {
+            self.sounds.push(crate::sound::Event::Wrong);
+        }
         self.moves_played.push(input.to_owned());
         self.position = Some(after);
         // One reply per drill position; keep the board non-interactive afterward.
-        self.state = State::Complete;
+        self.state = if success {
+            State::Complete
+        } else {
+            State::Incorrect
+        };
         Ok(())
     }
     pub fn skip(&mut self) -> Result<(), InputError> {
@@ -551,13 +559,23 @@ mod sound_tests {
         let mut e = Engine::sandbox(pos);
         assert_eq!(e.state(), State::PlayerTurn);
         assert_eq!(e.orientation(), Some(Color::White));
-        e.play_any("e2e4").unwrap();
+        e.play_any("e2e4", true).unwrap();
         assert_eq!(e.state(), State::Complete);
         assert_eq!(e.orientation(), Some(Color::White));
-        assert_eq!(e.play_any("e8e7"), Err(InputError::NotInteractive));
+        assert_eq!(e.play_any("e8e7", true), Err(InputError::NotInteractive));
         assert_eq!(
             e.take_sounds().collect::<Vec<_>>(),
             [crate::sound::Event::Move]
+        );
+
+        let fen: Fen = "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1".parse().unwrap();
+        let pos: Chess = fen.into_position(shakmaty::CastlingMode::Standard).unwrap();
+        let mut bad = Engine::sandbox(pos);
+        bad.play_any("e2e4", false).unwrap();
+        assert_eq!(bad.state(), State::Incorrect);
+        assert_eq!(
+            bad.take_sounds().collect::<Vec<_>>(),
+            [crate::sound::Event::Move, crate::sound::Event::Wrong]
         );
     }
 }
