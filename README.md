@@ -300,6 +300,13 @@ path in the field below it. Extraction and move resolution run in the background
 stage progress and cancellation. Duplicate imports resume the existing book.
 DRM-protected books are not supported. Scanned books contribute only the diagrams found on their pages.
 
+A diagram's side to move comes from its book: a caption such as "White to play", "Brancas
+jogam" or "Schwarz am Zug", the first numbered move after it, a check (only the side in
+check can be to move), or a "mate in 1/2" theme that only one side can carry out. When
+nothing confirms it, the board is still shown, marked **Side to move not confirmed**:
+choose White or Black under it to explore it. Moves in the text are never played from
+such a board. Books imported earlier show these boards once removed and imported again.
+
 Select moves in the text or move list to explore them on the board. Use Left/Right
 to step, Up/Down to choose a continuation, Home/End for the line, and
 PageUp/PageDown for pages. Right-click board annotations work as in training.
