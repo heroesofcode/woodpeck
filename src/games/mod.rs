@@ -2,12 +2,14 @@
 //!
 //! Logic here stays free of egui so a later web UI can reuse the same rules.
 mod blind_line;
+mod human_move;
 mod safe_move;
 mod vision;
 
 pub use blind_line::{
     Phase as BlindPhase, Round as BlindRound, Session as BlindSession, TickEvent as BlindTick,
 };
+pub use human_move::{Round as HumanRound, Session as HumanSession, Status as HumanStatus};
 pub use safe_move::{
     Round as SafeRound, Session as SafeSession, Status as SafeStatus, is_blunder, safe_moves,
 };
@@ -49,6 +51,6 @@ pub const CATALOG: &[GameInfo] = &[
         id: "human-move",
         title: "Human move",
         blurb: "Choose the move a player at your rating would actually make.",
-        available: false,
+        available: true,
     },
 ];

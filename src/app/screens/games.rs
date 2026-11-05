@@ -1,8 +1,8 @@
 //! Games hub and Board-scan drill UI (desktop, web desktop, and phone).
 use super::super::{Screen, Woodpeck, board::TapHighlight, style, widgets};
 use crate::games::{
-    self, BlindPhase, BlindSession, BlindTick, DrillMode, Highlight, SafeSession, SafeStatus,
-    VisionOutcome, VisionSession, VisionStatus,
+    self, BlindPhase, BlindSession, BlindTick, DrillMode, Highlight, HumanSession, HumanStatus,
+    SafeSession, SafeStatus, VisionOutcome, VisionSession, VisionStatus,
 };
 use crate::puzzle::Engine;
 use eframe::egui::{self, RichText, Ui};
@@ -58,6 +58,7 @@ impl Woodpeck {
                             "board-scan" => self.start_board_scan(DrillMode::HangingPieces),
                             "safe-move" => self.start_safe_move(),
                             "blind-line" => self.start_blind_line(),
+                            "human-move" => self.start_human_move(),
                             _ => {}
                         }
                     }
@@ -515,6 +516,130 @@ impl Woodpeck {
                     let now = self.now();
                     self.game_blind.as_mut().unwrap().next_round(now);
                     let position = self.game_blind.as_ref().unwrap().round.start_position();
+                    self.game_engine = Some(Engine::sandbox(position));
+                    self.games_board = super::super::board::BoardWidget::default();
+                }
+            }
+        }
+    }
+
+    pub(in crate::app) fn start_human_move(&mut self) {
+        let seed = self
+            .origin
+            .elapsed()
+            .as_millis()
+            .wrapping_add(u128::from(self.frames)) as u64;
+        let session = HumanSession::start(seed.max(1));
+        let engine = Engine::sandbox(session.round.position());
+        self.game_human = Some(session);
+        self.game_engine = Some(engine);
+        self.games_board = super::super::board::BoardWidget::default();
+        self.navigate(Screen::HumanMove);
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::app) fn human_move_screen(&mut self, ui: &mut Ui) {
+        let narrow = ui.available_width() < 640.0;
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("< Games").clicked() {
+                self.game_human = None;
+                self.game_engine = None;
+                self.navigate(Screen::Games);
+            }
+            ui.label(
+                RichText::new("Human move")
+                    .strong()
+                    .size(if narrow { 18.0 } else { 22.0 }),
+            );
+        });
+        ui.add_space(8.0);
+        if self.game_human.is_none() || self.game_engine.is_none() {
+            ui.label("Starting…");
+            return;
+        }
+        let (score, streak, best, status) = {
+            let s = self.game_human.as_ref().unwrap();
+            (s.score, s.streak, s.best_streak, s.round.status)
+        };
+        ui.label(
+            RichText::new("Play the natural move a club player would pick.").size(if narrow {
+                14.0
+            } else {
+                15.0
+            }),
+        );
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("Score {score}"));
+            ui.separator();
+            ui.label(format!("Streak {streak}"));
+            ui.separator();
+            ui.label(format!("Best {best}"));
+        });
+        ui.add_space(8.0);
+
+        let board_budget = if narrow {
+            ui.available_width()
+                .min((ui.available_height() - 120.0).max(180.0))
+        } else {
+            ui.available_height()
+                .min(ui.available_width() * 0.62)
+                .clamp(280.0, 560.0)
+        };
+
+        let played = {
+            let engine = self.game_engine.as_ref().unwrap();
+            self.games_board.show(
+                ui,
+                engine,
+                board_budget,
+                self.settings.board_theme,
+                self.settings.piece_rendering,
+            )
+        };
+        if let Some(uci) = played
+            && status == HumanStatus::Playing
+        {
+            let outcome = self.game_human.as_mut().unwrap().submit(&uci);
+            match outcome {
+                HumanStatus::Cleared | HumanStatus::Missed => {
+                    let ok = outcome == HumanStatus::Cleared;
+                    let engine = self.game_engine.as_mut().unwrap();
+                    let _ = engine.play_any(&uci);
+                    engine.resolve_sandbox(ok);
+                    for event in engine.take_sounds() {
+                        if self.screenshot.is_none() {
+                            crate::sound::play(event, &self.settings);
+                        }
+                    }
+                    self.games_board.player_moved();
+                    self.toast = Some((
+                        if ok {
+                            "Natural.".into()
+                        } else {
+                            "Not the human move — streak lost.".into()
+                        },
+                        web_time::Instant::now(),
+                    ));
+                }
+                HumanStatus::Playing => {}
+            }
+        }
+        ui.add_space(10.0);
+        let status = self.game_human.as_ref().unwrap().round.status;
+        match status {
+            HumanStatus::Playing => {
+                ui.label("Drag or tap. Same controls on desktop and phone.");
+            }
+            HumanStatus::Cleared | HumanStatus::Missed => {
+                let label = if status == HumanStatus::Cleared {
+                    "Next position"
+                } else {
+                    "Try another"
+                };
+                if widgets::primary(ui, label).clicked() {
+                    self.game_human.as_mut().unwrap().next_round();
+                    let position = self.game_human.as_ref().unwrap().round.position();
                     self.game_engine = Some(Engine::sandbox(position));
                     self.games_board = super::super::board::BoardWidget::default();
                 }
