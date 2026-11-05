@@ -166,7 +166,7 @@ impl Woodpeck {
                     });
                 });
                 ui.horizontal(|ui| {
-                    for (index, (screen, label)) in Screen::ALL.into_iter().enumerate() {
+                    for (screen, label) in Screen::ALL {
                         let selected = self.screen == screen
                             || (screen == Screen::Books && self.screen == Screen::Reader)
                             || (screen == Screen::Games && self.screen == Screen::BoardScan);
@@ -185,7 +185,7 @@ impl Woodpeck {
                                 })
                                 .stroke(egui::Stroke::NONE),
                         );
-                        widgets::nav_icon(ui.painter(), response.rect, index, color);
+                        widgets::nav_icon(ui.painter(), response.rect, screen, color);
                         if response.on_hover_text(label).clicked() {
                             self.navigate(screen);
                         }
@@ -195,7 +195,7 @@ impl Woodpeck {
     }
     fn side_navigation_entries(&mut self, ui: &mut Ui, expanded: bool) {
         let accent = style::color(self.palette.semantic().accent);
-        for (index, (screen, label)) in Screen::ALL.into_iter().enumerate() {
+        for (screen, label) in Screen::ALL {
             let selected = self.screen == screen
                 || (screen == Screen::Books && self.screen == Screen::Reader)
                 || (screen == Screen::Games && self.screen == Screen::BoardScan);
@@ -219,7 +219,7 @@ impl Woodpeck {
                 egui::pos2(response.rect.left() + 20.0, response.rect.center().y),
                 egui::vec2(20.0, 20.0),
             );
-            widgets::nav_icon(ui.painter(), icon, index, color);
+            widgets::nav_icon(ui.painter(), icon, screen, color);
             if expanded {
                 ui.painter().text(
                     egui::pos2(response.rect.left() + 40.0, response.rect.center().y),

@@ -87,9 +87,10 @@ impl Screen {
     ];
     /// Books are not part of the web version yet.
     #[cfg(target_arch = "wasm32")]
-    const ALL: [(Self, &'static str); 6] = [
+    const ALL: [(Self, &'static str); 7] = [
         (Self::Dashboard, "Dashboard"),
         (Self::Training, "Train"),
+        (Self::Games, "Games"),
         (Self::Review, "Review"),
         (Self::Progress, "Progress"),
         (Self::Builder, "New set"),
