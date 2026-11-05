@@ -39,6 +39,8 @@ struct Hub {
     requests: RefCell<Vec<String>>,
     /// Pushes to reject as if another device pushed first.
     races: Cell<u32>,
+    /// Branch the Contents API creates for an empty repository (`main` when unset).
+    default_branch: RefCell<Option<String>>,
 }
 impl Hub {
     fn add(&self, object: Object) -> String {
@@ -196,9 +198,14 @@ impl Hub {
                 let text = decode(body["content"].as_str().unwrap());
                 let files = BTreeMap::from([("manifest.json".to_owned(), text)]);
                 let commit = self.commit_files(&files, vec![]);
+                let branch = self
+                    .default_branch
+                    .borrow()
+                    .clone()
+                    .unwrap_or_else(|| "main".into());
                 self.refs
                     .borrow_mut()
-                    .insert("refs/heads/main".into(), commit.clone());
+                    .insert(format!("refs/heads/{branch}"), commit.clone());
                 (201, json!({"commit": {"sha": commit}}), vec![])
             }
             _ => panic!("unexpected request {} {path}", request.method),
@@ -299,6 +306,23 @@ fn empty_repository_receives_the_desktop_file_layout() {
     train(&mut a, set, cycle, "p00", Outcome::Incorrect, 2);
     exchange(&mut a, &hub);
     assert_eq!(hub.files("main"), a.export_sync().unwrap().files().unwrap());
+}
+
+#[test]
+fn bootstrap_on_a_non_main_default_branch_still_writes_the_full_snapshot() {
+    let hub = Hub::default();
+    *hub.default_branch.borrow_mut() = Some("master".into());
+    let (mut a, set, cycle) = trained();
+    train(&mut a, set, cycle, "p00", Outcome::Incorrect, 2);
+    exchange(&mut a, &hub);
+    assert!(
+        !hub.refs.borrow().contains_key("refs/heads/main"),
+        "must not create an incomplete main beside the default branch"
+    );
+    assert_eq!(
+        hub.files("master"),
+        a.export_sync().unwrap().files().unwrap()
+    );
 }
 
 #[test]
