@@ -124,7 +124,9 @@ impl Renderer {
                     let (x, y) = (frame[0].max(0), frame[1].max(0));
                     [x + f[0], y + f[1], x + f[2], y + f[3]]
                 });
-                if let Some(white) = diagram::side_marker(&gray, board) {
+                if let Some(white) = diagram::side_marker(&gray, board)
+                    .or_else(|| diagram::triangle_marker(&gray, board))
+                {
                     bytes = diagram::with_side(&bytes, white);
                 }
                 Some(Placed {

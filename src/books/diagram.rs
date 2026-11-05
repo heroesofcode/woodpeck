@@ -755,6 +755,119 @@ pub fn side_marker(g: &Gray, frame: Frame) -> Option<bool> {
     found
 }
 
+/// Quality Chess–style triangle beside the board: outline ▲ by the bottom rank for White,
+/// filled ▼ by the top rank for Black. Used only when [`side_marker`] abstains. `Some(true)` is
+/// White. Anything doubtful (two markers, wrong place, not a triangle) abstains.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::many_single_char_names
+)]
+pub fn triangle_marker(g: &Gray, frame: Frame) -> Option<bool> {
+    let s = (frame[2] - frame[0]).min(frame[3] - frame[1]) as f64;
+    if s < 80.0 {
+        return None;
+    }
+    let at = |v: f64| v.round() as i64;
+    // A narrow band just right of the board, padded a little past the top and bottom ranks.
+    let x0 = frame[2].max(0);
+    let x1 = (frame[2] + at(0.22 * s)).min(g.width as i64);
+    let y0 = (frame[1] - at(0.05 * s)).max(0);
+    let y1 = (frame[3] + at(0.05 * s)).min(g.height as i64);
+    if x1 - x0 < at(0.08 * s) || y1 - y0 < at(0.5 * s) {
+        return None;
+    }
+    let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+    let dark = |x: usize, y: usize| g.px[(y0 as usize + y) * g.width + x0 as usize + x] < 0.55;
+    let mut seen = vec![false; w * h];
+    let mut white = 0usize;
+    let mut black = 0usize;
+    for start in 0..w * h {
+        if seen[start] || !dark(start % w, start / w) {
+            continue;
+        }
+        let mut stack = vec![start];
+        seen[start] = true;
+        let (mut bx0, mut by0, mut bx1, mut by1) = (w, h, 0usize, 0usize);
+        let mut area = 0usize;
+        let mut touch_right = false;
+        let mut touch_top = false;
+        let mut touch_bot = false;
+        while let Some(i) = stack.pop() {
+            let (x, y) = (i % w, i / w);
+            area += 1;
+            (bx0, by0, bx1, by1) = (bx0.min(x), by0.min(y), bx1.max(x + 1), by1.max(y + 1));
+            touch_right |= x + 1 == w;
+            touch_top |= y == 0;
+            touch_bot |= y + 1 == h;
+            for (nx, ny) in [
+                (x.wrapping_sub(1), y),
+                (x + 1, y),
+                (x, y.wrapping_sub(1)),
+                (x, y + 1),
+                (x.wrapping_sub(1), y.wrapping_sub(1)),
+                (x + 1, y.wrapping_sub(1)),
+                (x.wrapping_sub(1), y + 1),
+                (x + 1, y + 1),
+            ] {
+                if nx < w && ny < h && !seen[ny * w + nx] && dark(nx, ny) {
+                    seen[ny * w + nx] = true;
+                    stack.push(ny * w + nx);
+                }
+            }
+        }
+        let (bw, bh) = ((bx1 - bx0) as f64, (by1 - by0) as f64);
+        let max_side = bw.max(bh);
+        // Marker size is a small fraction of the board; reject noise, captions, and
+        // rank/file digits (taller than wide, often ~0.05 of the side).
+        if max_side < 0.055 * s || max_side > 0.12 * s || bw.min(bh) < 0.045 * s {
+            continue;
+        }
+        if (bw - bh).abs() > 0.28 * max_side {
+            continue;
+        }
+        // Circled exercise numbers and page junk sit on the far edge of the band.
+        if touch_right || touch_top || touch_bot {
+            continue;
+        }
+        let fill = area as f64 / (bw * bh).max(1.0);
+        let cy_page = y0 as f64 + (by0 + by1) as f64 / 2.0;
+        let y_rel = (cy_page - frame[1] as f64) / s;
+        let third = ((by1 - by0) / 3).max(1);
+        let mut top_w = 0.0;
+        let mut bot_w = 0.0;
+        for y in by0..by0 + third {
+            for x in bx0..bx1 {
+                if dark(x, y) {
+                    top_w += 1.0;
+                }
+            }
+        }
+        for y in by1 - third..by1 {
+            for x in bx0..bx1 {
+                if dark(x, y) {
+                    bot_w += 1.0;
+                }
+            }
+        }
+        let apex_up = top_w + 0.5 < bot_w;
+        let apex_down = bot_w + 0.5 < top_w;
+        // Hollow ▲ by the bottom rank → White; filled ▼ by the top rank → Black.
+        if fill < 0.38 && apex_up && y_rel > 0.70 {
+            white += 1;
+        } else if fill > 0.48 && apex_down && y_rel < 0.30 {
+            black += 1;
+        }
+    }
+    match (white, black) {
+        (1, 0) => Some(true),
+        (0, 1) => Some(false),
+        _ => None,
+    }
+}
+
 /// Boards on a whole page (a scan or a rendered page): square clusters of connected ink, each
 /// confirmed by [`locate`] on its own crop. Returned as crop boxes with a small margin, top to
 /// bottom, so each crop can go through the same diagram gate as a picture.
@@ -1389,6 +1502,67 @@ mod tests {
         // Far above the bottom rank is a caption's place, not the marker's.
         let (g, f) = marked(&[(400, 100, 25, true)]);
         assert_eq!(side_marker(&g, f), None);
+    }
+
+    /// Blank page with a 300 px board and optional triangles: (left, top, side, filled, up).
+    /// `up` true draws an outline/filled ▲; false a ▼.
+    fn marked_triangles(tris: &[(usize, usize, usize, bool, bool)]) -> (Gray, Frame) {
+        let (w, h) = (500, 400);
+        let mut luma = vec![255u8; w * h];
+        for k in 50..350 {
+            for (x, y) in [(k, 50), (k, 349), (50, k), (349, k)] {
+                luma[y * w + x] = 0;
+            }
+        }
+        for &(left, top, side, filled, up) in tris {
+            for dy in 0..side {
+                let t = if up {
+                    dy as f64 / (side as f64 - 1.0).max(1.0)
+                } else {
+                    1.0 - dy as f64 / (side as f64 - 1.0).max(1.0)
+                };
+                let half = (t * (side as f64) / 2.0).round() as isize;
+                let mid = left + side / 2;
+                let y = top + dy;
+                for dx in -half..=half {
+                    let x = mid as isize + dx;
+                    if x < 0 || y >= h {
+                        continue;
+                    }
+                    let x = x as usize;
+                    if x >= w {
+                        continue;
+                    }
+                    let on_edge = dx.abs() >= half.saturating_sub(1) || dy == 0 || dy + 1 == side;
+                    if filled || on_edge {
+                        luma[y * w + x] = 0;
+                    }
+                }
+            }
+        }
+        (Gray::from_luma(w, h, &luma).unwrap(), [50, 50, 350, 350])
+    }
+
+    #[test]
+    fn triangle_marker_reads_outline_up_and_filled_down() {
+        // Outline ▲ by the bottom rank → White.
+        let (g, f) = marked_triangles(&[(360, 310, 28, false, true)]);
+        assert_eq!(triangle_marker(&g, f), Some(true));
+        // Filled ▼ by the top rank → Black.
+        let (g, f) = marked_triangles(&[(360, 60, 28, true, false)]);
+        assert_eq!(triangle_marker(&g, f), Some(false));
+    }
+
+    #[test]
+    fn triangle_marker_abstains_on_conflict_or_wrong_place() {
+        let (g, f) = marked_triangles(&[]);
+        assert_eq!(triangle_marker(&g, f), None);
+        // Both a White and a Black triangle → abstain.
+        let (g, f) = marked_triangles(&[(360, 310, 28, false, true), (360, 60, 28, true, false)]);
+        assert_eq!(triangle_marker(&g, f), None);
+        // Filled ▼ parked by the bottom rank is not the convention.
+        let (g, f) = marked_triangles(&[(360, 310, 28, true, false)]);
+        assert_eq!(triangle_marker(&g, f), None);
     }
 
     #[test]
