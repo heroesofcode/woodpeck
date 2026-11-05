@@ -679,9 +679,10 @@ fn game_board_size(ui: &Ui, narrow: bool) -> f32 {
 }
 
 fn with_centered_board<R>(ui: &mut Ui, size: f32, add: impl FnOnce(&mut Ui, f32) -> R) -> R {
+    // `game_board_size` already reserved the action row; do not subtract again.
     let size = size
         .min(ui.available_width())
-        .min((ui.available_height() - BOARD_ACTION_RESERVE).max(0.0))
+        .min(ui.available_height())
         .max(0.0);
     let pad = ((ui.available_width() - size) * 0.5).max(0.0);
     let mut out = None;
