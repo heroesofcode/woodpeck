@@ -406,12 +406,7 @@ impl Woodpeck {
             None => {}
         }
         if self.game_blind.as_ref().unwrap().round.phase == BlindPhase::Watching {
-            let white = self
-                .game_engine
-                .as_ref()
-                .unwrap()
-                .orientation()
-                != Some(Color::Black);
+            let white = self.game_engine.as_ref().unwrap().orientation() != Some(Color::Black);
             self.games_board.reader_orientation = Some(white);
         }
 
@@ -520,7 +515,6 @@ impl Woodpeck {
             }
         }
     }
-
 }
 
 fn tap_highlight(h: Highlight) -> TapHighlight {
