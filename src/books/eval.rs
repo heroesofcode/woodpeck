@@ -72,6 +72,9 @@ pub struct Metrics {
     pub images: usize,
     #[serde(default)]
     pub images_recognized: usize,
+    /// Images shown with their pieces read but the side to move unconfirmed.
+    #[serde(default)]
+    pub images_unconfirmed: usize,
     /// Transcribed images: read exactly, read differently (must stay 0), squares matching.
     #[serde(default)]
     pub labelled_images: usize,
@@ -140,6 +143,7 @@ impl Metrics {
         self.correct_diagrams += other.correct_diagrams;
         self.images += other.images;
         self.images_recognized += other.images_recognized;
+        self.images_unconfirmed += other.images_unconfirmed;
         self.labelled_images += other.labelled_images;
         self.labelled_correct += other.labelled_correct;
         self.labelled_wrong += other.labelled_wrong;
@@ -223,16 +227,17 @@ impl Report {
             )
             .expect("string write");
         }
-        s.push_str("\nDiagram images (read from pixels; labelled = transcribed images, wrong must be 0):\n\n| Book | Images | Read as diagram | Labelled | Correct | Wrong | Abstained | Square accuracy |\n|---|---:|---:|---:|---:|---:|---:|---:|\n");
+        s.push_str("\nDiagram images (read from pixels; labelled = transcribed images, wrong must be 0):\n\n| Book | Images | Read as diagram | Side unconfirmed | Labelled | Correct | Wrong | Abstained | Square accuracy |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|\n");
         for m in std::iter::once(&self.overall).chain(&self.fixtures) {
             use std::fmt::Write;
             let read = m.labelled_correct + m.labelled_wrong;
             writeln!(
                 s,
-                "| {} | {} | {} | {} | {} | {} | {} | {:.1}% |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {:.1}% |",
                 m.name,
                 m.images,
                 m.images_recognized,
+                m.images_unconfirmed,
                 m.labelled_images,
                 m.labelled_correct,
                 m.labelled_wrong,
@@ -493,6 +498,10 @@ pub fn evaluate(path: &Path, truth: &Truth) -> Result<Metrics, Box<dyn Error>> {
                 metrics.images += 1;
                 metrics.images_recognized += 1;
             }
+            BlockKind::UnconfirmedDiagram { .. } => {
+                metrics.images += 1;
+                metrics.images_unconfirmed += 1;
+            }
             _ => {}
         }
     }
@@ -502,11 +511,22 @@ pub fn evaluate(path: &Path, truth: &Truth) -> Result<Metrics, Box<dyn Error>> {
             BlockKind::RecognizedDiagram { path, fen, .. }
                 if path.ends_with(&source.asset_suffix) =>
             {
-                Some(fen)
+                Some(fen.clone())
             }
+            // An unconfirmed board is judged on its pieces: it must never show a wrong one.
+            BlockKind::UnconfirmedDiagram {
+                path, placement, ..
+            } if path.ends_with(&source.asset_suffix) => Some(
+                if source.fen.split(' ').next() == Some(placement.as_str()) {
+                    source.fen.clone()
+                } else {
+                    placement.clone()
+                },
+            ),
             _ => None,
         });
         if let Some(fen) = read {
+            let fen = &fen;
             if *fen == source.fen {
                 metrics.labelled_correct += 1;
             } else {
