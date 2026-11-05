@@ -96,9 +96,10 @@ impl Gray {
         self.px[y * self.width + x]
     }
 
-    /// Downscale so `max(width, height) <= max_side`. Larger ClearScan page crops alias
+    /// Downscale so `max(width, height) <= max_side`. Larger `ClearScan` page crops alias
     /// hatched dark squares when resampled to [`CELL`]; the nets were trained near this
     /// side length. Unchanged when already small enough.
+    #[must_use]
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -956,13 +957,13 @@ pub fn cells(g: &Gray, frame: Frame) -> Option<Vec<Vec<f32>>> {
     Some(out)
 }
 
-/// Longest board-crop side fed to locate and the square nets. ClearScan page crops near
+/// Longest board-crop side fed to locate and the square nets. `ClearScan` page crops near
 /// the import raster width (~1100 px) alias hatched dark squares when reduced to [`CELL`].
 /// Capping restores the size band used in training (~300–600 px).
 pub const MAX_BOARD_SIDE: usize = 560;
 
 /// Square images of a located board, or `None` when the image is not a board.
-/// Oversized ClearScan crops are reduced to [`MAX_BOARD_SIDE`] first; if locate then
+/// Oversized `ClearScan` crops are reduced to [`MAX_BOARD_SIDE`] first; if locate then
 /// fails, the native-resolution crop is tried so existing small-board reads stay put.
 pub fn board_cells(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
     let g0 = Gray::decode(bytes)?;
