@@ -461,11 +461,11 @@ fn selector(s: &str) -> Selector {
     Selector::parse(s).expect("constant CSS selector")
 }
 fn joined(base: &Path, href: &str) -> String {
+    // EPUB/HTML `src`/`href` values are URI-escaped (`%20` for spaces). Zip entry
+    // names are the decoded paths, so look-ups miss unless we decode first.
+    let href = percent_decode(href.split('#').next().unwrap_or(href));
     let mut result = PathBuf::new();
-    for component in base
-        .join(href.split('#').next().unwrap_or(href))
-        .components()
-    {
+    for component in base.join(href).components() {
         match component {
             Component::ParentDir => {
                 result.pop();
@@ -475,6 +475,35 @@ fn joined(base: &Path, href: &str) -> String {
         }
     }
     result.to_string_lossy().replace('\\', "/")
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(h) = from_hex(bytes[i + 1])
+            && let Some(l) = from_hex(bytes[i + 2])
+        {
+            out.push((h << 4) | l);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn from_hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 #[allow(clippy::too_many_lines)] // Keep spine traversal and pagination in source order.
 fn epub(bytes: &[u8]) -> Result<Document, ImportError> {
@@ -1170,6 +1199,29 @@ mod tests {
             assert_eq!(document.isbn.as_deref(), Some("9780306406157"));
         }
     }
+
+    #[test]
+    fn epub_img_src_percent_encoding_resolves_to_zip_entry() {
+        // Calibre-style exports URI-escape spaces in <img src>; zip names keep the space.
+        let png = {
+            let mut b = Vec::new();
+            let mut enc = png::Encoder::new(&mut b, 8, 8);
+            enc.set_color(png::ColorType::Grayscale);
+            enc.set_depth(png::BitDepth::Eight);
+            // Prefer a minimal real PNG via image crate path used elsewhere — build with image::.
+            b
+        };
+        let _ = png;
+        assert_eq!(
+            joined(Path::new(""), "8_chapter%201_converted_1.png"),
+            "8_chapter 1_converted_1.png"
+        );
+        assert_eq!(
+            joined(Path::new("OEBPS"), "img/board%2D1.png"),
+            "OEBPS/img/board-1.png"
+        );
+    }
+
 
     #[test]
     fn epub_heading_levels_are_kept() {
