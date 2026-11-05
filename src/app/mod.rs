@@ -303,9 +303,13 @@ impl Woodpeck {
         self.toast = Some((error.to_string(), Instant::now()));
     }
     fn navigate(&mut self, screen: Screen) {
-        if self.screen != screen && self.loading {
-            self.load_generation += 1;
-            self.loading = false;
+        if self.screen != screen {
+            // Toasts are screen-scoped so a Safe-move blunder does not linger on Blind line.
+            self.toast = None;
+            if self.loading {
+                self.load_generation += 1;
+                self.loading = false;
+            }
         }
         self.screen = screen;
         if screen != Screen::Reader {

@@ -1,5 +1,5 @@
 //! Blind-line drill: watch a short sequence, then play the next move from memory.
-use shakmaty::{Chess, Position, uci::UciMove};
+use shakmaty::{Chess, Position, Square, san::SanPlus, uci::UciMove};
 use std::time::Duration;
 
 const PREVIEW_STEP: Duration = Duration::from_millis(700);
@@ -86,6 +86,20 @@ impl Round {
             position = position.play(mv).expect("legal preview");
         }
         position
+    }
+
+    /// SAN of the expected reply, for miss feedback.
+    pub fn answer_san(&self) -> String {
+        let position = self.position_after_preview();
+        let uci = parse_uci(&self.answer).expect("validated answer");
+        let mv = uci.to_move(&position).expect("legal answer");
+        SanPlus::from_move(position, mv).to_string()
+    }
+
+    /// From/to squares of the expected reply (for board highlight after a miss).
+    pub fn answer_squares(&self) -> Option<(Square, Square)> {
+        let uci = parse_uci(&self.answer)?;
+        Some((uci.from()?, uci.to()?))
     }
 
     /// Advance timed phases. Emits preview UCIs, then `ReadyToAnswer` once.
@@ -302,5 +316,13 @@ mod tests {
         session.round.phase = Phase::Answering;
         assert_eq!(session.submit("a2a3"), Phase::Missed);
         assert_eq!(session.streak, 0);
+    }
+
+    #[test]
+    fn answer_san_and_squares_match_bank() {
+        let round = Round::from_puzzle(BANK[0], Duration::ZERO).unwrap();
+        assert_eq!(round.answer, "b8c6");
+        assert_eq!(round.answer_san(), "Nc6");
+        assert_eq!(round.answer_squares(), Some((Square::B8, Square::C6)));
     }
 }
