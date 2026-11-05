@@ -1270,12 +1270,24 @@ impl DiagramRecognizer for Prototypes {
         None
     }
     fn reading(&self, image: &[u8]) -> Option<String> {
-        Some(
-            self.squares(image)?
+        let mut fallback = None;
+        for feats in board_features_scales(image) {
+            let squares: Option<Vec<Square>> = feats
                 .iter()
-                .map(|s| char::from(s.label))
-                .collect(),
-        )
+                .enumerate()
+                .map(|(i, f)| self.classify(f, dark_square(i / 8, i % 8)))
+                .collect();
+            let Some(squares) = squares else {
+                continue;
+            };
+            let reading: String = squares.iter().map(|s| char::from(s.label)).collect();
+            // Prefer the scale that also passes placement gates (same choice as `placement`).
+            if placement(&squares).is_some() {
+                return Some(reading);
+            }
+            fallback.get_or_insert(reading);
+        }
+        fallback
     }
 }
 
