@@ -258,9 +258,9 @@ impl Engine {
         }
         Ok(())
     }
-    /// Apply any legal move while in sandbox mode (`line` is absent), then freeze.
-    /// `success` chooses the board flash: `Complete` (green) or `Incorrect` (red).
-    pub fn play_any(&mut self, input: &str, success: bool) -> Result<(), InputError> {
+    /// Apply any legal move while in sandbox mode (`line` is absent).
+    /// Stays on `PlayerTurn` so drills can play preview plies; call `resolve_sandbox` to freeze.
+    pub fn play_any(&mut self, input: &str) -> Result<(), InputError> {
         if self.state != State::PlayerTurn || self.line.is_some() {
             return Err(InputError::NotInteractive);
         }
@@ -270,18 +270,25 @@ impl Engine {
         let mut after = position.clone();
         after.play_unchecked(m);
         self.sounds.push(crate::sound::Event::from_move(m));
+        self.moves_played.push(input.to_owned());
+        self.position = Some(after);
+        Ok(())
+    }
+
+    /// Freeze a sandbox board after the player's reply.
+    /// `success` chooses the board flash: `Complete` (green) or `Incorrect` (red).
+    pub fn resolve_sandbox(&mut self, success: bool) {
+        if self.line.is_some() || self.sandbox_side.is_none() {
+            return;
+        }
         if !success {
             self.sounds.push(crate::sound::Event::Wrong);
         }
-        self.moves_played.push(input.to_owned());
-        self.position = Some(after);
-        // One reply per drill position; keep the board non-interactive afterward.
         self.state = if success {
             State::Complete
         } else {
             State::Incorrect
         };
-        Ok(())
     }
     pub fn skip(&mut self) -> Result<(), InputError> {
         if self.state != State::PlayerTurn {
@@ -552,26 +559,30 @@ mod sound_tests {
     }
 
     #[test]
-    fn sandbox_locks_orientation_and_freezes_after_play_any() {
+    fn sandbox_locks_orientation_and_resolve_freezes() {
         use shakmaty::fen::Fen;
         let fen: Fen = "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1".parse().unwrap();
         let pos: Chess = fen.into_position(shakmaty::CastlingMode::Standard).unwrap();
         let mut e = Engine::sandbox(pos);
         assert_eq!(e.state(), State::PlayerTurn);
         assert_eq!(e.orientation(), Some(Color::White));
-        e.play_any("e2e4", true).unwrap();
-        assert_eq!(e.state(), State::Complete);
+        e.play_any("e2e4").unwrap();
+        assert_eq!(e.state(), State::PlayerTurn);
         assert_eq!(e.orientation(), Some(Color::White));
-        assert_eq!(e.play_any("e8e7", true), Err(InputError::NotInteractive));
         assert_eq!(
             e.take_sounds().collect::<Vec<_>>(),
             [crate::sound::Event::Move]
         );
+        e.resolve_sandbox(true);
+        assert_eq!(e.state(), State::Complete);
+        assert_eq!(e.orientation(), Some(Color::White));
+        assert_eq!(e.play_any("e8e7"), Err(InputError::NotInteractive));
 
         let fen: Fen = "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1".parse().unwrap();
         let pos: Chess = fen.into_position(shakmaty::CastlingMode::Standard).unwrap();
         let mut bad = Engine::sandbox(pos);
-        bad.play_any("e2e4", false).unwrap();
+        bad.play_any("e2e4").unwrap();
+        bad.resolve_sandbox(false);
         assert_eq!(bad.state(), State::Incorrect);
         assert_eq!(
             bad.take_sounds().collect::<Vec<_>>(),

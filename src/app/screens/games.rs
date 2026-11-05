@@ -1,11 +1,12 @@
 //! Games hub and Board-scan drill UI (desktop, web desktop, and phone).
 use super::super::{Screen, Woodpeck, board::TapHighlight, style, widgets};
 use crate::games::{
-    self, DrillMode, Highlight, SafeSession, SafeStatus, VisionOutcome, VisionSession, VisionStatus,
+    self, BlindPhase, BlindSession, BlindTick, DrillMode, Highlight, SafeSession, SafeStatus,
+    VisionOutcome, VisionSession, VisionStatus,
 };
 use crate::puzzle::Engine;
 use eframe::egui::{self, RichText, Ui};
-use shakmaty::Square;
+use shakmaty::{Color, Square};
 use std::time::Duration;
 
 impl Woodpeck {
@@ -56,6 +57,7 @@ impl Woodpeck {
                         match game.id {
                             "board-scan" => self.start_board_scan(DrillMode::HangingPieces),
                             "safe-move" => self.start_safe_move(),
+                            "blind-line" => self.start_blind_line(),
                             _ => {}
                         }
                     }
@@ -300,7 +302,8 @@ impl Woodpeck {
                 SafeStatus::Cleared | SafeStatus::Blundered => {
                     let ok = outcome == SafeStatus::Cleared;
                     let engine = self.game_engine.as_mut().unwrap();
-                    let _ = engine.play_any(&uci, ok);
+                    let _ = engine.play_any(&uci);
+                    engine.resolve_sandbox(ok);
                     for event in engine.take_sounds() {
                         if self.screenshot.is_none() {
                             crate::sound::play(event, &self.settings);
@@ -338,6 +341,186 @@ impl Woodpeck {
             }
         }
     }
+
+    pub(in crate::app) fn start_blind_line(&mut self) {
+        let seed = self
+            .origin
+            .elapsed()
+            .as_millis()
+            .wrapping_add(u128::from(self.frames)) as u64;
+        let now = self.now();
+        let session = BlindSession::start(seed.max(1), now);
+        let engine = Engine::sandbox(session.round.start_position());
+        self.game_blind = Some(session);
+        self.game_engine = Some(engine);
+        self.games_board = super::super::board::BoardWidget::default();
+        self.navigate(Screen::BlindLine);
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::app) fn blind_line_screen(&mut self, ui: &mut Ui) {
+        let narrow = ui.available_width() < 640.0;
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("< Games").clicked() {
+                self.game_blind = None;
+                self.game_engine = None;
+                self.navigate(Screen::Games);
+            }
+            ui.label(
+                RichText::new("Blind line")
+                    .strong()
+                    .size(if narrow { 18.0 } else { 22.0 }),
+            );
+        });
+        ui.add_space(8.0);
+        if self.game_blind.is_none() || self.game_engine.is_none() {
+            ui.label("Starting…");
+            return;
+        }
+
+        let now = self.now();
+        match self.game_blind.as_mut().unwrap().tick(now) {
+            Some(BlindTick::Preview(uci)) => {
+                let engine = self.game_engine.as_mut().unwrap();
+                let _ = engine.play_any(&uci);
+                for event in engine.take_sounds() {
+                    if self.screenshot.is_none() {
+                        crate::sound::play(event, &self.settings);
+                    }
+                }
+                self.games_board.player_moved();
+                // Keep preview read-only so phone/desktop taps cannot disturb the line.
+                let white = engine.orientation() != Some(Color::Black);
+                self.games_board.reader_orientation = Some(white);
+            }
+            Some(BlindTick::ReadyToAnswer) => {
+                let position = self
+                    .game_blind
+                    .as_ref()
+                    .unwrap()
+                    .round
+                    .position_after_preview();
+                self.game_engine = Some(Engine::sandbox(position));
+                self.games_board = super::super::board::BoardWidget::default();
+            }
+            None => {}
+        }
+        if self.game_blind.as_ref().unwrap().round.phase == BlindPhase::Watching {
+            let white = self
+                .game_engine
+                .as_ref()
+                .unwrap()
+                .orientation()
+                != Some(Color::Black);
+            self.games_board.reader_orientation = Some(white);
+        }
+
+        let (score, streak, best, phase) = {
+            let s = self.game_blind.as_ref().unwrap();
+            (s.score, s.streak, s.best_streak, s.round.phase)
+        };
+        let hint = match phase {
+            BlindPhase::Watching => "Watch the line…",
+            BlindPhase::Concealed => "Hold it in your head…",
+            BlindPhase::Answering => "Play the next move.",
+            BlindPhase::Cleared => "Correct.",
+            BlindPhase::Missed => "Not that move.",
+        };
+        ui.label(RichText::new(hint).size(if narrow { 14.0 } else { 15.0 }));
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("Score {score}"));
+            ui.separator();
+            ui.label(format!("Streak {streak}"));
+            ui.separator();
+            ui.label(format!("Best {best}"));
+        });
+        ui.add_space(8.0);
+
+        let board_budget = if narrow {
+            ui.available_width()
+                .min((ui.available_height() - 120.0).max(180.0))
+        } else {
+            ui.available_height()
+                .min(ui.available_width() * 0.62)
+                .clamp(280.0, 560.0)
+        };
+
+        if phase == BlindPhase::Concealed {
+            let size = egui::vec2(board_budget, board_budget);
+            ui.allocate_ui(size, |ui| {
+                ui.set_min_size(size);
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        RichText::new("…")
+                            .size(48.0)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                });
+            });
+        } else {
+            let interactive = phase == BlindPhase::Answering;
+            let played = {
+                let engine = self.game_engine.as_ref().unwrap();
+                self.games_board.show(
+                    ui,
+                    engine,
+                    board_budget,
+                    self.settings.board_theme,
+                    self.settings.piece_rendering,
+                )
+            };
+            if let Some(uci) = played
+                && interactive
+            {
+                let outcome = self.game_blind.as_mut().unwrap().submit(&uci);
+                let ok = outcome == BlindPhase::Cleared;
+                let engine = self.game_engine.as_mut().unwrap();
+                let _ = engine.play_any(&uci);
+                engine.resolve_sandbox(ok);
+                for event in engine.take_sounds() {
+                    if self.screenshot.is_none() {
+                        crate::sound::play(event, &self.settings);
+                    }
+                }
+                self.games_board.player_moved();
+                self.toast = Some((
+                    if ok {
+                        "Nice memory.".into()
+                    } else {
+                        "Miss — streak lost.".into()
+                    },
+                    web_time::Instant::now(),
+                ));
+            }
+        }
+
+        ui.add_space(10.0);
+        let phase = self.game_blind.as_ref().unwrap().round.phase;
+        match phase {
+            BlindPhase::Watching | BlindPhase::Concealed => {
+                ui.label("The board plays the line for you. Wait for your turn.");
+            }
+            BlindPhase::Answering => {
+                ui.label("Drag or tap the next move. Works with mouse and touch.");
+            }
+            BlindPhase::Cleared | BlindPhase::Missed => {
+                let label = if phase == BlindPhase::Cleared {
+                    "Next line"
+                } else {
+                    "Try another"
+                };
+                if widgets::primary(ui, label).clicked() {
+                    let now = self.now();
+                    self.game_blind.as_mut().unwrap().next_round(now);
+                    let position = self.game_blind.as_ref().unwrap().round.start_position();
+                    self.game_engine = Some(Engine::sandbox(position));
+                    self.games_board = super::super::board::BoardWidget::default();
+                }
+            }
+        }
+    }
+
 }
 
 fn tap_highlight(h: Highlight) -> TapHighlight {
