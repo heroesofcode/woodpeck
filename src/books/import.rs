@@ -31,8 +31,9 @@ impl PageSource for TextImporter {
     fn document(&self, path: &Path) -> Result<Document, ImportError> {
         let bytes = std::fs::read(path)?;
         if bytes.starts_with(b"%PDF-") {
-            let extracted =
+            let mut extracted =
                 pdf::extract(&bytes).map_err(|e| ImportError::Invalid(e.to_string()))?;
+            pdf::stamp_pdftotext_sides(path, &extracted.pages, &mut extracted.pictures);
             let texts = &extracted.pages;
             if texts.is_empty()
                 || texts
