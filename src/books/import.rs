@@ -33,7 +33,12 @@ impl PageSource for TextImporter {
         if bytes.starts_with(b"%PDF-") {
             let mut extracted =
                 pdf::extract(&bytes).map_err(|e| ImportError::Invalid(e.to_string()))?;
-            pdf::stamp_pdftotext_sides(path, &extracted.pages, &mut extracted.pictures);
+            pdf::stamp_pdftotext_sides(
+                path,
+                &extracted.pages,
+                &mut extracted.pictures,
+                extracted.cover.as_deref(),
+            );
             let texts = &extracted.pages;
             if texts.is_empty()
                 || texts

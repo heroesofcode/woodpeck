@@ -184,11 +184,12 @@ fn pdftotext_turn(text: &str) -> Option<bool> {
 /// When pdf-extract left a page without usable text but the PDF still has a text layer
 /// (common with CID fonts), read "White/Black to move|play" via `pdftotext` and stamp
 /// [`crate::books::diagram::with_side`] on that page's pictures. Unambiguous pages only;
-/// dual-side pages abstain. Missing `pdftotext` is a no-op.
+/// dual-side pages abstain; the cover image is left alone. Missing `pdftotext` is a no-op.
 pub(super) fn stamp_pdftotext_sides(
     pdf: &std::path::Path,
     pages: &[Vec<Line>],
     pictures: &mut [Vec<super::picture::Placed>],
+    cover: Option<&[u8]>,
 ) {
     for (i, lines) in pages.iter().enumerate() {
         let Some(placed) = pictures.get_mut(i) else {
@@ -231,6 +232,10 @@ pub(super) fn stamp_pdftotext_sides(
             continue;
         };
         for pic in placed.iter_mut() {
+            // Keep cover bytes unchanged so TextImporter can still skip the cover asset.
+            if cover.is_some_and(|c| c == pic.bytes.as_slice()) {
+                continue;
+            }
             if crate::books::diagram::stated_side(&pic.bytes).is_some() {
                 continue;
             }
