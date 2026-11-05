@@ -95,6 +95,67 @@ impl Gray {
     fn at(&self, x: usize, y: usize) -> f32 {
         self.px[y * self.width + x]
     }
+
+    /// Downscale so `max(width, height) <= max_side`. Larger ClearScan page crops alias
+    /// hatched dark squares when resampled to [`CELL`]; the nets were trained near this
+    /// side length. Unchanged when already small enough.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    pub fn fit_max_side(&self, max_side: usize) -> Self {
+        let long = self.width.max(self.height);
+        if long <= max_side || max_side < 64 {
+            return Self {
+                width: self.width,
+                height: self.height,
+                px: self.px.clone(),
+            };
+        }
+        let scale = max_side as f32 / long as f32;
+        let nw = ((self.width as f32) * scale).round().max(1.0) as usize;
+        let nh = ((self.height as f32) * scale).round().max(1.0) as usize;
+        let mut px = vec![0.0f32; nw * nh];
+        // Area average: each output pixel is the mean of its source rectangle.
+        for y in 0..nh {
+            let y0 = (y as f32) / scale;
+            let y1 = ((y + 1) as f32) / scale;
+            let iy0 = y0.floor().max(0.0) as usize;
+            let iy1 = y1.ceil().min(self.height as f32) as usize;
+            for x in 0..nw {
+                let x0 = (x as f32) / scale;
+                let x1 = ((x + 1) as f32) / scale;
+                let ix0 = x0.floor().max(0.0) as usize;
+                let ix1 = x1.ceil().min(self.width as f32) as usize;
+                let mut sum = 0.0;
+                let mut wsum = 0.0;
+                for sy in iy0..iy1.max(iy0 + 1).min(self.height) {
+                    let top = sy as f32;
+                    let overlap_y = (y1.min(top + 1.0) - y0.max(top)).max(0.0);
+                    if overlap_y <= 0.0 {
+                        continue;
+                    }
+                    for sx in ix0..ix1.max(ix0 + 1).min(self.width) {
+                        let left = sx as f32;
+                        let overlap_x = (x1.min(left + 1.0) - x0.max(left)).max(0.0);
+                        if overlap_x <= 0.0 {
+                            continue;
+                        }
+                        let w = overlap_x * overlap_y;
+                        sum += self.px[sy * self.width + sx] * w;
+                        wsum += w;
+                    }
+                }
+                px[y * nw + x] = if wsum > 0.0 { sum / wsum } else { 0.0 };
+            }
+        }
+        Self {
+            width: nw,
+            height: nh,
+            px,
+        }
+    }
 }
 
 /// Left, top, right, bottom in pixels.
@@ -895,11 +956,26 @@ pub fn cells(g: &Gray, frame: Frame) -> Option<Vec<Vec<f32>>> {
     Some(out)
 }
 
+/// Longest board-crop side fed to locate and the square nets. ClearScan page crops near
+/// the import raster width (~1100 px) alias hatched dark squares when reduced to [`CELL`].
+/// Capping restores the size band used in training (~300–600 px).
+pub const MAX_BOARD_SIDE: usize = 560;
+
 /// Square images of a located board, or `None` when the image is not a board.
+/// Oversized ClearScan crops are reduced to [`MAX_BOARD_SIDE`] first; if locate then
+/// fails, the native-resolution crop is tried so existing small-board reads stay put.
 pub fn board_cells(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
-    let g = Gray::decode(bytes)?;
-    let frame = locate_with_light_rim(&g)?;
-    cells(&g, frame)
+    let g0 = Gray::decode(bytes)?;
+    if g0.width.max(g0.height) <= MAX_BOARD_SIDE {
+        let frame = locate_with_light_rim(&g0)?;
+        return cells(&g0, frame);
+    }
+    let g = g0.fit_max_side(MAX_BOARD_SIDE);
+    if let Some(frame) = locate_with_light_rim(&g) {
+        return cells(&g, frame);
+    }
+    let frame = locate_with_light_rim(&g0)?;
+    cells(&g0, frame)
 }
 
 /// 2x2 block means (shape) plus 4x4 block deviations (ink texture versus hatching).
@@ -1236,6 +1312,17 @@ mod tests {
             }
         }
         (Gray::from_luma(w, h, &luma).unwrap(), [50, 50, 350, 350])
+    }
+
+    #[test]
+    fn fit_max_side_shrinks_only_when_larger() {
+        let (g, _) = marked(&[]);
+        assert_eq!(g.width, 500);
+        let same = g.fit_max_side(560);
+        assert_eq!((same.width, same.height), (g.width, g.height));
+        let small = g.fit_max_side(200);
+        assert!(small.width <= 200 && small.height <= 200);
+        assert_eq!(small.width.max(small.height), 200);
     }
 
     #[test]
