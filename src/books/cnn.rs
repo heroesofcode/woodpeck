@@ -4,9 +4,11 @@
 //! `ReLU` and 2x2 max-pool stages followed by two dense layers. Besides the twelve pieces and
 //! the empty square there is a "junk" class, trained on squares cut by a misplaced frame, so
 //! a board whose grid was found in the wrong place abstains instead of being misread.
-//! Two networks of different widths were trained only on synthetic boards drawn with freely
-//! licensed piece sets (see `assets/LICENSES.md` and `tools/diagram_cnn`); the weights are
-//! embedded and inference runs on the CPU.
+//! Two networks of different widths are trained first on synthetic boards drawn with freely
+//! licensed piece sets (see `assets/LICENSES.md` and `tools/diagram_cnn`), then fine-tuned on
+//! labelled crops from privately held purchased chess books that are not distributed; the
+//! weights are embedded and inference runs on the CPU. A prior round's weights are also
+//! embedded so a board the newer nets abstain on can still be read when the older nets agree.
 //!
 //! A board is accepted only when both networks read the same label on every square, every
 //! square is confident, kings and queens (whose colours
@@ -26,11 +28,19 @@ pub const MIN_PROBABILITY: f32 = 0.9;
 pub const MIN_ROYAL_PROBABILITY: f32 = 0.99;
 
 static BUILTIN: std::sync::OnceLock<Option<Cnn>> = std::sync::OnceLock::new();
+static BUILTIN_PRIOR: std::sync::OnceLock<Option<Cnn>> = std::sync::OnceLock::new();
 
-/// The networks bundled with the application.
+/// The networks bundled with the application (latest training round).
 pub fn builtin() -> Option<&'static Cnn> {
     BUILTIN
         .get_or_init(|| Cnn::decode(include_bytes!("diagram_cnn.bin")))
+        .as_ref()
+}
+
+/// Previous-round networks kept as an additive fallback when [`builtin`] abstains.
+pub fn builtin_prior() -> Option<&'static Cnn> {
+    BUILTIN_PRIOR
+        .get_or_init(|| Cnn::decode(include_bytes!("diagram_cnn_prior.bin")))
         .as_ref()
 }
 
@@ -364,6 +374,8 @@ mod tests {
     fn bundled_network_decodes() {
         let cnn = builtin().expect("bundled networks");
         assert_eq!(cnn.networks.len(), 2);
+        let prior = builtin_prior().expect("prior networks");
+        assert_eq!(prior.networks.len(), 2);
         assert!(cnn.networks.iter().all(|n| n.out.output == CLASSES));
         assert!(Cnn::decode(b"WPCN").is_none());
         let mut truncated = include_bytes!("diagram_cnn.bin").to_vec();

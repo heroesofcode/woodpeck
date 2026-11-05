@@ -239,13 +239,26 @@ fn renumber(pos: &Chess, fullmoves: u32) -> Option<Chess> {
     setup.position(CastlingMode::Standard).ok()
 }
 pub fn resolve(document: Document) -> Book {
-    let network = super::cnn::builtin().map(|n| n as &dyn DiagramRecognizer);
-    let prototypes = super::diagram::builtin().map(|p| p as &dyn DiagramRecognizer);
-    match (network, prototypes) {
-        (Some(first), Some(second)) => {
+    let current = super::cnn::builtin();
+    let prior = super::cnn::builtin_prior();
+    let prototypes = super::diagram::builtin();
+    match (current, prior, prototypes) {
+        (Some(primary), Some(fallback), Some(second)) => {
+            let first = super::diagram::Fallback { primary, fallback };
+            resolve_using(
+                document,
+                Some(&super::diagram::Agreeing {
+                    first: &first,
+                    second,
+                }),
+            )
+        }
+        (Some(first), _, Some(second)) => {
             resolve_using(document, Some(&super::diagram::Agreeing { first, second }))
         }
-        (network, prototypes) => resolve_using(document, network.or(prototypes)),
+        (network, _, prototypes) => {
+            resolve_using(document, network.map(|n| n as _).or(prototypes.map(|p| p as _)))
+        }
     }
 }
 /// Expand a gated placement for comparison when its following moves cannot seed a position.
