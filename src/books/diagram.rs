@@ -267,8 +267,8 @@ fn candidates(g: &Gray) -> Vec<Frame> {
 }
 
 /// Insets past a thick uniform border (gold/brown frames, coordinate bands inside the rim).
-/// Used only as a locate fallback when the dark-line path finds nothing — never competing with
-/// dark-line candidates (which would otherwise add a second "board" and make locate abstain).
+/// Fallback candidates for [`locate_with_light_rim`] (embedded diagrams with a bright rim).
+/// Not mixed into [`candidates`]: `page_boards` must keep the dark-line-only [`locate`].
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn inset_frames(g: &Gray) -> Vec<Frame> {
     let side = g.width.min(g.height);
@@ -414,10 +414,14 @@ fn refine(g: &Gray, mut frame: Frame) -> Frame {
 /// Locates an 8x8 checkered board, or `None` when the image is not a board.
 #[allow(clippy::cast_precision_loss)]
 pub fn locate(g: &Gray) -> Option<Frame> {
-    // Dark-line / whole-image first. Light-rim insets are a fallback only: mixing them into
-    // the same candidate set can invent a second agreeing frame on multi-board pages and make
-    // locate abstain (L03/N15/N20 regression when insets competed).
-    locate_among(g, &candidates(g)).or_else(|| locate_among(g, &inset_frames(g)))
+    locate_among(g, &candidates(g))
+}
+
+/// Like [`locate`], then light-rim insets if the dark-line path finds nothing.
+/// For single embedded diagrams (epub gold frames). Not used by [`page_boards`]: an inset hit on
+/// an early square crop there can mask a later good crop and drop boards (N15).
+fn locate_with_light_rim(g: &Gray) -> Option<Frame> {
+    locate(g).or_else(|| locate_among(g, &inset_frames(g)))
 }
 
 fn locate_among(g: &Gray, frames: &[Frame]) -> Option<Frame> {
@@ -894,7 +898,7 @@ pub fn cells(g: &Gray, frame: Frame) -> Option<Vec<Vec<f32>>> {
 /// Square images of a located board, or `None` when the image is not a board.
 pub fn board_cells(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
     let g = Gray::decode(bytes)?;
-    let frame = locate(&g)?;
+    let frame = locate_with_light_rim(&g)?;
     cells(&g, frame)
 }
 
@@ -1370,7 +1374,7 @@ mod tests {
             height: size,
             px,
         };
-        let frame = locate(&g).expect("board inside light rim");
+        let frame = locate_with_light_rim(&g).expect("board inside light rim");
         let (w, h) = (frame[2] - frame[0], frame[3] - frame[1]);
         assert!(w >= 200 && h >= 200, "frame too small: {frame:?}");
         let rim_i = i64::try_from(rim).unwrap();
