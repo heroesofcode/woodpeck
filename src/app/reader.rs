@@ -113,6 +113,8 @@ pub(super) struct Reader {
     /// Text runs of the page on screen, rebuilt only when the page changes.
     runs: std::collections::VecDeque<(usize, Rc<PageRuns>)>,
     paragraphs: std::collections::HashMap<(usize, usize), Option<Paragraph>>,
+    /// The side to move the reader chose for boards the book does not confirm (true: White).
+    sides: std::collections::HashMap<String, bool>,
     /// Chapter headings across the book: (page, level, title).
     contents: Vec<(usize, u8, String)>,
     /// Highest heading level the book uses, so its chapters get the chapter style.
@@ -221,6 +223,7 @@ impl Reader {
             textures: std::collections::HashMap::default(),
             runs: std::collections::VecDeque::new(),
             paragraphs: std::collections::HashMap::new(),
+            sides: std::collections::HashMap::new(),
             contents: Vec::new(),
             top_level: 1,
             notice: None,
@@ -503,8 +506,88 @@ impl Reader {
                     });
                 }
             }
+            BlockKind::UnconfirmedDiagram {
+                path,
+                alt,
+                placement,
+            } => self.unconfirmed(ui, path, alt, placement, settings),
             _ => {}
         }
+    }
+    /// A board read from pixels whose side to move the book does not confirm. Nothing is
+    /// assumed: exploring it waits until the reader picks a side.
+    fn unconfirmed(
+        &mut self,
+        ui: &mut Ui,
+        path: &str,
+        alt: &str,
+        placement: &str,
+        settings: &crate::settings::Settings,
+    ) {
+        let at = |white: bool| {
+            let fen = format!("{placement} {} - - 0 1", if white { 'w' } else { 'b' });
+            crate::books::resolve::position(&fen).map(|p| (fen, p))
+        };
+        let chosen = self.sides.get(path).copied();
+        let Some((_, shown)) = chosen
+            .and_then(at)
+            .or_else(|| at(true))
+            .or_else(|| at(false))
+        else {
+            return;
+        };
+        ui.vertical_centered(|ui| {
+            let mut board = BoardWidget::default();
+            board.reader_orientation = Some(self.white);
+            board.show(
+                ui,
+                &Engine::reading(shown),
+                ui.available_width().min(220.0),
+                settings.board_theme,
+                settings.piece_rendering,
+            );
+            match chosen {
+                None => {
+                    ui.colored_label(ui.visuals().warn_fg_color, "⚠ Side to move not confirmed")
+                        .on_hover_text(
+                            "The pieces were read from the picture, but the book's text \
+                             doesn't say who moves. Choose a side to explore it.",
+                        );
+                }
+                Some(white) => {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        if white {
+                            "⚠ White to move (your choice, not confirmed)"
+                        } else {
+                            "⚠ Black to move (your choice, not confirmed)"
+                        },
+                    );
+                }
+            }
+            ui.horizontal(|ui| {
+                for (white, label) in [(true, "White to move"), (false, "Black to move")] {
+                    if let Some((fen, _)) = at(white)
+                        && ui.selectable_label(chosen == Some(white), label).clicked()
+                    {
+                        self.sides.insert(path.to_owned(), white);
+                        self.fen = fen;
+                        self.node = None;
+                        self.dirty = Some(Instant::now());
+                    }
+                }
+            });
+            if let Some((fen, _)) = chosen.and_then(at)
+                && ui.small_button("Explore diagram >").clicked()
+            {
+                self.fen = fen;
+                self.node = None;
+                self.dirty = Some(Instant::now());
+            }
+            if !alt.trim().is_empty() {
+                ui.small(alt);
+            }
+        });
     }
     fn text(&mut self, ui: &mut Ui, height: f32, settings: &crate::settings::Settings) {
         if self.book.document.pages.get(self.page).is_none() {
@@ -545,7 +628,8 @@ impl Reader {
                                     match &block.kind {
                                         BlockKind::Image { .. }
                                         | BlockKind::Diagram { .. }
-                                        | BlockKind::RecognizedDiagram { .. } => {
+                                        | BlockKind::RecognizedDiagram { .. }
+                                        | BlockKind::UnconfirmedDiagram { .. } => {
                                             self.illustration(ui, block, settings);
                                         }
                                         BlockKind::Heading => heading(

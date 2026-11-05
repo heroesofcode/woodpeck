@@ -342,7 +342,7 @@ fn resolve_with(
     placements: &HashMap<String, Option<String>>,
     readings: &HashMap<String, String>,
 ) -> Book {
-    let recognized = recognized_positions(&document, alphabet, placements);
+    let (recognized, unconfirmed) = recognized_positions(&document, alphabet, placements);
     let mut book = Book {
         version: 1,
         document: document.clone(),
@@ -446,9 +446,11 @@ fn resolve_with(
                 )]);
                 context.resume = true;
                 context.unrecognized_image = true;
+                show_unconfirmed(block, unconfirmed.get(&(page_index, block_index)));
                 continue;
             }
             if matches!(block.kind, BlockKind::Image { .. }) {
+                show_unconfirmed(block, unconfirmed.get(&(page_index, block_index)));
                 context.invalid_start = true;
                 context.unrecognized_image = true;
                 context.known.clear();
@@ -487,7 +489,10 @@ fn resolve_with(
                 section.fragments.push(book.fragments.len() - 1);
                 continue;
             }
-            if matches!(block.kind, BlockKind::Image { .. }) {
+            if matches!(
+                block.kind,
+                BlockKind::Image { .. } | BlockKind::UnconfirmedDiagram { .. }
+            ) {
                 continue;
             }
             let ts = notation::tokens(text);
@@ -901,7 +906,31 @@ fn stated_turn(text: &str) -> Option<Color> {
             .iter()
             .any(|verb| lower.contains(&format!("{side}{verb}")))
     };
-    match (says("white"), says("black")) {
+    // Phrases that only ever name the side to move: German, French, Portuguese, Italian,
+    // Dutch, Russian.
+    let names = |phrases: &[&str]| phrases.iter().any(|p| lower.contains(p));
+    let white = says("white")
+        || names(&[
+            "weiß am zug",
+            "weiss am zug",
+            "trait aux blancs",
+            "vez das brancas",
+            "tocca al bianco",
+            "wit aan zet",
+            "ход белых",
+        ]);
+    let black = says("black")
+        || names(&[
+            "schwarz am zug",
+            "trait aux noirs",
+            "vez das pretas",
+            "vez das negras",
+            "tocca al nero",
+            "zwart aan zet",
+            "ход черных",
+            "ход чёрных",
+        ]);
+    match (white, black) {
         (true, false) => Some(Color::White),
         (false, true) => Some(Color::Black),
         _ => None,
@@ -933,12 +962,19 @@ fn differences(reading: &str, pos: &Chess) -> Option<usize> {
 /// Diagram images the recognizer read, keyed by page and block. The side to move comes from the
 /// text ("Black to play", "1. ..."); when moves follow, the first one must be legal for that side,
 /// otherwise the image stays unrecognized rather than seeding a doubtful position.
+/// Images whose board passed the gates but whose side to move nothing confirms come second,
+/// with their placement only.
+#[allow(clippy::type_complexity)]
 fn recognized_positions(
     document: &Document,
     alphabet: &str,
     placements: &HashMap<String, Option<String>>,
-) -> HashMap<(usize, usize), Chess> {
+) -> (
+    HashMap<(usize, usize), Chess>,
+    HashMap<(usize, usize), String>,
+) {
     let mut out = HashMap::new();
+    let mut unconfirmed = HashMap::new();
     for (p, page) in document.pages.iter().enumerate() {
         for (b, block) in page.blocks.iter().enumerate() {
             let (placement, alt) = match &block.kind {
@@ -952,7 +988,8 @@ fn recognized_positions(
                 },
                 _ => continue,
             };
-            if let Some(pos) = image_position(
+            let image = matches!(block.kind, BlockKind::Image { .. });
+            match image_position(
                 page.blocks[b + 1..]
                         .iter()
                         .map(|block| (page, block))
@@ -962,22 +999,153 @@ fn recognized_positions(
                         }))
                         .take(4),
                 alt,
+                &before_image(page, b),
                 alphabet,
                 &placement,
             ) {
-                out.insert((p, b), pos);
+                Turn::Confirmed(pos) => {
+                    out.insert((p, b), pos);
+                }
+                Turn::Unknown if image => {
+                    unconfirmed.insert((p, b), placement);
+                }
+                Turn::Unknown | Turn::Contradicted => {}
             }
         }
     }
-    out
+    (out, unconfirmed)
+}
+/// Turns an image whose board passed the gates into a board shown without a side to move.
+fn show_unconfirmed(block: &mut Block, placement: Option<&String>) {
+    if let (BlockKind::Image { path, alt }, Some(placement)) = (&block.kind, placement) {
+        block.kind = BlockKind::UnconfirmedDiagram {
+            path: path.clone(),
+            alt: alt.clone(),
+            placement: placement.clone(),
+        };
+    }
+}
+/// What the text says about the side to move in a diagram.
+enum Turn {
+    Confirmed(Chess),
+    /// Nothing names the side, and the board is legal with either side to move.
+    Unknown,
+    /// The text contradicts itself or the board: the image stays unread.
+    Contradicted,
+}
+/// What the text just above a diagram says about it.
+#[derive(Default)]
+struct Before {
+    /// A caption ending the text right above the board ("White to play:").
+    stated: Option<Color>,
+    /// The page's "mate in N" theme, if one heads the diagrams on it.
+    mate: Option<u8>,
+}
+/// Reads the caption right above block `b` and the "mate in N" theme heading its page.
+fn before_image(page: &Page, b: usize) -> Before {
+    let mut before = Before::default();
+    let texts = page.blocks[..b]
+        .iter()
+        .rev()
+        .filter(|block| matches!(block.kind, BlockKind::Paragraph | BlockKind::Heading))
+        .map(|block| page.text[block.span.clone()].trim());
+    for (i, text) in texts.enumerate() {
+        if text.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            before.stated = lead_in_turn(text);
+        }
+        if let Some(n) = mate_in(text) {
+            before.mate = Some(n);
+            break;
+        }
+        // Commentary between the theme and the board may concern another position.
+        if text.chars().count() > 200 {
+            break;
+        }
+    }
+    before
+}
+/// A side named by a caption that introduces the board: a short line, or the end of a
+/// paragraph that leads into it with a colon ("… White to play:").
+fn lead_in_turn(text: &str) -> Option<Color> {
+    if text.chars().count() <= 60 {
+        return caption_turn(text);
+    }
+    let tail = text.strip_suffix(':')?;
+    let start = tail.rfind(['.', '!', '?', ')', ';']).map_or(0, |i| i + 1);
+    caption_turn(&tail[start..])
+}
+/// The side a short caption names, accepting caption-only forms such as "24) White moves".
+fn caption_turn(text: &str) -> Option<Color> {
+    stated_turn(text).or_else(|| {
+        if text.chars().count() > 60 {
+            return None;
+        }
+        let lower = text.to_lowercase();
+        // "White moves", "Brancas jogam", "Juegan las negras": in prose these verbs describe
+        // moves, so they count only on a caption line.
+        let names = |phrases: &[&str]| phrases.iter().any(|p| lower.contains(p));
+        let white = names(&[
+            "white moves",
+            "white plays",
+            "brancas jogam",
+            "jogam as brancas",
+            "jogam brancas",
+            "juegan las blancas",
+            "juegan blancas",
+            "blancas juegan",
+            "mueven las blancas",
+            "mueven blancas",
+            "weiß zieht",
+            "weiss zieht",
+            "les blancs jouent",
+            "blancs jouent",
+            "muove il bianco",
+            "il bianco muove",
+        ]);
+        let black = names(&[
+            "black moves",
+            "black plays",
+            "pretas jogam",
+            "jogam as pretas",
+            "jogam pretas",
+            "negras jogam",
+            "jogam as negras",
+            "juegan las negras",
+            "juegan negras",
+            "negras juegan",
+            "mueven las negras",
+            "mueven negras",
+            "schwarz zieht",
+            "les noirs jouent",
+            "noirs jouent",
+            "muove il nero",
+            "il nero muove",
+        ]);
+        match (white, black) {
+            (true, false) => Some(Color::White),
+            (false, true) => Some(Color::Black),
+            _ => None,
+        }
+    })
 }
 fn image_position<'a>(
     following: impl Iterator<Item = (&'a Page, &'a Block)>,
     alt: &str,
+    before: &Before,
     alphabet: &str,
     placement: &str,
-) -> Option<Chess> {
-    let mut stated = stated_turn(alt);
+) -> Turn {
+    let mut stated = caption_turn(alt);
+    if let Some(side) = before.stated {
+        if stated.is_some_and(|s| s != side) {
+            return Turn::Contradicted;
+        }
+        stated = Some(side);
+    }
+    let mut mate = mate_in(alt).or(before.mate);
     for (page, block) in following {
         let text = &page.text[block.span.clone()];
         if block.kind == BlockKind::Heading && caption(text) {
@@ -1029,28 +1197,100 @@ fn image_position<'a>(
             }
             if legal(side.other()).is_some() {
                 // The numbering names one side but only the other can play the move.
-                return None;
+                return Turn::Contradicted;
             }
         }
         let prose = found
             .as_ref()
             .map_or(text, |(n, ..)| &text[..ts[*n].span.start]);
-        if let Some(side) = stated_turn(prose) {
+        if let Some(side) = caption_turn(prose) {
             if stated.is_some_and(|s| s != side) {
-                return None;
+                return Turn::Contradicted;
             }
             stated = Some(side);
         }
+        mate = mate_in(prose).or(mate);
         let Some((_, side, pos)) = found else {
             continue;
         };
         if stated.is_some_and(|s| s != side) {
-            return None;
+            return Turn::Contradicted;
         }
-        return Some(pos);
+        return Turn::Confirmed(pos);
     }
-    // Without a stated side or a move number the side to move is unknown: abstain.
-    placed(placement, stated?)
+    if let Some(side) = stated {
+        return placed(placement, side).map_or(Turn::Contradicted, Turn::Confirmed);
+    }
+    let sides: Vec<Chess> = [Color::White, Color::Black]
+        .into_iter()
+        .filter_map(|side| placed(placement, side))
+        .collect();
+    // The side not to move can never be in check, so a check names the side to move.
+    match sides.as_slice() {
+        [] => Turn::Contradicted,
+        [pos] => Turn::Confirmed(pos.clone()),
+        both if mate.is_some() => {
+            // "Mate in N" for a board where only one side can force mate names that side.
+            let n = mate.unwrap_or(1);
+            let mut mating = both.iter().filter(|pos| mates_within(pos, n));
+            match (mating.next(), mating.next()) {
+                (Some(pos), None) => Turn::Confirmed(pos.clone()),
+                _ => Turn::Unknown,
+            }
+        }
+        _ => Turn::Unknown,
+    }
+}
+/// Whether the side to move can force checkmate within `n` of its moves.
+fn mates_within(pos: &Chess, n: u8) -> bool {
+    pos.legal_moves().iter().any(|m| {
+        let mut after = pos.clone();
+        after.play_unchecked(*m);
+        after.is_checkmate()
+            || (n > 1
+                && !after.is_game_over()
+                && after.legal_moves().iter().all(|r| {
+                    let mut reply = after.clone();
+                    reply.play_unchecked(*r);
+                    mates_within(&reply, n - 1)
+                }))
+    })
+}
+/// The N of a "mate in N" caption (one or two moves), in the languages chess books use.
+fn mate_in(text: &str) -> Option<u8> {
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '#')
+        .filter(|w| !w.is_empty())
+        .collect();
+    let number = |w: &str| match w {
+        "1" | "#1" | "one" | "um" | "uno" | "un" | "einem" | "eins" | "jednym" => Some(1),
+        "2" | "#2" | "two" | "dois" | "dos" | "deux" | "zwei" | "due" | "dwa" => Some(2),
+        _ => None,
+    };
+    let mate = |w: &str| matches!(w, "mate" | "mat" | "matt" | "mates" | "мат" | "matto");
+    let mut found = None;
+    for (i, w) in words.iter().enumerate() {
+        let n = if mate(w) {
+            match words.get(i + 1).copied() {
+                Some("in" | "en" | "em" | "w" | "в" | "v" | "i" | "op" | "à") => {
+                    words.get(i + 2).and_then(|w| number(w))
+                }
+                Some(w) if w.starts_with('#') => number(w),
+                _ => None,
+            }
+        } else {
+            matches!(*w, "#1" | "#2").then(|| number(w)).flatten()
+        };
+        if let Some(n) = n {
+            // Different numbers on one caption leave the theme unclear.
+            if found.is_some_and(|f| f != n) {
+                return None;
+            }
+            found = Some(n);
+        }
+    }
+    found
 }
 /// A heading that only names a diagram or figure ("DIAGRAM 1", "Fig. 12"). Chapter, section,
 /// part and page headings start something new instead.
@@ -1524,6 +1764,147 @@ mod image_tests {
             }],
         };
         resolve_using(document, Some(&Fixed(PLACEMENT)))
+    }
+    /// The image's block after resolving `texts` under a board read as `placement`.
+    fn shown(placement: &'static str, alt: &str, texts: &[&str]) -> (BlockKind, Book) {
+        let mut page = Page::default();
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: alt.into(),
+            },
+        );
+        for text in texts {
+            page.push(text, BlockKind::Paragraph);
+        }
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes: vec![0],
+            }],
+        };
+        let book = resolve_using(document, Some(&Fixed(placement)));
+        (book.document.pages[0].blocks[0].kind.clone(), book)
+    }
+    #[test]
+    fn a_board_without_a_stated_side_is_shown_unconfirmed() {
+        let (kind, book) = shown(PLACEMENT, "", &["A quiet position."]);
+        assert_eq!(
+            kind,
+            BlockKind::UnconfirmedDiagram {
+                path: "images/d.png".into(),
+                alt: String::new(),
+                placement: PLACEMENT.into(),
+            }
+        );
+        // Moves after it are never played from an assumed side.
+        assert!(book.nodes.is_empty());
+    }
+    #[test]
+    fn a_contradicted_side_keeps_the_image_unread() {
+        // Black to move by its caption, but the move is White's.
+        let (kind, _) = shown(PLACEMENT, "Black to play", &["1. Ra8+"]);
+        assert!(matches!(kind, BlockKind::Image { .. }));
+    }
+    #[test]
+    fn a_check_names_the_side_to_move() {
+        // The black king on e8 is attacked by the rook on e1: only Black can be to move.
+        let (kind, _) = shown("4k3/8/8/8/8/8/8/K3R3", "", &[]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+    }
+    #[test]
+    fn mate_in_one_names_the_only_side_that_has_it() {
+        // White mates with Ra8; Black has no mate.
+        let board = "6k1/5ppp/8/8/8/8/8/R5K1";
+        for caption in ["Mate in 1", "Matt in 1", "Mate en 1", "Mate em 1", "#1"] {
+            let (kind, _) = shown(board, caption, &[]);
+            assert!(
+                matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+                "{caption}: {kind:?}"
+            );
+        }
+        // Without the caption the side stays unconfirmed.
+        let (kind, _) = shown(board, "", &[]);
+        assert!(matches!(kind, BlockKind::UnconfirmedDiagram { .. }));
+    }
+    #[test]
+    fn mate_in_two_names_the_only_side_that_forces_it() {
+        // White's rooks on a1 and b2 mate with 1. Rb7 and 2. Ra8; Black has no mate.
+        let board = "7k/8/8/8/8/8/1R6/R5K1";
+        assert_eq!(mate_in("Mate in 2 by means of a rook sacrifice"), Some(2));
+        let (kind, _) = shown(board, "Matt in 2", &[]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+    }
+    #[test]
+    fn captions_name_the_side_in_several_languages() {
+        for (caption, white) in [
+            ("24) White moves", true),
+            ("Brancas jogam", true),
+            ("Juegan las negras", false),
+            ("Schwarz am Zug", false),
+            ("Trait aux blancs", true),
+        ] {
+            assert_eq!(
+                caption_turn(caption),
+                Some(if white { Color::White } else { Color::Black }),
+                "{caption}"
+            );
+        }
+        // In prose the same verbs describe a move, not the side to move.
+        assert_eq!(
+            caption_turn("In this famous game White moves the knight back and wins slowly."),
+            None
+        );
+        assert_eq!(
+            lead_in_turn("A typical position with an extra pawn (see below). White to play:"),
+            Some(Color::White)
+        );
+        assert_eq!(
+            lead_in_turn("A long paragraph about the previous game, ending here."),
+            None
+        );
+    }
+    #[test]
+    fn a_caption_above_the_board_names_its_side() {
+        let mut page = Page::default();
+        page.push("Black to play:", BlockKind::Paragraph);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes: vec![0],
+            }],
+        };
+        let book = resolve_using(document, Some(&Fixed(PLACEMENT)));
+        assert!(matches!(
+            &book.document.pages[0].blocks[1].kind,
+            BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")
+        ));
     }
     /// Rejects every image but still reports a fixed ungated reading.
     struct Reads(String);

@@ -19,6 +19,14 @@ pub enum BlockKind {
         alt: String,
         fen: String,
     },
+    /// A diagram image whose pieces were read from its pixels, but whose side to move the text
+    /// does not confirm: shown with a warning, never used to resolve moves.
+    UnconfirmedDiagram {
+        path: String,
+        alt: String,
+        /// The piece placement only (the first FEN field).
+        placement: String,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Block {
