@@ -668,36 +668,30 @@ fn tap_highlight(h: Highlight) -> TapHighlight {
 /// and leaves room for the primary action when height is scarce.
 fn game_board_size(ui: &Ui, narrow: bool) -> f32 {
     let width = ui.available_width();
-    let height = ui.available_height();
+    // Always leave room for Next / Try another under the board (play screens are
+    // no longer inside a ScrollArea).
+    let height = (ui.available_height() - BOARD_ACTION_RESERVE).max(160.0);
     if narrow {
-        // Reserve space for the Next / Try another row so it stays on-screen.
-        if height.is_finite() && height < width + BOARD_ACTION_RESERVE {
-            (height - BOARD_ACTION_RESERVE).clamp(160.0, width)
-        } else {
-            width
-        }
+        width.min(height)
     } else {
-        height.min(width * 0.62).clamp(280.0, 560.0)
+        height.min(width * 0.62).min(560.0).min(width).max(0.0)
     }
 }
 
 fn with_centered_board<R>(ui: &mut Ui, size: f32, add: impl FnOnce(&mut Ui, f32) -> R) -> R {
     let size = size
         .min(ui.available_width())
-        .min(ui.available_height())
+        .min((ui.available_height() - BOARD_ACTION_RESERVE).max(0.0))
         .max(0.0);
     let pad = ((ui.available_width() - size) * 0.5).max(0.0);
     let mut out = None;
     ui.horizontal(|ui| {
-        if pad > 0.0 {
-            ui.add_space(pad);
-        }
-        // Cap the column so the board cannot stretch the row past `size`.
-        ui.set_max_width(size);
-        out = Some(add(ui, size));
-        if pad > 0.0 {
-            ui.add_space(pad);
-        }
+        ui.add_space(pad);
+        // Allocate an exact square so padding does not steal width from the board
+        // (unlike set_max_width on the row, which is measured from the row origin).
+        ui.allocate_ui(egui::vec2(size, size), |ui| {
+            out = Some(add(ui, size));
+        });
     });
     out.expect("board closure ran")
 }
