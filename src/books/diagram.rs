@@ -236,7 +236,8 @@ fn frame_profile(profile: &[f32], threshold: f32) -> Option<(i64, i64)> {
     Some((i64::try_from(a + 1).ok()?, i64::try_from(b).ok()?))
 }
 
-/// Candidate boards: the whole image, and frames bounded by long dark border lines.
+/// Candidate boards: the whole image, inset rectangles (thick light frames), and frames
+/// bounded by long dark border lines.
 #[allow(clippy::cast_precision_loss)]
 fn candidates(g: &Gray) -> Vec<Frame> {
     let w = i64::try_from(g.width).unwrap_or(i64::MAX);
@@ -252,6 +253,7 @@ fn candidates(g: &Gray) -> Vec<Frame> {
         }
     }
     let mut out = vec![[0, 0, w, h]];
+    out.extend(inset_frames(g));
     for threshold in [0.6, 0.45, 0.35] {
         if let (Some(r), Some(c)) = (
             frame_profile(&rows, threshold),
@@ -263,6 +265,32 @@ fn candidates(g: &Gray) -> Vec<Frame> {
         }
     }
     out.extend(line_frames(g));
+    out
+}
+
+/// Insets past a thick uniform border (gold/brown frames, coordinate bands inside the rim).
+/// The dark-line detector misses light frames; these candidates let `checker`/`refine` lock onto
+/// the 8x8 field when it sits inside a wide rim.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn inset_frames(g: &Gray) -> Vec<Frame> {
+    let side = g.width.min(g.height);
+    if side < 96 {
+        return vec![];
+    }
+    let mut out = Vec::new();
+    // 4%..18% of the short side, in a few steps — covers ~12–56px on a 312px diagram.
+    for tenth in [4, 6, 8, 10, 12, 14, 16, 18] {
+        let m = (side * tenth / 100).max(4);
+        if g.width <= 2 * m + 96 || g.height <= 2 * m + 96 {
+            continue;
+        }
+        let (m, w, h) = (
+            i64::try_from(m).unwrap_or(0),
+            i64::try_from(g.width).unwrap_or(0),
+            i64::try_from(g.height).unwrap_or(0),
+        );
+        out.push([m, m, w - m, h - m]);
+    }
     out
 }
 
@@ -1304,5 +1332,44 @@ mod tests {
     fn several_boards_in_one_image_abstain() {
         let g = canvas(620, 300, &[(10, 22), (330, 22)], 256);
         assert_eq!(locate(&g), None);
+    }
+
+    /// A diagram with a thick light (gold-like) rim and coordinates painted inside the rim — the
+    /// dark-line detector skips the rim, so inset candidates must still find the 8x8 field.
+    #[test]
+    fn a_board_inside_a_light_rim_is_located() {
+        let size = 312usize;
+        let rim = 14usize;
+        let band = 12usize; // coordinate strip inside the rim
+        let mut px = vec![0.55f32; size * size]; // light-brown rim
+        let inner = rim + band;
+        let cell = (size - 2 * inner) as f32 / 8.0;
+        for y in 0..size {
+            for x in 0..size {
+                if x < rim || y < rim || x >= size - rim || y >= size - rim {
+                    px[y * size + x] = 0.52; // gold-ish
+                    continue;
+                }
+                if x < inner || y < inner || x >= size - inner || y >= size - inner {
+                    px[y * size + x] = 0.85; // coordinate band
+                    continue;
+                }
+                let col = ((x - inner) as f32 / cell) as usize;
+                let row = ((y - inner) as f32 / cell) as usize;
+                let dark = (row + col) % 2 == 1;
+                px[y * size + x] = if dark { 0.78 } else { 0.96 };
+            }
+        }
+        let g = Gray {
+            width: size,
+            height: size,
+            px,
+        };
+        let frame = locate(&g).expect("board inside light rim");
+        let (w, h) = (frame[2] - frame[0], frame[3] - frame[1]);
+        assert!(w >= 200 && h >= 200, "frame too small: {frame:?}");
+        // Rim+band should be outside the located board.
+        assert!(frame[0] >= rim as i64, "{frame:?}");
+        assert!(frame[1] >= rim as i64, "{frame:?}");
     }
 }
