@@ -47,6 +47,8 @@ pub enum Screen {
     Progress,
     Builder,
     Settings,
+    Games,
+    BoardScan,
     Welcome,
     WelcomeProgress,
     WelcomeDone,
@@ -64,6 +66,8 @@ impl Screen {
             "progress" => Some(Self::Progress),
             "builder" => Some(Self::Builder),
             "settings" => Some(Self::Settings),
+            "games" => Some(Self::Games),
+            "board-scan" => Some(Self::BoardScan),
             "welcome" => Some(Self::Welcome),
             "welcome-progress" => Some(Self::WelcomeProgress),
             "welcome-done" => Some(Self::WelcomeDone),
@@ -71,9 +75,10 @@ impl Screen {
         }
     }
     #[cfg(not(target_arch = "wasm32"))]
-    const ALL: [(Self, &'static str); 7] = [
+    const ALL: [(Self, &'static str); 8] = [
         (Self::Dashboard, "Dashboard"),
         (Self::Training, "Train"),
+        (Self::Games, "Games"),
         (Self::Review, "Review"),
         (Self::Progress, "Progress"),
         (Self::Builder, "New set"),
@@ -138,6 +143,8 @@ pub struct Woodpeck {
     selected_set: Option<i64>,
     session: Option<Session>,
     board: board::BoardWidget,
+    games_board: board::BoardWidget,
+    game_vision: Option<crate::games::VisionSession>,
     timer: Timer<FrameClock>,
     clock: FrameClock,
     origin: Instant,
@@ -223,6 +230,8 @@ impl Woodpeck {
             selected_set: None,
             session: None,
             board: board::BoardWidget::default(),
+            games_board: board::BoardWidget::default(),
+            game_vision: None,
             timer: Timer::new(clock.clone()),
             clock,
             origin,

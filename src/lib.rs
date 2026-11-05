@@ -11,6 +11,7 @@ pub mod app;
 pub mod books;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
+pub mod games;
 pub mod layout;
 pub mod motivation;
 pub mod puzzle;
