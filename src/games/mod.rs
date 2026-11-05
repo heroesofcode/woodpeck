@@ -1,9 +1,13 @@
 //! Short training drills that sit beside Woodpecker sets.
 //!
 //! Logic here stays free of egui so a later web UI can reuse the same rules.
+mod blind_line;
 mod safe_move;
 mod vision;
 
+pub use blind_line::{
+    Phase as BlindPhase, Round as BlindRound, Session as BlindSession, TickEvent as BlindTick,
+};
 pub use safe_move::{
     Round as SafeRound, Session as SafeSession, Status as SafeStatus, is_blunder, safe_moves,
 };
@@ -39,7 +43,7 @@ pub const CATALOG: &[GameInfo] = &[
         id: "blind-line",
         title: "Blind line",
         blurb: "Watch a few moves, keep them in your head, then find the next one.",
-        available: false,
+        available: true,
     },
     GameInfo {
         id: "human-move",
