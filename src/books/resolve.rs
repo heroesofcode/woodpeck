@@ -1128,6 +1128,7 @@ fn before_image(page: &Page, b: usize) -> Before {
         }
     }
     let mut skip_number = false;
+    let mut blocked_by_commentary = false;
     for (i, text) in near.iter().copied().enumerate() {
         if i == 0 {
             before.stated = lead_in_turn(text);
@@ -1149,10 +1150,13 @@ fn before_image(page: &Page, b: usize) -> Before {
         }
         // Commentary between the theme and the board may concern another position.
         if text.chars().count() > 200 {
+            blocked_by_commentary = true;
             break;
         }
     }
-    if before.mate.is_none() {
+    // Long near-board commentary already broke the theme search — do not inherit a mate
+    // heading from an earlier diagram above that wall of prose.
+    if before.mate.is_none() && !blocked_by_commentary {
         for text in above {
             if let Some(n) = mate_in(text) {
                 before.mate = Some(n);
