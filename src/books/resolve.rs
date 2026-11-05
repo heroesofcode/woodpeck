@@ -1131,6 +1131,7 @@ fn caption_turn(text: &str) -> Option<Color> {
         }
     })
 }
+#[allow(clippy::too_many_lines)] // Captions, numbering and board rules are weighed in one pass.
 fn image_position<'a>(
     following: impl Iterator<Item = (&'a Page, &'a Block)>,
     alt: &str,
