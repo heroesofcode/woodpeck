@@ -1203,15 +1203,6 @@ mod tests {
     #[test]
     fn epub_img_src_percent_encoding_resolves_to_zip_entry() {
         // Calibre-style exports URI-escape spaces in <img src>; zip names keep the space.
-        let png = {
-            let mut b = Vec::new();
-            let mut enc = png::Encoder::new(&mut b, 8, 8);
-            enc.set_color(png::ColorType::Grayscale);
-            enc.set_depth(png::BitDepth::Eight);
-            // Prefer a minimal real PNG via image crate path used elsewhere — build with image::.
-            b
-        };
-        let _ = png;
         assert_eq!(
             joined(Path::new(""), "8_chapter%201_converted_1.png"),
             "8_chapter 1_converted_1.png"
@@ -1221,7 +1212,6 @@ mod tests {
             "OEBPS/img/board-1.png"
         );
     }
-
 
     #[test]
     fn epub_heading_levels_are_kept() {
