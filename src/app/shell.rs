@@ -172,7 +172,10 @@ impl Woodpeck {
                         let selected = self.screen == screen
                             || (screen == Screen::Books && self.screen == Screen::Reader)
                             || (screen == Screen::Games
-                                && matches!(self.screen, Screen::BoardScan | Screen::SafeMove | Screen::BlindLine));
+                                && matches!(
+                                    self.screen,
+                                    Screen::BoardScan | Screen::SafeMove | Screen::BlindLine
+                                ));
                         let color = if selected || screen == Screen::Review {
                             accent
                         } else {
@@ -202,7 +205,10 @@ impl Woodpeck {
             let selected = self.screen == screen
                 || (screen == Screen::Books && self.screen == Screen::Reader)
                 || (screen == Screen::Games
-                    && matches!(self.screen, Screen::BoardScan | Screen::SafeMove | Screen::BlindLine));
+                    && matches!(
+                        self.screen,
+                        Screen::BoardScan | Screen::SafeMove | Screen::BlindLine
+                    ));
             let color = if selected || screen == Screen::Review {
                 accent
             } else {
