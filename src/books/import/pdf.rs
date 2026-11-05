@@ -155,6 +155,95 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
         pictures,
     })
 }
+
+/// Re-encode diagram bytes as PNG so [`crate::books::diagram::with_side`] can store the turn.
+fn diagram_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some(bytes.to_vec());
+    }
+    let image = image::load_from_memory(bytes).ok()?;
+    let mut out = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .ok()?;
+    Some(out)
+}
+
+/// Unambiguous White/Black to move|play in `pdftotext` layout output.
+fn pdftotext_turn(text: &str) -> Option<bool> {
+    let text = text.to_ascii_lowercase();
+    let white = text.matches("white to move").count() + text.matches("white to play").count();
+    let black = text.matches("black to move").count() + text.matches("black to play").count();
+    match (white > 0, black > 0) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        _ => None,
+    }
+}
+
+/// When pdf-extract left a page without usable text but the PDF still has a text layer
+/// (common with CID fonts), read "White/Black to move|play" via `pdftotext` and stamp
+/// [`crate::books::diagram::with_side`] on that page's pictures. Unambiguous pages only;
+/// dual-side pages abstain. Missing `pdftotext` is a no-op.
+pub(super) fn stamp_pdftotext_sides(
+    pdf: &std::path::Path,
+    pages: &[Vec<Line>],
+    pictures: &mut [Vec<super::picture::Placed>],
+) {
+    for (i, lines) in pages.iter().enumerate() {
+        let Some(placed) = pictures.get_mut(i) else {
+            break;
+        };
+        if placed.is_empty() {
+            continue;
+        }
+        let alnum = lines
+            .iter()
+            .flat_map(|l| l.text.chars())
+            .filter(|c| c.is_alphanumeric())
+            .count();
+        // Pages that already carry real extract text keep the resolve-time caption path.
+        if alnum >= 8 {
+            continue;
+        }
+        let pdf_arg = match pdf.to_str() {
+            Some(s) if !s.is_empty() => s,
+            _ => return,
+        };
+        let Ok(output) = std::process::Command::new("pdftotext")
+            .args([
+                "-f",
+                &(i + 1).to_string(),
+                "-l",
+                &(i + 1).to_string(),
+                "-layout",
+                pdf_arg,
+                "-",
+            ])
+            .output()
+        else {
+            return; // binary missing or unrunnable: stop trying further pages
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let Some(side) = pdftotext_turn(&String::from_utf8_lossy(&output.stdout)) else {
+            continue;
+        };
+        for pic in placed.iter_mut() {
+            if crate::books::diagram::stated_side(&pic.bytes).is_some() {
+                continue;
+            }
+            // Side is stored as a PNG tEXt chunk; JPEG (and other) embeds must be re-encoded.
+            let png = match diagram_png(&pic.bytes) {
+                Some(p) => p,
+                None => continue,
+            };
+            pic.bytes = crate::books::diagram::with_side(&png, side);
+        }
+    }
+}
+
 /// Pictures per page. A page with no picture, or whose picture is the whole page (a scan), is
 /// rendered and searched for boards; board crops found there replace the page scan.
 fn pictures(
@@ -604,5 +693,21 @@ mod tests {
     #[test]
     fn dominant_size_ignores_a_few_bold_glyphs() {
         assert!((dominant(&[(14.0, 3), (10.0, 40)]) - 10.0).abs() < f64::EPSILON);
+    }
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    use super::pdftotext_turn;
+
+    #[test]
+    fn pdftotext_turn_reads_unambiguous_captions() {
+        assert_eq!(pdftotext_turn("White to move\n\n28\n"), Some(true));
+        assert_eq!(pdftotext_turn("Black to play\n197\n"), Some(false));
+        assert_eq!(pdftotext_turn("just a number\n28\n"), None);
+        assert_eq!(
+            pdftotext_turn("White to move\n28\nBlack to move\n29\n"),
+            None
+        );
     }
 }
