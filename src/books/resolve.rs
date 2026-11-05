@@ -256,9 +256,10 @@ pub fn resolve(document: Document) -> Book {
         (Some(first), _, Some(second)) => {
             resolve_using(document, Some(&super::diagram::Agreeing { first, second }))
         }
-        (network, _, prototypes) => {
-            resolve_using(document, network.map(|n| n as _).or(prototypes.map(|p| p as _)))
-        }
+        (network, _, prototypes) => resolve_using(
+            document,
+            network.map(|n| n as _).or(prototypes.map(|p| p as _)),
+        ),
     }
 }
 /// Expand a gated placement for comparison when its following moves cannot seed a position.
