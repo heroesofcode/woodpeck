@@ -260,7 +260,7 @@ mod tests {
     fn bank_lines_are_legal() {
         for puzzle in BANK {
             let round = Round::from_puzzle(*puzzle, Duration::ZERO).expect("puzzle");
-            assert!(!round.preview.is_empty());
+            assert_ne!(round.preview.len(), 0);
             let after = round.position_after_preview();
             let answer = parse_uci(&round.answer).unwrap();
             assert!(answer.to_move(&after).is_ok());

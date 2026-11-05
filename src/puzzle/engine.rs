@@ -275,6 +275,13 @@ impl Engine {
         Ok(())
     }
 
+    /// Keep a fixed board orientation across sandbox reseats (e.g. Blind line answer).
+    pub fn lock_orientation(&mut self, side: Color) {
+        if self.sandbox_side.is_some() {
+            self.sandbox_side = Some(side);
+        }
+    }
+
     /// Freeze a sandbox board after the player's reply.
     /// `success` chooses the board flash: `Complete` (green) or `Incorrect` (red).
     pub fn resolve_sandbox(&mut self, success: bool) {
@@ -588,5 +595,12 @@ mod sound_tests {
             bad.take_sounds().collect::<Vec<_>>(),
             [crate::sound::Event::Move, crate::sound::Event::Wrong]
         );
+
+        let fen: Fen = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 1".parse().unwrap();
+        let pos: Chess = fen.into_position(shakmaty::CastlingMode::Standard).unwrap();
+        let mut reseat = Engine::sandbox(pos);
+        assert_eq!(reseat.orientation(), Some(Color::Black));
+        reseat.lock_orientation(Color::White);
+        assert_eq!(reseat.orientation(), Some(Color::White));
     }
 }

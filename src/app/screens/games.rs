@@ -394,13 +394,18 @@ impl Woodpeck {
                 self.games_board.reader_orientation = Some(white);
             }
             Some(BlindTick::ReadyToAnswer) => {
+                let side = self.game_engine.as_ref().unwrap().orientation();
                 let position = self
                     .game_blind
                     .as_ref()
                     .unwrap()
                     .round
                     .position_after_preview();
-                self.game_engine = Some(Engine::sandbox(position));
+                let mut engine = Engine::sandbox(position);
+                if let Some(side) = side {
+                    engine.lock_orientation(side);
+                }
+                self.game_engine = Some(engine);
                 self.games_board = super::super::board::BoardWidget::default();
             }
             None => {}
@@ -495,6 +500,7 @@ impl Woodpeck {
         match phase {
             BlindPhase::Watching | BlindPhase::Concealed => {
                 ui.label("The board plays the line for you. Wait for your turn.");
+                ui.ctx().request_repaint_after(Duration::from_millis(50));
             }
             BlindPhase::Answering => {
                 ui.label("Drag or tap the next move. Works with mouse and touch.");
