@@ -225,6 +225,7 @@ impl Scheduler {
                     let missing = token.is_none();
                     let wanted = (cfg.enabled && token.is_some())
                         .then(|| (cfg.remote.clone(), token.unwrap_or_default()));
+                    let mut force = false;
                     if wanted != key {
                         key.clone_from(&wanted);
                         remote = wanted.as_ref().and_then(|(repository, token)| {
@@ -237,14 +238,20 @@ impl Scheduler {
                             .ok()
                             .map(Rc::new)
                         });
-                        (next_at, failures, halted) = (now, 0, false);
+                        (next_at, failures, halted, force) = (now, 0, false, true);
                     }
                     if requested {
-                        (next_at, halted) = (now, false);
+                        (next_at, halted, force) = (now, false, true);
                     }
-                    if generation != cfg.synced_generation
+                    // Match the desktop worker: only debounce fresh local edits, never Sync now
+                    // or a settings change, and never the pending work already there on open.
+                    if seen_generation.is_none() {
+                        seen_generation = Some(generation);
+                    } else if generation != cfg.synced_generation
                         && seen_generation.replace(generation) != Some(generation)
+                        && !force
                         && failures == 0
+                        && !halted
                     {
                         next_at = now + DEBOUNCE_MS;
                     }

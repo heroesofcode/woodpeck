@@ -71,6 +71,8 @@ pub struct GitHub<H> {
     /// Trees already read or written, by commit.
     trees: RefCell<BTreeMap<String, Tree>>,
     blobs: RefCell<BTreeMap<String, String>>,
+    /// Set by bootstrap so push refuses and the exchange retries with the full snapshot.
+    bootstrapped: RefCell<bool>,
 }
 impl<H: Http> GitHub<H> {
     pub fn new(http: H, repository: &str) -> Result<Self> {
@@ -81,6 +83,7 @@ impl<H: Http> GitHub<H> {
             head: RefCell::default(),
             trees: RefCell::default(),
             blobs: RefCell::default(),
+            bootstrapped: RefCell::default(),
         })
     }
     async fn call(
@@ -204,7 +207,9 @@ impl<H: Http> GitHub<H> {
                 Some(json!({"message": MESSAGE, "content": base64(manifest.as_bytes())})),
             )
             .await?;
-        text(&created["commit"]["sha"])
+        let sha = text(&created["commit"]["sha"])?;
+        self.bootstrapped.replace(true);
+        Ok(sha)
     }
 }
 fn text(value: &Value) -> Result<String> {
@@ -328,6 +333,10 @@ impl<H: Http> AsyncRemote for GitHub<H> {
         Ok(commit)
     }
     async fn push(&self, commit: &str, branch: &str) -> Result<bool> {
+        // The Contents API wrote only the manifest; refuse so the exchange retries.
+        if self.bootstrapped.replace(false) {
+            return Ok(false);
+        }
         let head = self.head.borrow().clone();
         let (status, value) = match &head {
             Some(head) if head == commit => return Ok(true),
