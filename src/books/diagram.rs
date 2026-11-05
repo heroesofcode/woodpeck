@@ -1506,6 +1506,12 @@ mod tests {
 
     /// Blank page with a 300 px board and optional triangles: (left, top, side, filled, up).
     /// `up` true draws an outline/filled ▲; false a ▼.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::many_single_char_names
+    )]
     fn marked_triangles(tris: &[(usize, usize, usize, bool, bool)]) -> (Gray, Frame) {
         let (w, h) = (500, 400);
         let mut luma = vec![255u8; w * h];
