@@ -297,13 +297,21 @@ impl Woodpeck {
         {
             let outcome = self.game_safe.as_mut().unwrap().submit(&uci);
             match outcome {
-                SafeStatus::Cleared => {
-                    let _ = self.game_engine.as_mut().unwrap().play_any(&uci);
-                    self.toast = Some(("Safe.".into(), web_time::Instant::now()));
-                }
-                SafeStatus::Blundered => {
-                    let _ = self.game_engine.as_mut().unwrap().play_any(&uci);
-                    self.toast = Some(("Blunder — streak lost.".into(), web_time::Instant::now()));
+                SafeStatus::Cleared | SafeStatus::Blundered => {
+                    let engine = self.game_engine.as_mut().unwrap();
+                    let _ = engine.play_any(&uci);
+                    for event in engine.take_sounds() {
+                        if self.screenshot.is_none() {
+                            crate::sound::play(event, &self.settings);
+                        }
+                    }
+                    self.games_board.player_moved();
+                    let toast = if outcome == SafeStatus::Cleared {
+                        "Safe."
+                    } else {
+                        "Blunder — streak lost."
+                    };
+                    self.toast = Some((toast.into(), web_time::Instant::now()));
                 }
                 SafeStatus::Playing => {}
             }
