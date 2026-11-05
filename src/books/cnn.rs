@@ -355,14 +355,22 @@ pub fn placement(squares: &[Square]) -> Option<String> {
 
 impl DiagramRecognizer for Cnn {
     fn placement(&self, image: &[u8]) -> Option<String> {
-        placement(&self.squares(image)?)
+        for cells in diagram::board_cells_scales(image) {
+            if let Some(fen) = placement(&self.classify(&cells)) {
+                return Some(fen);
+            }
+        }
+        None
     }
     fn reading(&self, image: &[u8]) -> Option<String> {
-        let squares = self.squares(image)?;
-        if squares.iter().any(|s| s.label == b'?') {
-            return None;
+        for cells in diagram::board_cells_scales(image) {
+            let squares = self.classify(&cells);
+            if squares.iter().any(|s| s.label == b'?') {
+                continue;
+            }
+            return Some(squares.iter().map(|s| char::from(s.label)).collect());
         }
-        Some(squares.iter().map(|s| char::from(s.label)).collect())
+        None
     }
 }
 

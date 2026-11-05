@@ -963,20 +963,42 @@ pub fn cells(g: &Gray, frame: Frame) -> Option<Vec<Vec<f32>>> {
 pub const MAX_BOARD_SIDE: usize = 560;
 
 /// Square images of a located board, or `None` when the image is not a board.
-/// Oversized `ClearScan` crops are reduced to [`MAX_BOARD_SIDE`] first; if locate then
-/// fails, the native-resolution crop is tried so existing small-board reads stay put.
+/// See [`board_cells_scales`]: the native grid is preferred when both exist.
 pub fn board_cells(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
-    let g0 = Gray::decode(bytes)?;
-    if g0.width.max(g0.height) <= MAX_BOARD_SIDE {
-        let frame = locate_with_light_rim(&g0)?;
-        return cells(&g0, frame);
+    board_cells_scales(bytes).into_iter().next()
+}
+
+/// Native-resolution cells first, then a [`MAX_BOARD_SIDE`] downscale when the crop is
+/// larger. Recognizers try each grid and keep the first confident placement so mid-size
+/// boards (~680 px) keep their pre-cap reads while ~1200 px `ClearScan` boards can still
+/// recover after downscale.
+pub fn board_cells_scales(bytes: &[u8]) -> Vec<Vec<Vec<f32>>> {
+    let Some(g0) = Gray::decode(bytes) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(2);
+    if let Some(frame) = locate_with_light_rim(&g0)
+        && let Some(c) = cells(&g0, frame)
+    {
+        out.push(c);
     }
-    let g = g0.fit_max_side(MAX_BOARD_SIDE);
-    if let Some(frame) = locate_with_light_rim(&g) {
-        return cells(&g, frame);
+    if g0.width.max(g0.height) > MAX_BOARD_SIDE {
+        let g = g0.fit_max_side(MAX_BOARD_SIDE);
+        if let Some(frame) = locate_with_light_rim(&g)
+            && let Some(c) = cells(&g, frame)
+        {
+            out.push(c);
+        }
     }
-    let frame = locate_with_light_rim(&g0)?;
-    cells(&g0, frame)
+    out
+}
+
+/// Per-square feature rows for each grid from [`board_cells_scales`].
+pub fn board_features_scales(bytes: &[u8]) -> Vec<Vec<Vec<f32>>> {
+    board_cells_scales(bytes)
+        .into_iter()
+        .map(|cells| cells.iter().map(|c| features(c)).collect())
+        .collect()
 }
 
 /// 2x2 block means (shape) plus 4x4 block deviations (ink texture versus hatching).
@@ -1233,7 +1255,19 @@ pub fn placement_of(labels: &[u8]) -> Option<String> {
 
 impl DiagramRecognizer for Prototypes {
     fn placement(&self, image: &[u8]) -> Option<String> {
-        placement(&self.squares(image)?)
+        for feats in board_features_scales(image) {
+            let squares: Option<Vec<Square>> = feats
+                .iter()
+                .enumerate()
+                .map(|(i, f)| self.classify(f, dark_square(i / 8, i % 8)))
+                .collect();
+            if let Some(squares) = squares
+                && let Some(fen) = placement(&squares)
+            {
+                return Some(fen);
+            }
+        }
+        None
     }
     fn reading(&self, image: &[u8]) -> Option<String> {
         Some(
