@@ -1021,7 +1021,11 @@ fn recognized_positions(
                 BlockKind::Image { path, .. } => markers.get(path).copied(),
                 _ => None,
             };
-            let before = before_image(page, b);
+            let mut before = before_image(page, b);
+            // A look-past caption must not Confirmed→Unknown against a printed marker (N01).
+            if marker.is_some() && before.past_number.is_some() {
+                before.stated = None;
+            }
             let mut turn = image_position(
                 page.blocks[b + 1..]
                         .iter()
@@ -1121,7 +1125,11 @@ fn before_image(page: &Page, b: usize) -> Before {
             // A bare "64" between a caption and the image — look one more block up.
             skip_number = before.stated.is_none() && diagram_number(text);
         } else if skip_number {
-            before.past_number = lead_in_turn(text);
+            // Promote the caption into `stated` so the usual turn path sees it; also keep
+            // `past_number` for the marker-safe Unknown fallback below.
+            let side = lead_in_turn(text);
+            before.stated = side;
+            before.past_number = side;
             if before.after_move.is_none() {
                 before.after_move = side_after_trailing_move(text);
             }
