@@ -1041,7 +1041,10 @@ fn recognized_positions(
             // demote a marker-confirmed board.
             if matches!(turn, Turn::Unknown)
                 && marker.is_none()
-                && let Some(side) = before.after_move.or(before.past_number)
+                && let Some(side) = before
+                    .after_move
+                    .or(before.past_number)
+                    .or(before.puzzle_label)
             {
                 turn = placed(&placement, side).map_or(Turn::Unknown, Turn::Confirmed);
             }
@@ -1099,6 +1102,8 @@ struct Before {
     after_move: Option<Color>,
     /// A turn caption sitting above a bare diagram number ("White to move" / "64" / image).
     past_number: Option<Color>,
+    /// Polgar-style puzzle label beside the board ("No. 187 xk" ⇒ White, "No. 1447 çk" ⇒ Black).
+    puzzle_label: Option<Color>,
     /// The page's "mate in N" theme, if one heads the diagrams on it.
     mate: Option<u8>,
 }
@@ -1157,7 +1162,7 @@ fn before_image(page: &Page, b: usize) -> Before {
     // Long near-board commentary already broke the theme search — do not inherit a mate
     // heading from an earlier diagram above that wall of prose.
     if before.mate.is_none() && !blocked_by_commentary {
-        for text in above {
+        for text in &above {
             if let Some(n) = mate_in(text) {
                 before.mate = Some(n);
                 break;
@@ -1165,6 +1170,15 @@ fn before_image(page: &Page, b: usize) -> Before {
             if text.chars().count() > 200 {
                 break;
             }
+        }
+    }
+    // Puzzle numbers with a side figurine ("No. 187 xk" / "çk") sit as headings above a
+    // board or a left/right pair. Prefer the nearest label in `near`; otherwise the one
+    // that introduced the pair (`above`, just past the sibling image).
+    for text in near.iter().copied().chain(above.iter().copied()) {
+        if let Some(side) = puzzle_label_turn(text) {
+            before.puzzle_label = Some(side);
+            break;
         }
     }
     before
@@ -1251,6 +1265,31 @@ fn side_after_trailing_move(text: &str) -> Option<Color> {
         return None;
     }
     Some(mover.other())
+}
+/// Side to move from a Polgar 5334-style label: `No. 187 xk` (White king figurine) or
+/// `No. 1447 çk` (Black). Abstains when the line is not a short label or names both sides.
+fn puzzle_label_turn(text: &str) -> Option<Color> {
+    let text = text.trim();
+    if !text.contains("No.") || text.chars().count() > 40 {
+        return None;
+    }
+    let mut white = false;
+    let mut black = false;
+    for word in text.split_whitespace() {
+        // Figurine fonts extract as the tokens "xk" / "çk" (White / Black king).
+        let w = word.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '.'));
+        if w == "xk" {
+            white = true;
+        }
+        if w == "çk" || w == "Çk" {
+            black = true;
+        }
+    }
+    match (white, black) {
+        (true, false) => Some(Color::White),
+        (false, true) => Some(Color::Black),
+        _ => None,
+    }
 }
 /// A side named by a caption that introduces the board: a short line, or the end of a
 /// paragraph that leads into it with a colon ("… White to play:").
@@ -2215,6 +2254,135 @@ mod image_tests {
         assert!(matches!(
             &book.document.pages[0].blocks[2].kind,
             BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")
+        ));
+    }
+    #[test]
+    #[test]
+    fn puzzle_label_turn_reads_polgar_xk_and_ck() {
+        assert_eq!(puzzle_label_turn("No. 187 xk"), Some(Color::White));
+        assert_eq!(puzzle_label_turn("No. 1447 çk"), Some(Color::Black));
+        assert_eq!(puzzle_label_turn("No. 12"), None);
+        assert_eq!(puzzle_label_turn("White to move"), None);
+        // Long commentary must not look like a label.
+        assert_eq!(
+            puzzle_label_turn("No. 1 xk and then a long note that keeps going past forty chars"),
+            None
+        );
+    }
+    #[test]
+    fn a_polgar_xk_label_above_the_board_names_white() {
+        let mut page = Page::default();
+        page.push("No. 187 xk", BlockKind::Heading);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes: vec![0],
+            }],
+        };
+        let book = resolve_using(document, Some(&Fixed(PLACEMENT)));
+        assert!(matches!(
+            &book.document.pages[0].blocks[1].kind,
+            BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")
+        ));
+    }
+    #[test]
+    fn a_polgar_ck_label_above_the_board_names_black() {
+        let mut page = Page::default();
+        page.push("No. 1447 çk", BlockKind::Heading);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes: vec![0],
+            }],
+        };
+        let book = resolve_using(document, Some(&Fixed(PLACEMENT)));
+        assert!(matches!(
+            &book.document.pages[0].blocks[1].kind,
+            BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")
+        ));
+    }
+    #[test]
+    fn a_polgar_label_covers_the_second_board_of_a_pair() {
+        // N07 lays out left/right boards under one "No. N xk" heading, then the sibling.
+        let mut page = Page::default();
+        page.push("No. 187 xk", BlockKind::Heading);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/a.png".into(),
+                alt: String::new(),
+            },
+        );
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/b.png".into(),
+                alt: String::new(),
+            },
+        );
+        assert_eq!(before_image(&page, 1).puzzle_label, Some(Color::White));
+        assert_eq!(before_image(&page, 2).puzzle_label, Some(Color::White));
+    }
+    #[test]
+    fn a_polgar_label_does_not_override_a_conflicting_caption() {
+        let mut page = Page::default();
+        page.push("No. 187 xk", BlockKind::Heading);
+        page.push("Black to play", BlockKind::Paragraph);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        // Caption names Black; following moves absent → stated Black wins via image_position,
+        // and a White label must not force a confirmation that contradicts it.
+        let before = before_image(&page, 2);
+        assert_eq!(before.stated, Some(Color::Black));
+        assert_eq!(before.puzzle_label, Some(Color::White));
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes: vec![0],
+            }],
+        };
+        let book = resolve_using(document, Some(&Fixed(PLACEMENT)));
+        // Stated Black caption confirms Black; label is only an Unknown fallback.
+        assert!(matches!(
+            &book.document.pages[0].blocks[2].kind,
+            BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")
         ));
     }
     #[test]
