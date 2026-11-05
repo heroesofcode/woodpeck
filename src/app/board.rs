@@ -247,9 +247,9 @@ impl BoardWidget {
         self.selected = None;
         Self::paint_static_squares(ui, position, rect, theme, white_bottom, highlights);
         self.paint_pieces(ui, board, rect, rendering, white_bottom, &response);
-        if response.clicked_by(PointerButton::Primary)
-            && let Some(pos) = response.interact_pointer_pos()
-        {
+        let released = response.clicked_by(PointerButton::Primary)
+            || response.drag_stopped_by(PointerButton::Primary);
+        if released && let Some(pos) = response.interact_pointer_pos() {
             return hit_square(
                 [pos.x, pos.y],
                 [rect.left(), rect.top()],

@@ -250,12 +250,12 @@ pub fn stat(ui: &mut Ui, label: &str, value: impl Into<String>, detail: &str) {
         ui.small(detail);
     });
 }
-pub fn nav_icon(painter: &egui::Painter, rect: egui::Rect, index: usize, color: Color32) {
+pub fn nav_icon(painter: &egui::Painter, rect: egui::Rect, screen: super::Screen, color: Color32) {
     let center = rect.center();
     let stroke = egui::Stroke::new(1.7, color);
     let point = |x, y| center + egui::vec2(x, y);
-    match index {
-        0 => {
+    match screen {
+        super::Screen::Dashboard => {
             for x in [-6.0, 3.0] {
                 for y in [-6.0, 3.0] {
                     painter.rect_stroke(
@@ -267,17 +267,25 @@ pub fn nav_icon(painter: &egui::Painter, rect: egui::Rect, index: usize, color: 
                 }
             }
         }
-        1 => {
+        super::Screen::Training | super::Screen::TrainingSolved => {
             painter.add(egui::Shape::closed_line(
                 vec![point(-5.0, -7.0), point(7.0, 0.0), point(-5.0, 7.0)],
                 stroke,
             ));
         }
-        2 => {
+        super::Screen::Games | super::Screen::BoardScan => {
+            // Four corner dots — a short drill board.
+            for x in [-5.0, 5.0] {
+                for y in [-5.0, 5.0] {
+                    painter.circle_filled(point(x, y), 2.2, color);
+                }
+            }
+        }
+        super::Screen::Review => {
             painter.circle_stroke(center, 8.0, stroke);
             painter.circle_stroke(center, 3.0, stroke);
         }
-        3 => {
+        super::Screen::Progress => {
             for (x, h) in [(-7.0, 5.0), (-1.0, 10.0), (5.0, 15.0)] {
                 painter.rect_filled(
                     egui::Rect::from_min_size(point(x, 7.0 - h), egui::vec2(4.0, h)),
@@ -286,11 +294,11 @@ pub fn nav_icon(painter: &egui::Painter, rect: egui::Rect, index: usize, color: 
                 );
             }
         }
-        4 => {
+        super::Screen::Builder => {
             painter.line_segment([point(-7.0, 0.0), point(7.0, 0.0)], stroke);
             painter.line_segment([point(0.0, -7.0), point(0.0, 7.0)], stroke);
         }
-        6 => {
+        super::Screen::Books | super::Screen::Reader | super::Screen::ReaderVariations => {
             painter.rect_stroke(
                 egui::Rect::from_min_max(point(-8.0, -7.0), point(8.0, 7.0)),
                 1,
