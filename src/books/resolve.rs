@@ -1203,7 +1203,15 @@ fn image_position<'a>(
         let prose = found
             .as_ref()
             .map_or(text, |(n, ..)| &text[..ts[*n].span.start]);
-        if let Some(side) = caption_turn(prose) {
+        // Caption-only verbs ("White moves") count on a caption line of their own, never in
+        // commentary, where they narrate a move already played.
+        let caption_line = found.is_none() && !text.trim_end().ends_with(['.', '!', '?']);
+        let turn = if caption_line {
+            caption_turn(text)
+        } else {
+            stated_turn(prose)
+        };
+        if let Some(side) = turn {
             if stated.is_some_and(|s| s != side) {
                 return Turn::Contradicted;
             }
@@ -1276,11 +1284,11 @@ fn mate_in(text: &str) -> Option<u8> {
                 Some("in" | "en" | "em" | "w" | "в" | "v" | "i" | "op" | "à") => {
                     words.get(i + 2).and_then(|w| number(w))
                 }
-                Some(w) if w.starts_with('#') => number(w),
                 _ => None,
             }
         } else {
-            matches!(*w, "#1" | "#2").then(|| number(w)).flatten()
+            // A bare "#1" is more often a diagram or game number than a theme.
+            None
         };
         if let Some(n) = n {
             // Different numbers on one caption leave the theme unclear.
@@ -1826,7 +1834,7 @@ mod image_tests {
     fn mate_in_one_names_the_only_side_that_has_it() {
         // White mates with Ra8; Black has no mate.
         let board = "6k1/5ppp/8/8/8/8/8/R5K1";
-        for caption in ["Mate in 1", "Matt in 1", "Mate en 1", "Mate em 1", "#1"] {
+        for caption in ["Mate in 1", "Matt in 1", "Mate en 1", "Mate em 1"] {
             let (kind, _) = shown(board, caption, &[]);
             assert!(
                 matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
@@ -1842,6 +1850,8 @@ mod image_tests {
         // White's rooks on a1 and b2 mate with 1. Rb7 and 2. Ra8; Black has no mate.
         let board = "7k/8/8/8/8/8/1R6/R5K1";
         assert_eq!(mate_in("Mate in 2 by means of a rook sacrifice"), Some(2));
+        assert_eq!(mate_in("Diagram #1"), None);
+        assert_eq!(mate_in("Game #2: mate #2"), None);
         let (kind, _) = shown(board, "Matt in 2", &[]);
         assert!(
             matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
