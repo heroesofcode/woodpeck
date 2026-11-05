@@ -119,6 +119,9 @@ impl Renderer {
                 if let Some(font) = font {
                     bytes = diagram::with_placement(&bytes, &font.placement);
                 }
+                if let Some(white) = diagram::side_marker(&gray, frame) {
+                    bytes = diagram::with_side(&bytes, white);
+                }
                 Some(Placed {
                     top,
                     area: side * side,
