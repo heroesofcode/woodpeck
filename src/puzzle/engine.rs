@@ -82,6 +82,22 @@ impl Engine {
             sounds: vec![],
         }
     }
+    /// Free-play board for training games: any legal move is accepted by `play_any`.
+    pub fn sandbox(position: Chess) -> Self {
+        Self {
+            state: State::PlayerTurn,
+            line: None,
+            position: Some(position),
+            index: 0,
+            deadline: Duration::ZERO,
+            opponent_applied: false,
+            error: None,
+            walkthrough: None,
+            moves_played: Vec::new(),
+            allow_any_final_checkmate: false,
+            sounds: Vec::new(),
+        }
+    }
     pub fn new(puzzle: &Puzzle, now: Duration, allow_any_final_checkmate: bool) -> Self {
         let (line, error) = match puzzle.validate() {
             Ok(line) => (Some(line), None),
@@ -129,7 +145,10 @@ impl Engine {
             .or(self.position.as_ref())
     }
     pub fn orientation(&self) -> Option<Color> {
-        self.line.as_ref().map(|l| !l.positions[0].turn())
+        self.line
+            .as_ref()
+            .map(|l| !l.positions[0].turn())
+            .or_else(|| self.position.as_ref().map(Position::turn))
     }
     /// Consume effects exactly once, independent of rendering and animation frames.
     pub fn take_sounds(&mut self) -> impl Iterator<Item = crate::sound::Event> + '_ {
@@ -229,6 +248,21 @@ impl Engine {
             self.sounds.push(crate::sound::Event::Wrong);
             self.deadline = now + ANIMATION;
         }
+        Ok(())
+    }
+    /// Apply any legal move while in sandbox mode (`line` is absent).
+    pub fn play_any(&mut self, input: &str) -> Result<(), InputError> {
+        if self.state != State::PlayerTurn || self.line.is_some() {
+            return Err(InputError::NotInteractive);
+        }
+        let position = self.position.as_ref().ok_or(InputError::NotInteractive)?;
+        let uci = parse_uci(input).map_err(|()| InputError::IllegalMove)?;
+        let m = uci.to_move(position).map_err(|_| InputError::IllegalMove)?;
+        let mut after = position.clone();
+        after.play_unchecked(m);
+        self.sounds.push(crate::sound::Event::from_move(m));
+        self.moves_played.push(input.to_owned());
+        self.position = Some(after);
         Ok(())
     }
     pub fn skip(&mut self) -> Result<(), InputError> {

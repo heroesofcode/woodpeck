@@ -109,6 +109,7 @@ impl Woodpeck {
                             Screen::Settings => self.settings_screen(ui),
                             Screen::Games => self.games_hub(ui),
                             Screen::BoardScan => self.board_scan_screen(ui),
+                            Screen::SafeMove => self.safe_move_screen(ui),
                             _ => {}
                         });
                     }
@@ -169,7 +170,8 @@ impl Woodpeck {
                     for (screen, label) in Screen::ALL {
                         let selected = self.screen == screen
                             || (screen == Screen::Books && self.screen == Screen::Reader)
-                            || (screen == Screen::Games && self.screen == Screen::BoardScan);
+                            || (screen == Screen::Games
+                                && matches!(self.screen, Screen::BoardScan | Screen::SafeMove));
                         let color = if selected || screen == Screen::Review {
                             accent
                         } else {
@@ -198,7 +200,8 @@ impl Woodpeck {
         for (screen, label) in Screen::ALL {
             let selected = self.screen == screen
                 || (screen == Screen::Books && self.screen == Screen::Reader)
-                || (screen == Screen::Games && self.screen == Screen::BoardScan);
+                || (screen == Screen::Games
+                    && matches!(self.screen, Screen::BoardScan | Screen::SafeMove));
             let color = if selected || screen == Screen::Review {
                 accent
             } else {
