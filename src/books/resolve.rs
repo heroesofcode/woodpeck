@@ -1021,11 +1021,7 @@ fn recognized_positions(
                 BlockKind::Image { path, .. } => markers.get(path).copied(),
                 _ => None,
             };
-            let mut before = before_image(page, b);
-            // A look-past caption must not Confirmed→Unknown against a printed marker (N01).
-            if marker.is_some() && before.past_number.is_some() {
-                before.stated = None;
-            }
+            let before = before_image(page, b);
             let mut turn = image_position(
                 page.blocks[b + 1..]
                         .iter()
@@ -1109,27 +1105,39 @@ struct Before {
 /// Reads the caption right above block `b` and the "mate in N" theme heading its page.
 fn before_image(page: &Page, b: usize) -> Before {
     let mut before = Before::default();
-    let texts = page.blocks[..b]
-        .iter()
-        .rev()
-        .filter(|block| matches!(block.kind, BlockKind::Paragraph | BlockKind::Heading))
-        .map(|block| page.text[block.span.clone()].trim());
-    let mut skip_number = false;
-    for (i, text) in texts.enumerate() {
-        if text.is_empty() {
-            continue;
+    // Captions and trailing plies stop at the previous image so they cannot leak onto the
+    // next board. A page-level "mate in N" theme may still sit above earlier diagrams.
+    let mut near: Vec<&str> = Vec::new();
+    let mut above: Vec<&str> = Vec::new();
+    let mut past_image = false;
+    for block in page.blocks[..b].iter().rev() {
+        match &block.kind {
+            BlockKind::Image { .. } => past_image = true,
+            BlockKind::Paragraph | BlockKind::Heading => {
+                let text = page.text[block.span.clone()].trim();
+                if text.is_empty() {
+                    continue;
+                }
+                if past_image {
+                    above.push(text);
+                } else {
+                    near.push(text);
+                }
+            }
+            _ => {}
         }
+    }
+    let mut skip_number = false;
+    for (i, text) in near.iter().copied().enumerate() {
         if i == 0 {
             before.stated = lead_in_turn(text);
             before.after_move = side_after_trailing_move(text);
             // A bare "64" between a caption and the image — look one more block up.
             skip_number = before.stated.is_none() && diagram_number(text);
         } else if skip_number {
-            // Promote the caption into `stated` so the usual turn path sees it; also keep
-            // `past_number` for the marker-safe Unknown fallback below.
-            let side = lead_in_turn(text);
-            before.stated = side;
-            before.past_number = side;
+            // Only `past_number` (Unknown fallback): never `stated`, so a look-past caption
+            // cannot Contradict following moves or demote a printed marker.
+            before.past_number = lead_in_turn(text);
             if before.after_move.is_none() {
                 before.after_move = side_after_trailing_move(text);
             }
@@ -1142,6 +1150,17 @@ fn before_image(page: &Page, b: usize) -> Before {
         // Commentary between the theme and the board may concern another position.
         if text.chars().count() > 200 {
             break;
+        }
+    }
+    if before.mate.is_none() {
+        for text in above {
+            if let Some(n) = mate_in(text) {
+                before.mate = Some(n);
+                break;
+            }
+            if text.chars().count() > 200 {
+                break;
+            }
         }
     }
     before
@@ -2193,6 +2212,44 @@ mod image_tests {
             &book.document.pages[0].blocks[2].kind,
             BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")
         ));
+    }
+    #[test]
+    fn look_past_stops_at_a_prior_image() {
+        let mut page = Page::default();
+        page.push("White to move", BlockKind::Paragraph);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/a.png".into(),
+                alt: String::new(),
+            },
+        );
+        page.push("65", BlockKind::Paragraph);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/b.png".into(),
+                alt: String::new(),
+            },
+        );
+        let before = before_image(&page, 3);
+        assert_eq!(before.stated, None);
+        assert_eq!(before.past_number, None);
+        assert_eq!(before.after_move, None);
+
+        let mut alone = Page::default();
+        alone.push("White to move", BlockKind::Paragraph);
+        alone.push("64", BlockKind::Paragraph);
+        alone.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let near = before_image(&alone, 2);
+        assert_eq!(near.past_number, Some(Color::White));
+        assert_eq!(near.stated, None);
     }
     /// Rejects every image but still reports a fixed ungated reading.
     struct Reads(String);
