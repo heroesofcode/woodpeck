@@ -2257,7 +2257,6 @@ mod image_tests {
         ));
     }
     #[test]
-    #[test]
     fn puzzle_label_turn_reads_polgar_xk_and_ck() {
         assert_eq!(puzzle_label_turn("No. 187 xk"), Some(Color::White));
         assert_eq!(puzzle_label_turn("No. 1447 çk"), Some(Color::Black));
