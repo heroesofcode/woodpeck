@@ -276,7 +276,8 @@ pub fn nav_icon(painter: &egui::Painter, rect: egui::Rect, screen: super::Screen
         super::Screen::Games
         | super::Screen::BoardScan
         | super::Screen::SafeMove
-        | super::Screen::BlindLine => {
+        | super::Screen::BlindLine
+        | super::Screen::HumanMove => {
             // Four corner dots — a short drill board.
             for x in [-5.0, 5.0] {
                 for y in [-5.0, 5.0] {
