@@ -6,7 +6,7 @@ use crate::games::{
 };
 use crate::puzzle::Engine;
 use eframe::egui::{self, RichText, Ui};
-use shakmaty::{Color, Square};
+use shakmaty::{Color, Position, Square};
 use std::time::Duration;
 
 impl Woodpeck {
@@ -17,20 +17,27 @@ impl Woodpeck {
             "Short drills for vision and feel",
             "Pick a drill. They work the same on desktop and on your phone.",
         );
-        let wide = ui.available_width() >= 720.0;
-        let card_width = if wide {
-            ((ui.available_width() - 12.0) / 2.0).max(260.0)
+        // widgets::card adds 2×20 inner margin (+ stroke). Size columns to the
+        // available width so a 2×2 grid never overflows the content pane.
+        let avail = ui.available_width();
+        let cols = if avail >= 2.0 * (200.0 + CARD_INSET) + GAP {
+            2
         } else {
-            ui.available_width()
+            1
         };
+        let col = ((avail - GAP * (cols as f32 - 1.0)) / cols as f32)
+            .floor()
+            .max(1.0);
+        let inner = (col - CARD_INSET).max(120.0);
         egui::Grid::new("games-catalog")
-            .num_columns(if wide { 2 } else { 1 })
-            .spacing([12.0, 12.0])
-            .min_col_width(card_width)
+            .num_columns(cols)
+            .spacing([GAP, GAP])
+            .min_col_width(col)
+            .max_col_width(col)
             .show(ui, |ui| {
                 for (index, game) in games::CATALOG.iter().enumerate() {
-                    self.game_card(ui, game, card_width);
-                    if !wide || index % 2 == 1 {
+                    self.game_card(ui, game, inner);
+                    if cols == 1 || index % 2 == 1 {
                         ui.end_row();
                     }
                 }
@@ -47,7 +54,7 @@ impl Woodpeck {
                     .gamma_multiply(if game.available { 1.0 } else { 0.7 }),
             )
             .show(ui, |ui| {
-                ui.set_width((width - 1.0).max(0.0));
+                ui.set_width(width.max(0.0));
                 ui.label(RichText::new(game.title).strong().size(20.0));
                 ui.add_space(4.0);
                 ui.label(game.blurb);
@@ -158,14 +165,7 @@ impl Woodpeck {
         let Some(session) = self.game_vision.as_ref() else {
             return;
         };
-        let board_budget = if narrow {
-            ui.available_width()
-                .min((ui.available_height() - 120.0).max(180.0))
-        } else {
-            ui.available_height()
-                .min(ui.available_width() * 0.62)
-                .clamp(280.0, 560.0)
-        };
+        let board_budget = game_board_size(ui, narrow);
         let position = session.round.position();
         let white_bottom = session.round.white_bottom;
         let tap_highlights: Vec<(Square, TapHighlight)> = session
@@ -176,15 +176,17 @@ impl Woodpeck {
             .collect();
         let theme = self.settings.board_theme;
         let rendering = self.settings.piece_rendering;
-        let tapped = self.games_board.show_tap(
-            ui,
-            &position,
-            board_budget,
-            theme,
-            rendering,
-            white_bottom,
-            &tap_highlights,
-        );
+        let tapped = with_centered_board(ui, board_budget, |ui, size| {
+            self.games_board.show_tap(
+                ui,
+                &position,
+                size,
+                theme,
+                rendering,
+                white_bottom,
+                &tap_highlights,
+            )
+        });
         if let Some(square) = tapped {
             let outcome = self.game_vision.as_mut().unwrap().tap(square);
             if outcome == VisionOutcome::Miss {
@@ -276,24 +278,14 @@ impl Woodpeck {
         });
         ui.add_space(8.0);
 
-        let board_budget = if narrow {
-            ui.available_width()
-                .min((ui.available_height() - 120.0).max(180.0))
-        } else {
-            ui.available_height()
-                .min(ui.available_width() * 0.62)
-                .clamp(280.0, 560.0)
-        };
-
+        let board_budget = game_board_size(ui, narrow);
+        let theme = self.settings.board_theme;
+        let rendering = self.settings.piece_rendering;
         let played = {
             let engine = self.game_engine.as_ref().unwrap();
-            self.games_board.show(
-                ui,
-                engine,
-                board_budget,
-                self.settings.board_theme,
-                self.settings.piece_rendering,
-            )
+            with_centered_board(ui, board_budget, |ui, size| {
+                self.games_board.show(ui, engine, size, theme, rendering)
+            })
         };
         if let Some(uci) = played
             && status == SafeStatus::Playing
@@ -421,11 +413,14 @@ impl Woodpeck {
             (s.score, s.streak, s.best_streak, s.round.phase)
         };
         let hint = match phase {
-            BlindPhase::Watching => "Watch the line…",
-            BlindPhase::Concealed => "Hold it in your head…",
-            BlindPhase::Answering => "Play the next move.",
-            BlindPhase::Cleared => "Correct.",
-            BlindPhase::Missed => "Not that move.",
+            BlindPhase::Watching => "Watch the line…".to_string(),
+            BlindPhase::Concealed => "Hold it in your head…".to_string(),
+            BlindPhase::Answering => "Play the next move.".to_string(),
+            BlindPhase::Cleared => "Correct.".to_string(),
+            BlindPhase::Missed => {
+                let san = self.game_blind.as_ref().unwrap().round.answer_san();
+                format!("Not that move. Answer: {san}")
+            }
         };
         ui.label(RichText::new(hint).size(if narrow { 14.0 } else { 15.0 }));
         ui.add_space(6.0);
@@ -438,61 +433,78 @@ impl Woodpeck {
         });
         ui.add_space(8.0);
 
-        let board_budget = if narrow {
-            ui.available_width()
-                .min((ui.available_height() - 120.0).max(180.0))
-        } else {
-            ui.available_height()
-                .min(ui.available_width() * 0.62)
-                .clamp(280.0, 560.0)
-        };
+        let board_budget = game_board_size(ui, narrow);
+        let theme = self.settings.board_theme;
+        let rendering = self.settings.piece_rendering;
 
         if phase == BlindPhase::Concealed {
-            let size = egui::vec2(board_budget, board_budget);
-            ui.allocate_ui(size, |ui| {
-                ui.set_min_size(size);
-                ui.centered_and_justified(|ui| {
-                    ui.label(
-                        RichText::new("…")
-                            .size(48.0)
-                            .color(ui.visuals().weak_text_color()),
-                    );
+            with_centered_board(ui, board_budget, |ui, size| {
+                let size = egui::vec2(size, size);
+                ui.allocate_ui(size, |ui| {
+                    ui.set_min_size(size);
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            RichText::new("…")
+                                .size(48.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                    });
                 });
             });
         } else {
             let interactive = phase == BlindPhase::Answering;
             let played = {
                 let engine = self.game_engine.as_ref().unwrap();
-                self.games_board.show(
-                    ui,
-                    engine,
-                    board_budget,
-                    self.settings.board_theme,
-                    self.settings.piece_rendering,
-                )
+                with_centered_board(ui, board_budget, |ui, size| {
+                    self.games_board.show(ui, engine, size, theme, rendering)
+                })
             };
             if let Some(uci) = played
                 && interactive
             {
                 let outcome = self.game_blind.as_mut().unwrap().submit(&uci);
                 let ok = outcome == BlindPhase::Cleared;
-                let engine = self.game_engine.as_mut().unwrap();
-                let _ = engine.play_any(&uci);
-                engine.resolve_sandbox(ok);
-                for event in engine.take_sounds() {
-                    if self.screenshot.is_none() {
-                        crate::sound::play(event, &self.settings);
+                if ok {
+                    let engine = self.game_engine.as_mut().unwrap();
+                    let _ = engine.play_any(&uci);
+                    engine.resolve_sandbox(true);
+                    for event in engine.take_sounds() {
+                        if self.screenshot.is_none() {
+                            crate::sound::play(event, &self.settings);
+                        }
                     }
+                    self.games_board.player_moved();
+                    self.toast = Some(("Nice memory.".into(), web_time::Instant::now()));
+                } else {
+                    // Reveal the expected move: reseat, play the answer, highlight from/to + SAN.
+                    let answer = self.game_blind.as_ref().unwrap().round.answer.clone();
+                    let san = self.game_blind.as_ref().unwrap().round.answer_san();
+                    let before = self
+                        .game_blind
+                        .as_ref()
+                        .unwrap()
+                        .round
+                        .position_after_preview();
+                    let side = self.game_engine.as_ref().unwrap().orientation();
+                    let mut engine = Engine::sandbox(before.clone());
+                    if let Some(side) = side {
+                        engine.lock_orientation(side);
+                    }
+                    self.games_board = super::super::board::BoardWidget::default();
+                    self.games_board.seed_board(before.board());
+                    let _ = engine.play_any(&answer);
+                    engine.resolve_sandbox(false);
+                    for event in engine.take_sounds() {
+                        if self.screenshot.is_none() {
+                            crate::sound::play(event, &self.settings);
+                        }
+                    }
+                    self.game_engine = Some(engine);
+                    self.toast = Some((
+                        format!("Miss — answer was {san}."),
+                        web_time::Instant::now(),
+                    ));
                 }
-                self.games_board.player_moved();
-                self.toast = Some((
-                    if ok {
-                        "Nice memory.".into()
-                    } else {
-                        "Miss — streak lost.".into()
-                    },
-                    web_time::Instant::now(),
-                ));
             }
         }
 
@@ -578,24 +590,14 @@ impl Woodpeck {
         });
         ui.add_space(8.0);
 
-        let board_budget = if narrow {
-            ui.available_width()
-                .min((ui.available_height() - 120.0).max(180.0))
-        } else {
-            ui.available_height()
-                .min(ui.available_width() * 0.62)
-                .clamp(280.0, 560.0)
-        };
-
+        let board_budget = game_board_size(ui, narrow);
+        let theme = self.settings.board_theme;
+        let rendering = self.settings.piece_rendering;
         let played = {
             let engine = self.game_engine.as_ref().unwrap();
-            self.games_board.show(
-                ui,
-                engine,
-                board_budget,
-                self.settings.board_theme,
-                self.settings.piece_rendering,
-            )
+            with_centered_board(ui, board_budget, |ui, size| {
+                self.games_board.show(ui, engine, size, theme, rendering)
+            })
         };
         if let Some(uci) = played
             && status == HumanStatus::Playing
@@ -648,6 +650,11 @@ impl Woodpeck {
     }
 }
 
+/// Card frame inset (2×20 inner margin + stroke) reserved when sizing hub columns.
+const CARD_INSET: f32 = 42.0;
+const GAP: f32 = 12.0;
+const BOARD_ACTION_RESERVE: f32 = 72.0;
+
 fn tap_highlight(h: Highlight) -> TapHighlight {
     match h {
         Highlight::Selected => TapHighlight::Selected,
@@ -655,4 +662,42 @@ fn tap_highlight(h: Highlight) -> TapHighlight {
         Highlight::Wrong => TapHighlight::Wrong,
         Highlight::Missed => TapHighlight::Missed,
     }
+}
+
+/// Square board that fills the content width on phone, stays capped on desktop,
+/// and leaves room for the primary action when height is scarce.
+fn game_board_size(ui: &Ui, narrow: bool) -> f32 {
+    let width = ui.available_width();
+    let height = ui.available_height();
+    if narrow {
+        // Reserve space for the Next / Try another row so it stays on-screen.
+        if height.is_finite() && height < width + BOARD_ACTION_RESERVE {
+            (height - BOARD_ACTION_RESERVE).clamp(160.0, width)
+        } else {
+            width
+        }
+    } else {
+        height.min(width * 0.62).clamp(280.0, 560.0)
+    }
+}
+
+fn with_centered_board<R>(ui: &mut Ui, size: f32, add: impl FnOnce(&mut Ui, f32) -> R) -> R {
+    let size = size
+        .min(ui.available_width())
+        .min(ui.available_height())
+        .max(0.0);
+    let pad = ((ui.available_width() - size) * 0.5).max(0.0);
+    let mut out = None;
+    ui.horizontal(|ui| {
+        if pad > 0.0 {
+            ui.add_space(pad);
+        }
+        // Cap the column so the board cannot stretch the row past `size`.
+        ui.set_max_width(size);
+        out = Some(add(ui, size));
+        if pad > 0.0 {
+            ui.add_space(pad);
+        }
+    });
+    out.expect("board closure ran")
 }

@@ -157,6 +157,12 @@ impl BoardWidget {
         self.snap_next = true;
         self.clear_annotations();
     }
+    /// Seed the previous board so the next paint diffs into `last_move` highlights.
+    pub(super) fn seed_board(&mut self, board: &Board) {
+        self.previous = Some(board.clone());
+        self.last_move.clear();
+        self.moving.clear();
+    }
     pub(super) fn clicked(&self, ui: &Ui) -> bool {
         self.rect.is_some_and(|rect| {
             ui.input(|i| {
@@ -869,6 +875,72 @@ mod tests {
             [((Square::H5, Square::G3), AnnotationColor::Red)]
         );
     }
+    #[test]
+    fn primary_drag_plays_move_on_sandbox_board() {
+        // Same path Train uses: press on a piece, move past egui's click threshold, release on a
+        // legal square. A press+release jump with no intermediate move never starts a drag in
+        // egui — that is why a "fast synthetic drag" looks like a no-op.
+        use crate::settings::{BoardTheme, PieceRendering};
+        let ctx = egui::Context::default();
+        let fen: shakmaty::fen::Fen = "4k3/8/8/8/3P4/8/8/4K3 w - - 0 1".parse().unwrap();
+        let position = fen.into_position(shakmaty::CastlingMode::Chess960).unwrap();
+        let engine = Engine::sandbox(position);
+        assert_eq!(engine.state(), State::PlayerTurn);
+        let mut widget = BoardWidget::default();
+        let mut played = None;
+        let input = |events| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(640.0))),
+            events,
+            ..Default::default()
+        };
+        let rect = {
+            let mut rect = Rect::ZERO;
+            ctx.run_ui(input(vec![]), |ui| {
+                let _ = widget.show(ui, &engine, 400.0, BoardTheme::Peck, PieceRendering::Vector);
+                if let Some(r) = widget.rect {
+                    rect = r;
+                }
+            })
+            .drop_without_applying_deltas();
+            rect
+        };
+        assert!(rect.width() > 0.0);
+        let from = square_rect(rect, Square::D4, true).center();
+        let mid = from + Vec2::new(30.0, 20.0);
+        let to = square_rect(rect, Square::D5, true).center();
+        for events in [
+            vec![
+                egui::Event::PointerMoved(from),
+                egui::Event::PointerButton {
+                    pos: from,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            vec![egui::Event::PointerMoved(mid)],
+            vec![
+                egui::Event::PointerMoved(to),
+                egui::Event::PointerButton {
+                    pos: to,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        ] {
+            ctx.run_ui(input(events), |ui| {
+                if let Some(uci) =
+                    widget.show(ui, &engine, 400.0, BoardTheme::Peck, PieceRendering::Vector)
+                {
+                    played = Some(uci);
+                }
+            })
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(played.as_deref(), Some("d4d5"));
+    }
+
     #[test]
     fn orientation_edges_and_scaling() {
         assert_eq!(

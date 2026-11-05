@@ -94,6 +94,22 @@ impl Woodpeck {
                         self.reader_screen(ui, layout.mode);
                     } else if matches!(self.screen, Screen::Training | Screen::Review) {
                         self.solving(ui, layout.mode, layout.panel_width);
+                    } else if matches!(
+                        self.screen,
+                        Screen::BoardScan
+                            | Screen::SafeMove
+                            | Screen::BlindLine
+                            | Screen::HumanMove
+                    ) {
+                        // Same fixed layout as Train: real height budget + no ScrollArea
+                        // stealing piece drags.
+                        match self.screen {
+                            Screen::BoardScan => self.board_scan_screen(ui),
+                            Screen::SafeMove => self.safe_move_screen(ui),
+                            Screen::BlindLine => self.blind_line_screen(ui),
+                            Screen::HumanMove => self.human_move_screen(ui),
+                            _ => {}
+                        }
                     } else {
                         let mut scroll =
                             egui::ScrollArea::vertical().id_salt(("screen-scroll", self.screen));
@@ -108,10 +124,6 @@ impl Woodpeck {
                             Screen::Progress => self.progress_screen(ui),
                             Screen::Settings => self.settings_screen(ui),
                             Screen::Games => self.games_hub(ui),
-                            Screen::BoardScan => self.board_scan_screen(ui),
-                            Screen::SafeMove => self.safe_move_screen(ui),
-                            Screen::BlindLine => self.blind_line_screen(ui),
-                            Screen::HumanMove => self.human_move_screen(ui),
                             _ => {}
                         });
                     }
