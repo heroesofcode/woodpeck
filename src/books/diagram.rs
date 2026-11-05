@@ -491,6 +491,171 @@ pub fn stated_placement(bytes: &[u8]) -> Option<String> {
     None
 }
 
+/// Key of the PNG text chunk holding the side to move a page marker shows.
+const SIDE_KEY: &[u8] = b"woodpeck-side";
+
+/// A PNG with the side to move stored beside the pixels, as [`with_placement`] does.
+pub fn with_side(png: &[u8], white: bool) -> Vec<u8> {
+    with_text(png, SIDE_KEY, if white { "w" } else { "b" })
+}
+
+/// The side stored by [`with_side`]: `Some(true)` for White to move.
+pub fn stated_side(bytes: &[u8]) -> Option<bool> {
+    match text_chunk(bytes, SIDE_KEY)?.as_slice() {
+        b"w" => Some(true),
+        b"b" => Some(false),
+        _ => None,
+    }
+}
+
+fn with_text(png: &[u8], key: &[u8], value: &str) -> Vec<u8> {
+    const HEADER: usize = 8 + 25;
+    if png.len() < HEADER || !png.starts_with(b"\x89PNG\r\n\x1a\n") || &png[12..16] != b"IHDR" {
+        return png.to_vec();
+    }
+    let mut body = b"tEXt".to_vec();
+    body.extend_from_slice(key);
+    body.push(0);
+    body.extend_from_slice(value.as_bytes());
+    let mut out = png[..HEADER].to_vec();
+    out.extend_from_slice(&u32::try_from(body.len() - 4).unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&body);
+    out.extend_from_slice(&crc32(&body).to_be_bytes());
+    out.extend_from_slice(&png[HEADER..]);
+    out
+}
+
+fn text_chunk(bytes: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
+    let mut at = 8;
+    while at + 12 <= bytes.len() {
+        let len = usize::try_from(u32::from_be_bytes(bytes[at..at + 4].try_into().ok()?)).ok()?;
+        let kind = &bytes[at + 4..at + 8];
+        let data = bytes.get(at + 8..at + 8 + len)?;
+        if kind == b"tEXt" {
+            if let Some(v) = data.strip_prefix(key).and_then(|d| d.strip_prefix(&[0])) {
+                return Some(v.to_vec());
+            }
+        } else if kind == b"IDAT" {
+            return None;
+        }
+        at += 12 + len;
+    }
+    None
+}
+
+/// The side-to-move marker some books print beside a diagram: a small square level with the
+/// bottom rank, just right of the board, hollow for White and filled for Black. `Some(true)` is
+/// White. Only one clear square counts; anything doubtful abstains.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::many_single_char_names
+)]
+pub fn side_marker(g: &Gray, frame: Frame) -> Option<bool> {
+    let s = (frame[2] - frame[0]).min(frame[3] - frame[1]) as f64;
+    if s < 80.0 {
+        return None;
+    }
+    let at = |v: f64| v.round() as i64;
+    let x0 = (frame[2] + at(0.02 * s)).max(0);
+    let x1 = (frame[2] + at(0.4 * s)).min(g.width as i64);
+    let y0 = (frame[3] - at(0.25 * s)).max(0);
+    let y1 = (frame[3] + at(0.05 * s)).min(g.height as i64);
+    if x1 - x0 < at(0.1 * s) || y1 - y0 < at(0.1 * s) {
+        return None;
+    }
+    let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+    let dark = |x: usize, y: usize| g.px[(y0 as usize + y) * g.width + x0 as usize + x] < 0.5;
+    let mut seen = vec![false; w * h];
+    let mut found = None;
+    for start in 0..w * h {
+        if seen[start] || !dark(start % w, start / w) {
+            continue;
+        }
+        // One connected blob of ink, its bounding box, and whether it reaches the region edge.
+        let mut stack = vec![start];
+        seen[start] = true;
+        let (mut bx0, mut by0, mut bx1, mut by1) = (w, h, 0, 0);
+        let mut edge = false;
+        while let Some(i) = stack.pop() {
+            let (x, y) = (i % w, i / w);
+            (bx0, by0, bx1, by1) = (bx0.min(x), by0.min(y), bx1.max(x + 1), by1.max(y + 1));
+            edge |= x == 0 || y == 0 || x + 1 == w || y + 1 == h;
+            let around = [
+                (x.wrapping_sub(1), y),
+                (x + 1, y),
+                (x, y.wrapping_sub(1)),
+                (x, y + 1),
+            ];
+            for (nx, ny) in around {
+                if nx < w && ny < h && !seen[ny * w + nx] && dark(nx, ny) {
+                    seen[ny * w + nx] = true;
+                    stack.push(ny * w + nx);
+                }
+            }
+        }
+        let (bw, bh) = ((bx1 - bx0) as f64, (by1 - by0) as f64);
+        if bw.max(bh) < 0.04 * s || edge {
+            continue;
+        }
+        // Anything larger than a marker (a caption line, a second board) makes it doubtful.
+        if bw > 0.13 * s || bh > 0.13 * s || (bw - bh).abs() > 0.25 * bw.max(bh) {
+            if bw.min(bh) >= 0.04 * s {
+                return None;
+            }
+            continue;
+        }
+        let share = |xa: usize, ya: usize, xb: usize, yb: usize| {
+            let n = (xb.saturating_sub(xa) * yb.saturating_sub(ya)).max(1);
+            let d = (ya..yb)
+                .flat_map(|y| (xa..xb).map(move |x| (x, y)))
+                .filter(|&(x, y)| dark(x, y))
+                .count();
+            d as f64 / n as f64
+        };
+        let (iw, ih) = (bx1 - bx0, by1 - by0);
+        let (ix, iy) = (iw * 3 / 10, ih * 3 / 10);
+        let inner = share(bx0 + ix, by0 + iy, bx1 - ix, by1 - iy);
+        let full = share(bx0, by0, bx1, by1);
+        // Each side of a hollow square is one straight inked line.
+        let (bx, by) = ((iw / 5).max(1), (ih / 5).max(1));
+        let line = |rows: bool, from: usize, to: usize| {
+            (from..to)
+                .map(|k| {
+                    if rows {
+                        share(bx0, k, bx1, k + 1)
+                    } else {
+                        share(k, by0, k + 1, by1)
+                    }
+                })
+                .fold(0.0, f64::max)
+        };
+        let sides = [
+            line(true, by0, by0 + by),
+            line(true, by1 - by, by1),
+            line(false, bx0, bx0 + bx),
+            line(false, bx1 - bx, bx1),
+        ];
+        let side = if full > 0.85 {
+            false
+        } else if inner < 0.1 && sides.iter().all(|v| *v > 0.8) {
+            true
+        } else {
+            return None;
+        };
+        if found.is_some() {
+            return None;
+        }
+        found = Some(side);
+    }
+    found
+}
+
 /// Boards on a whole page (a scan or a rendered page): square clusters of connected ink, each
 /// confirmed by [`locate`] on its own crop. Returned as crop boxes with a small margin, top to
 /// bottom, so each crop can go through the same diagram gate as a picture.
@@ -991,6 +1156,65 @@ impl DiagramRecognizer for Agreeing<'_> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A blank page with a 300 px board outline and optional squares (left, top, side, filled).
+    fn marked(squares: &[(usize, usize, usize, bool)]) -> (Gray, Frame) {
+        let (w, h) = (500, 400);
+        let mut luma = vec![255u8; w * h];
+        for k in 50..350 {
+            for (x, y) in [(k, 50), (k, 349), (50, k), (349, k)] {
+                luma[y * w + x] = 0;
+            }
+        }
+        for &(left, top, side, filled) in squares {
+            for y in top..top + side {
+                for x in left..left + side {
+                    let border =
+                        x < left + 2 || x >= left + side - 2 || y < top + 2 || y >= top + side - 2;
+                    if filled || border {
+                        luma[y * w + x] = 0;
+                    }
+                }
+            }
+        }
+        (Gray::from_luma(w, h, &luma).unwrap(), [50, 50, 350, 350])
+    }
+
+    #[test]
+    fn side_marker_reads_hollow_and_filled_squares() {
+        let (g, f) = marked(&[(400, 322, 25, false)]);
+        assert_eq!(side_marker(&g, f), Some(true));
+        let (g, f) = marked(&[(400, 322, 25, true)]);
+        assert_eq!(side_marker(&g, f), Some(false));
+    }
+
+    #[test]
+    fn side_marker_abstains_without_one_clear_square() {
+        let (g, f) = marked(&[]);
+        assert_eq!(side_marker(&g, f), None);
+        let (g, f) = marked(&[(380, 322, 25, false), (420, 322, 25, true)]);
+        assert_eq!(side_marker(&g, f), None);
+        // Far above the bottom rank is a caption's place, not the marker's.
+        let (g, f) = marked(&[(400, 100, 25, true)]);
+        assert_eq!(side_marker(&g, f), None);
+    }
+
+    #[test]
+    fn side_survives_the_png_text_chunk() {
+        let image = image::GrayImage::from_raw(2, 2, vec![0, 255, 255, 0]).unwrap();
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        assert_eq!(stated_side(&png), None);
+        let both = with_side(&with_placement(&png, "8/8/8/8/8/8/8/K6k"), false);
+        assert_eq!(stated_side(&both), Some(false));
+        assert_eq!(
+            stated_placement(&both).as_deref(),
+            Some("8/8/8/8/8/8/8/K6k")
+        );
+        assert!(image::load_from_memory(&both).is_ok());
+    }
     use super::*;
 
     struct Fixed(Option<&'static str>);

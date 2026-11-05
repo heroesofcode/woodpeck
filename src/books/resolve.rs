@@ -319,10 +319,22 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             placements.insert(path.clone(), placement);
         }
     }
+    // Side-to-move markers found beside rendered boards, by image path.
+    let markers: HashMap<String, bool> = assets
+        .iter()
+        .filter_map(|a| Some((a.path.clone(), super::diagram::stated_side(&a.bytes)?)))
+        .collect();
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let mut best = None;
     for (name, alphabet) in notation::ALPHABETS {
-        let candidate = resolve_with(document.clone(), name, alphabet, &placements, &readings);
+        let candidate = resolve_with(
+            document.clone(),
+            name,
+            alphabet,
+            &placements,
+            &readings,
+            &markers,
+        );
         if best
             .as_ref()
             .is_none_or(|b: &Book| candidate.nodes.len() > b.nodes.len())
@@ -341,8 +353,9 @@ fn resolve_with(
     alphabet: &str,
     placements: &HashMap<String, Option<String>>,
     readings: &HashMap<String, String>,
+    markers: &HashMap<String, bool>,
 ) -> Book {
-    let (recognized, unconfirmed) = recognized_positions(&document, alphabet, placements);
+    let (recognized, unconfirmed) = recognized_positions(&document, alphabet, placements, markers);
     let mut book = Book {
         version: 1,
         document: document.clone(),
@@ -969,6 +982,7 @@ fn recognized_positions(
     document: &Document,
     alphabet: &str,
     placements: &HashMap<String, Option<String>>,
+    markers: &HashMap<String, bool>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
@@ -989,7 +1003,11 @@ fn recognized_positions(
                 _ => continue,
             };
             let image = matches!(block.kind, BlockKind::Image { .. });
-            match image_position(
+            let marker = match &block.kind {
+                BlockKind::Image { path, .. } => markers.get(path).copied(),
+                _ => None,
+            };
+            let turn = image_position(
                 page.blocks[b + 1..]
                         .iter()
                         .map(|block| (page, block))
@@ -1002,7 +1020,8 @@ fn recognized_positions(
                 &before_image(page, b),
                 alphabet,
                 &placement,
-            ) {
+            );
+            match with_marker(turn, marker, &placement) {
                 Turn::Confirmed(pos) => {
                     out.insert((p, b), pos);
                 }
@@ -1014,6 +1033,20 @@ fn recognized_positions(
         }
     }
     (out, unconfirmed)
+}
+/// Adds a printed side-to-move marker to what the text says: it confirms a board nothing else
+/// does, agrees with a confirmed one, and leaves a board unconfirmed when the two disagree.
+fn with_marker(turn: Turn, marker: Option<bool>, placement: &str) -> Turn {
+    let Some(white) = marker else {
+        return turn;
+    };
+    let side = if white { Color::White } else { Color::Black };
+    match turn {
+        Turn::Confirmed(pos) if pos.turn() == side => Turn::Confirmed(pos),
+        Turn::Confirmed(_) => Turn::Unknown,
+        Turn::Unknown => placed(placement, side).map_or(Turn::Unknown, Turn::Confirmed),
+        Turn::Contradicted => Turn::Contradicted,
+    }
 }
 /// Turns an image whose board passed the gates into a board shown without a side to move.
 fn show_unconfirmed(block: &mut Block, placement: Option<&String>) {
@@ -1739,6 +1772,47 @@ mod tests {
 mod image_tests {
     use super::*;
     use crate::books::document::{Asset, Page};
+    #[test]
+    fn a_side_marker_confirms_only_without_a_conflict() {
+        // The white queen gives check, so only Black can be to move.
+        let placement = "7k/6Q1/8/8/8/8/8/K7";
+        let black = placed(placement, Color::Black).unwrap();
+        let confirmed = |t: Turn| match t {
+            Turn::Confirmed(p) => Some(p.turn()),
+            _ => None,
+        };
+        let free = "4k3/8/8/8/8/8/8/4K3";
+        assert_eq!(
+            confirmed(with_marker(Turn::Unknown, Some(true), free)),
+            Some(Color::White)
+        );
+        assert_eq!(
+            confirmed(with_marker(Turn::Unknown, Some(false), free)),
+            Some(Color::Black)
+        );
+        assert_eq!(confirmed(with_marker(Turn::Unknown, None, free)), None);
+        // A marker naming the side that cannot move here confirms nothing.
+        assert_eq!(
+            confirmed(with_marker(Turn::Unknown, Some(true), placement)),
+            None
+        );
+        assert_eq!(
+            confirmed(with_marker(
+                Turn::Confirmed(black.clone()),
+                Some(false),
+                placement
+            )),
+            Some(Color::Black)
+        );
+        assert!(matches!(
+            with_marker(Turn::Confirmed(black), Some(true), placement),
+            Turn::Unknown
+        ));
+        assert!(matches!(
+            with_marker(Turn::Contradicted, Some(true), free),
+            Turn::Contradicted
+        ));
+    }
     /// Reads every image as the same placement, standing in for the trained recognizer.
     struct Fixed(&'static str);
     impl DiagramRecognizer for Fixed {
