@@ -235,9 +235,8 @@ pub(super) fn stamp_pdftotext_sides(
                 continue;
             }
             // Side is stored as a PNG tEXt chunk; JPEG (and other) embeds must be re-encoded.
-            let png = match diagram_png(&pic.bytes) {
-                Some(p) => p,
-                None => continue,
+            let Some(png) = diagram_png(&pic.bytes) else {
+                continue;
             };
             pic.bytes = crate::books::diagram::with_side(&png, side);
         }
