@@ -119,7 +119,12 @@ impl Renderer {
                 if let Some(font) = font {
                     bytes = diagram::with_placement(&bytes, &font.placement);
                 }
-                if let Some(white) = diagram::side_marker(&gray, frame) {
+                // The crop carries a margin; the marker is placed against the board itself.
+                let board = diagram::locate(&crop).map_or(frame, |f| {
+                    let (x, y) = (frame[0].max(0), frame[1].max(0));
+                    [x + f[0], y + f[1], x + f[2], y + f[3]]
+                });
+                if let Some(white) = diagram::side_marker(&gray, board) {
                     bytes = diagram::with_side(&bytes, white);
                 }
                 Some(Placed {
