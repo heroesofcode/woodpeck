@@ -63,6 +63,8 @@ pub struct Engine {
     moves_played: Vec<String>,
     allow_any_final_checkmate: bool,
     sounds: Vec<crate::sound::Event>,
+    /// When set, board orientation stays fixed (sandbox drills).
+    sandbox_side: Option<Color>,
 }
 impl Engine {
     // The book reader is desktop-only for now.
@@ -80,10 +82,13 @@ impl Engine {
             moves_played: vec![],
             allow_any_final_checkmate: false,
             sounds: vec![],
+            sandbox_side: None,
         }
     }
     /// Free-play board for training games: any legal move is accepted by `play_any`.
+    /// Orientation is locked to the side that moves first; the board freezes after one move.
     pub fn sandbox(position: Chess) -> Self {
+        let side = position.turn();
         Self {
             state: State::PlayerTurn,
             line: None,
@@ -96,6 +101,7 @@ impl Engine {
             moves_played: Vec::new(),
             allow_any_final_checkmate: false,
             sounds: Vec::new(),
+            sandbox_side: Some(side),
         }
     }
     pub fn new(puzzle: &Puzzle, now: Duration, allow_any_final_checkmate: bool) -> Self {
@@ -115,6 +121,7 @@ impl Engine {
             moves_played: Vec::new(),
             allow_any_final_checkmate,
             sounds: Vec::new(),
+            sandbox_side: None,
         }
     }
     /// Rebase a prepared, still-loading engine when it becomes visible.
@@ -148,6 +155,7 @@ impl Engine {
         self.line
             .as_ref()
             .map(|l| !l.positions[0].turn())
+            .or(self.sandbox_side)
             .or_else(|| self.position.as_ref().map(Position::turn))
     }
     /// Consume effects exactly once, independent of rendering and animation frames.
@@ -250,7 +258,7 @@ impl Engine {
         }
         Ok(())
     }
-    /// Apply any legal move while in sandbox mode (`line` is absent).
+    /// Apply any legal move while in sandbox mode (`line` is absent), then freeze.
     pub fn play_any(&mut self, input: &str) -> Result<(), InputError> {
         if self.state != State::PlayerTurn || self.line.is_some() {
             return Err(InputError::NotInteractive);
@@ -263,6 +271,8 @@ impl Engine {
         self.sounds.push(crate::sound::Event::from_move(m));
         self.moves_played.push(input.to_owned());
         self.position = Some(after);
+        // One reply per drill position; keep the board non-interactive afterward.
+        self.state = State::Complete;
         Ok(())
     }
     pub fn skip(&mut self) -> Result<(), InputError> {
@@ -531,5 +541,23 @@ mod sound_tests {
         e.walkthrough().unwrap().next();
         assert_eq!(e.take_sounds().count(), 0);
         assert_eq!(e.state(), State::FailedReview);
+    }
+
+    #[test]
+    fn sandbox_locks_orientation_and_freezes_after_play_any() {
+        use shakmaty::fen::Fen;
+        let fen: Fen = "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1".parse().unwrap();
+        let pos: Chess = fen.into_position(shakmaty::CastlingMode::Standard).unwrap();
+        let mut e = Engine::sandbox(pos);
+        assert_eq!(e.state(), State::PlayerTurn);
+        assert_eq!(e.orientation(), Some(Color::White));
+        e.play_any("e2e4").unwrap();
+        assert_eq!(e.state(), State::Complete);
+        assert_eq!(e.orientation(), Some(Color::White));
+        assert_eq!(e.play_any("e8e7"), Err(InputError::NotInteractive));
+        assert_eq!(
+            e.take_sounds().collect::<Vec<_>>(),
+            [crate::sound::Event::Move]
+        );
     }
 }
