@@ -1343,7 +1343,7 @@ mod tests {
         let band = 12usize; // coordinate strip inside the rim
         let mut px = vec![0.55f32; size * size]; // light-brown rim
         let inner = rim + band;
-        let cell = (size - 2 * inner) as f32 / 8.0;
+        let field = size - 2 * inner;
         for y in 0..size {
             for x in 0..size {
                 if x < rim || y < rim || x >= size - rim || y >= size - rim {
@@ -1354,8 +1354,8 @@ mod tests {
                     px[y * size + x] = 0.85; // coordinate band
                     continue;
                 }
-                let col = ((x - inner) as f32 / cell) as usize;
-                let row = ((y - inner) as f32 / cell) as usize;
+                let col = (x - inner) * 8 / field;
+                let row = (y - inner) * 8 / field;
                 let dark = (row + col) % 2 == 1;
                 px[y * size + x] = if dark { 0.78 } else { 0.96 };
             }
@@ -1369,7 +1369,8 @@ mod tests {
         let (w, h) = (frame[2] - frame[0], frame[3] - frame[1]);
         assert!(w >= 200 && h >= 200, "frame too small: {frame:?}");
         // Rim+band should be outside the located board.
-        assert!(frame[0] >= rim as i64, "{frame:?}");
-        assert!(frame[1] >= rim as i64, "{frame:?}");
+        let rim_i = i64::try_from(rim).unwrap();
+        assert!(frame[0] >= rim_i, "{frame:?}");
+        assert!(frame[1] >= rim_i, "{frame:?}");
     }
 }
