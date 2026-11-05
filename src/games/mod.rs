@@ -1,8 +1,12 @@
 //! Short training drills that sit beside Woodpecker sets.
 //!
 //! Logic here stays free of egui so a later web UI can reuse the same rules.
+mod safe_move;
 mod vision;
 
+pub use safe_move::{
+    Round as SafeRound, Session as SafeSession, Status as SafeStatus, is_blunder, safe_moves,
+};
 pub use vision::{
     DrillMode, Highlight, Outcome as VisionOutcome, Round as VisionRound, Session as VisionSession,
     Status as VisionStatus, targets_for,
@@ -29,7 +33,7 @@ pub const CATALOG: &[GameInfo] = &[
         id: "safe-move",
         title: "Safe move",
         blurb: "Play any solid move. The streak ends only when you blunder.",
-        available: false,
+        available: true,
     },
     GameInfo {
         id: "blind-line",

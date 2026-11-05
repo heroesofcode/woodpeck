@@ -1,6 +1,9 @@
 //! Games hub and Board-scan drill UI (desktop, web desktop, and phone).
 use super::super::{Screen, Woodpeck, board::TapHighlight, style, widgets};
-use crate::games::{self, DrillMode, Highlight, VisionOutcome, VisionSession, VisionStatus};
+use crate::games::{
+    self, DrillMode, Highlight, SafeSession, SafeStatus, VisionOutcome, VisionSession, VisionStatus,
+};
+use crate::puzzle::Engine;
 use eframe::egui::{self, RichText, Ui};
 use shakmaty::Square;
 use std::time::Duration;
@@ -50,7 +53,11 @@ impl Woodpeck {
                 ui.add_space(10.0);
                 if game.available {
                     if widgets::primary(ui, "Play").clicked() {
-                        self.start_board_scan(DrillMode::HangingPieces);
+                        match game.id {
+                            "board-scan" => self.start_board_scan(DrillMode::HangingPieces),
+                            "safe-move" => self.start_safe_move(),
+                            _ => {}
+                        }
                     }
                 } else {
                     ui.label(
@@ -211,6 +218,114 @@ impl Woodpeck {
                         self.game_vision.as_mut().unwrap().next_round(now);
                     }
                 });
+            }
+        }
+    }
+
+    pub(in crate::app) fn start_safe_move(&mut self) {
+        let seed = self
+            .origin
+            .elapsed()
+            .as_millis()
+            .wrapping_add(u128::from(self.frames)) as u64;
+        let session = SafeSession::start(seed.max(1));
+        let engine = Engine::sandbox(session.round.position());
+        self.game_safe = Some(session);
+        self.game_engine = Some(engine);
+        self.games_board = super::super::board::BoardWidget::default();
+        self.navigate(Screen::SafeMove);
+    }
+
+    pub(in crate::app) fn safe_move_screen(&mut self, ui: &mut Ui) {
+        let narrow = ui.available_width() < 640.0;
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("< Games").clicked() {
+                self.game_safe = None;
+                self.game_engine = None;
+                self.navigate(Screen::Games);
+            }
+            ui.label(
+                RichText::new("Safe move")
+                    .strong()
+                    .size(if narrow { 18.0 } else { 22.0 }),
+            );
+        });
+        ui.add_space(8.0);
+        if self.game_safe.is_none() || self.game_engine.is_none() {
+            ui.label("Starting…");
+            return;
+        }
+        let (score, streak, best, status) = {
+            let s = self.game_safe.as_ref().unwrap();
+            (s.score, s.streak, s.best_streak, s.round.status)
+        };
+        ui.label(
+            RichText::new("Play any solid move. Hanging a piece ends the streak.")
+                .size(if narrow { 14.0 } else { 15.0 }),
+        );
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("Score {score}"));
+            ui.separator();
+            ui.label(format!("Streak {streak}"));
+            ui.separator();
+            ui.label(format!("Best {best}"));
+        });
+        ui.add_space(8.0);
+
+        let board_budget = if narrow {
+            ui.available_width()
+                .min((ui.available_height() - 120.0).max(180.0))
+        } else {
+            ui.available_height()
+                .min(ui.available_width() * 0.62)
+                .clamp(280.0, 560.0)
+        };
+
+        let played = {
+            let engine = self.game_engine.as_ref().unwrap();
+            self.games_board.show(
+                ui,
+                engine,
+                board_budget,
+                self.settings.board_theme,
+                self.settings.piece_rendering,
+            )
+        };
+        if let Some(uci) = played
+            && status == SafeStatus::Playing
+        {
+            let outcome = self.game_safe.as_mut().unwrap().submit(&uci);
+            match outcome {
+                SafeStatus::Cleared => {
+                    let _ = self.game_engine.as_mut().unwrap().play_any(&uci);
+                    self.toast = Some(("Safe.".into(), web_time::Instant::now()));
+                }
+                SafeStatus::Blundered => {
+                    let _ = self.game_engine.as_mut().unwrap().play_any(&uci);
+                    self.toast = Some(("Blunder — streak lost.".into(), web_time::Instant::now()));
+                }
+                SafeStatus::Playing => {}
+            }
+        }
+        ui.add_space(10.0);
+        let status = self.game_safe.as_ref().unwrap().round.status;
+        match status {
+            SafeStatus::Playing => {
+                ui.label("Drag or tap a move. Any non-blunder keeps the streak alive.");
+            }
+            SafeStatus::Cleared | SafeStatus::Blundered => {
+                let label = if status == SafeStatus::Cleared {
+                    "Next position"
+                } else {
+                    "Try another"
+                };
+                if widgets::primary(ui, label).clicked() {
+                    self.game_safe.as_mut().unwrap().next_round();
+                    let position = self.game_safe.as_ref().unwrap().round.position();
+                    self.game_engine = Some(Engine::sandbox(position));
+                    self.games_board = super::super::board::BoardWidget::default();
+                }
             }
         }
     }
