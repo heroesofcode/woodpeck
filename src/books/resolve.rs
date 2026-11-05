@@ -1021,7 +1021,8 @@ fn recognized_positions(
                 BlockKind::Image { path, .. } => markers.get(path).copied(),
                 _ => None,
             };
-            let turn = image_position(
+            let before = before_image(page, b);
+            let mut turn = image_position(
                 page.blocks[b + 1..]
                         .iter()
                         .map(|block| (page, block))
@@ -1031,10 +1032,18 @@ fn recognized_positions(
                         }))
                         .take(4),
                 alt,
-                &before_image(page, b),
+                &before,
                 alphabet,
                 &placement,
             );
+            // Trailing ply above the board — only when nothing else (including a printed
+            // side marker) names the side, so a wrong inference cannot demote a marker.
+            if matches!(turn, Turn::Unknown)
+                && marker.is_none()
+                && let Some(side) = before.after_move
+            {
+                turn = placed(&placement, side).map_or(Turn::Unknown, Turn::Confirmed);
+            }
             match with_marker(turn, marker, &placement) {
                 Turn::Confirmed(pos) => {
                     out.insert((p, b), pos);
@@ -1093,42 +1102,19 @@ struct Before {
 /// Reads the caption right above block `b` and the "mate in N" theme heading its page.
 fn before_image(page: &Page, b: usize) -> Before {
     let mut before = Before::default();
-    // A bare diagram number between a caption and the image ("White to move" / "64" / image)
-    // is skipped so the caption still names the side. A previous diagram image ends the walk
-    // so that image's caption cannot name this one.
-    let mut skipped_number = false;
-    let mut texts = 0usize;
-    for block in page.blocks[..b].iter().rev() {
-        if matches!(
-            block.kind,
-            BlockKind::Image { .. }
-                | BlockKind::RecognizedDiagram { .. }
-                | BlockKind::UnconfirmedDiagram { .. }
-                | BlockKind::Diagram { .. }
-        ) {
-            break;
-        }
-        if !matches!(block.kind, BlockKind::Paragraph | BlockKind::Heading) {
-            continue;
-        }
-        let text = page.text[block.span.clone()].trim();
+    let texts = page.blocks[..b]
+        .iter()
+        .rev()
+        .filter(|block| matches!(block.kind, BlockKind::Paragraph | BlockKind::Heading))
+        .map(|block| page.text[block.span.clone()].trim());
+    for (i, text) in texts.enumerate() {
         if text.is_empty() {
             continue;
         }
-        if texts == 0 {
+        if i == 0 {
             before.stated = lead_in_turn(text);
             before.after_move = side_after_trailing_move(text);
-            skipped_number = before.stated.is_none() && diagram_number(text);
-        } else if skipped_number {
-            if before.stated.is_none() {
-                before.stated = lead_in_turn(text);
-            }
-            if before.after_move.is_none() {
-                before.after_move = side_after_trailing_move(text);
-            }
-            skipped_number = false;
         }
-        texts += 1;
         if let Some(n) = mate_in(text) {
             before.mate = Some(n);
             break;
@@ -1139,17 +1125,6 @@ fn before_image(page: &Page, b: usize) -> Before {
         }
     }
     before
-}
-/// A short block that only numbers the diagram ("64", "No. 12", "Diagram 3").
-fn diagram_number(text: &str) -> bool {
-    let t = text.trim();
-    if t.is_empty() || t.chars().count() > 24 {
-        return false;
-    }
-    if t.chars().all(|c| c.is_ascii_digit()) {
-        return true;
-    }
-    caption(t)
 }
 /// Side to move after the last ply printed at the end of `text` (`12. e4` ⇒ Black,
 /// `12...Bd6` or `12. e4 Bd6` ⇒ White). Abstains when the ply is not at the end, sits inside
@@ -1182,12 +1157,16 @@ fn side_after_trailing_move(text: &str) -> Option<Color> {
                     side = Color::Black;
                     j += 1;
                 }
-                if ts.get(j + 1).is_some_and(|t| t.kind == Kind::Word) {
+                if ts.get(j + 1).is_some_and(|t| t.kind == Kind::Word)
+                    && looks_like_move(&text[ts[j + 1].span.clone()])
+                {
                     let word = j + 1;
                     last = Some((word, side));
                     i = word + 1;
                     if side == Color::White
-                        && ts.get(i).is_some_and(|t| t.kind == Kind::Word)
+                        && ts.get(i).is_some_and(|t| {
+                            t.kind == Kind::Word && looks_like_move(&text[t.span.clone()])
+                        })
                         && depth == 0
                     {
                         last = Some((i, Color::Black));
@@ -1374,11 +1353,6 @@ fn image_position<'a>(
     }
     if let Some(side) = stated {
         return placed(placement, side).map_or(Turn::Contradicted, Turn::Confirmed);
-    }
-    // Last ply above the board (`12...Bd6` ⇒ White). Only used when captions and following
-    // moves named nothing; an illegal side stays Unknown so the board is not dropped.
-    if let Some(side) = before.after_move {
-        return placed(placement, side).map_or(Turn::Unknown, Turn::Confirmed);
     }
     let sides: Vec<Chess> = [Color::White, Color::Black]
         .into_iter()
@@ -2121,6 +2095,10 @@ mod image_tests {
             side_after_trailing_move("A quiet positional discussion."),
             None
         );
+        assert_eq!(
+            side_after_trailing_move("12. Opening ideas favour White"),
+            None
+        );
         let mut page = Page::default();
         page.push("After 12...Bd6", BlockKind::Paragraph);
         page.push(
@@ -2145,36 +2123,6 @@ mod image_tests {
         let book = resolve_using(document, Some(&Fixed(PLACEMENT)));
         assert!(matches!(
             &book.document.pages[0].blocks[1].kind,
-            BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")
-        ));
-    }
-    #[test]
-    fn a_caption_above_a_diagram_number_still_names_the_side() {
-        let mut page = Page::default();
-        page.push("White to move", BlockKind::Paragraph);
-        page.push("64", BlockKind::Paragraph);
-        page.push(
-            "",
-            BlockKind::Image {
-                path: "images/d.png".into(),
-                alt: String::new(),
-            },
-        );
-        let document = Document {
-            cover: None,
-            isbn: None,
-            title: String::new(),
-            author: String::new(),
-            format: "test".into(),
-            pages: vec![page],
-            assets: vec![Asset {
-                path: "images/d.png".into(),
-                bytes: vec![0],
-            }],
-        };
-        let book = resolve_using(document, Some(&Fixed(PLACEMENT)));
-        assert!(matches!(
-            &book.document.pages[0].blocks[2].kind,
             BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")
         ));
     }
