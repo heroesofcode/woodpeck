@@ -107,6 +107,8 @@ impl Woodpeck {
                             Screen::Builder => self.builder_screen(ui),
                             Screen::Progress => self.progress_screen(ui),
                             Screen::Settings => self.settings_screen(ui),
+                            Screen::Games => self.games_hub(ui),
+                            Screen::BoardScan => self.board_scan_screen(ui),
                             _ => {}
                         });
                     }
@@ -166,7 +168,8 @@ impl Woodpeck {
                 ui.horizontal(|ui| {
                     for (index, (screen, label)) in Screen::ALL.into_iter().enumerate() {
                         let selected = self.screen == screen
-                            || (screen == Screen::Books && self.screen == Screen::Reader);
+                            || (screen == Screen::Books && self.screen == Screen::Reader)
+                            || (screen == Screen::Games && self.screen == Screen::BoardScan);
                         let color = if selected || screen == Screen::Review {
                             accent
                         } else {
@@ -193,8 +196,9 @@ impl Woodpeck {
     fn side_navigation_entries(&mut self, ui: &mut Ui, expanded: bool) {
         let accent = style::color(self.palette.semantic().accent);
         for (index, (screen, label)) in Screen::ALL.into_iter().enumerate() {
-            let selected =
-                self.screen == screen || (screen == Screen::Books && self.screen == Screen::Reader);
+            let selected = self.screen == screen
+                || (screen == Screen::Books && self.screen == Screen::Reader)
+                || (screen == Screen::Games && self.screen == Screen::BoardScan);
             let color = if selected || screen == Screen::Review {
                 accent
             } else {

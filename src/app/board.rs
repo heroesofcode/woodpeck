@@ -7,7 +7,7 @@ use crate::{
 use eframe::egui::{
     self, Align2, Color32, FontId, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
 };
-use shakmaty::{Board, Color, Position, Square, uci::UciMove};
+use shakmaty::{Board, Chess, Color, Position, Square, uci::UciMove};
 
 pub fn hit_square(point: [f32; 2], origin: [f32; 2], size: f32, white: bool) -> Option<Square> {
     if size <= 0.0 || !size.is_finite() {
@@ -112,6 +112,14 @@ fn knight_bend(from: Square, to: Square) -> Option<Square> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TapHighlight {
+    Selected,
+    Correct,
+    Wrong,
+    Missed,
+}
+
 #[derive(Default)]
 pub struct BoardWidget {
     pieces: Pieces,
@@ -209,6 +217,122 @@ impl BoardWidget {
         self.paint_annotations(ui, rect, white);
         self.promotion_picker(ui, rect).or(played)
     }
+
+    /// Paint a static position and return the square tapped/clicked (touch-friendly).
+    #[allow(clippy::too_many_arguments)]
+    pub fn show_tap(
+        &mut self,
+        ui: &mut Ui,
+        position: &Chess,
+        size: f32,
+        theme: BoardTheme,
+        rendering: PieceRendering,
+        white_bottom: bool,
+        highlights: &[(Square, TapHighlight)],
+    ) -> Option<Square> {
+        let size = size
+            .min(ui.available_width())
+            .min(ui.available_height())
+            .max(0.0);
+        if size < 1.0 {
+            return None;
+        }
+        let (allocation, response) =
+            ui.allocate_exact_size(Vec2::splat(size), Sense::click_and_drag());
+        let rect = Rect::from_min_size(allocation.min, Vec2::splat(size));
+        self.rect = Some(rect);
+        let board = position.board();
+        let now = ui.input(|i| i.time);
+        self.update_board(board, State::PlayerTurn, now);
+        self.selected = None;
+        Self::paint_static_squares(ui, position, rect, theme, white_bottom, highlights);
+        self.paint_pieces(ui, board, rect, rendering, white_bottom, &response);
+        if response.clicked_by(PointerButton::Primary)
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            return hit_square(
+                [pos.x, pos.y],
+                [rect.left(), rect.top()],
+                rect.width(),
+                white_bottom,
+            );
+        }
+        None
+    }
+
+    fn paint_static_squares(
+        ui: &Ui,
+        position: &Chess,
+        rect: Rect,
+        theme: BoardTheme,
+        white: bool,
+        highlights: &[(Square, TapHighlight)],
+    ) {
+        let sq = rect.width() / 8.0;
+        let c = theme.colors();
+        let painter = ui.painter();
+        painter.rect_filled(
+            rect.expand2(Vec2::new(0.0, 3.0))
+                .translate(Vec2::new(0.0, 3.0)),
+            8,
+            color(c.lip),
+        );
+        let font = FontId::new(
+            (sq * 0.19).clamp(9.0, 15.0),
+            egui::FontFamily::Name("coordinates".into()),
+        );
+        let checked_king = position
+            .is_check()
+            .then(|| position.board().king_of(position.turn()))
+            .flatten();
+        for square in Square::ALL {
+            let r = square_rect(rect, square, white);
+            let dark = (u32::from(square.file()) + u32::from(square.rank())).is_multiple_of(2);
+            painter.rect_filled(r, 0, if dark { color(c.dark) } else { color(c.light) });
+            if let Some((_, kind)) = highlights.iter().find(|(s, _)| *s == square) {
+                let overlay = match kind {
+                    TapHighlight::Correct => Color32::from_rgba_unmultiplied(21, 157, 62, 120),
+                    TapHighlight::Wrong => Color32::from_rgba_unmultiplied(220, 50, 47, 130),
+                    TapHighlight::Missed => Color32::from_rgba_unmultiplied(218, 180, 20, 140),
+                    TapHighlight::Selected => Color32::from_rgba_unmultiplied(226, 222, 60, 145),
+                };
+                painter.rect_filled(r, 0, overlay);
+            }
+            if checked_king == Some(square) {
+                for level in (1..=5).rev() {
+                    painter.circle_filled(
+                        r.center(),
+                        sq * (0.17 + level as f32 * 0.055),
+                        Color32::from_rgba_unmultiplied(216, 52, 48, 24),
+                    );
+                }
+            }
+            let label_color = if dark { color(c.light) } else { color(c.dark) };
+            if (white && square.file() == shakmaty::File::A)
+                || (!white && square.file() == shakmaty::File::H)
+            {
+                painter.text(
+                    r.min + Vec2::new(4.0, 3.0),
+                    Align2::LEFT_TOP,
+                    format!("{}", u32::from(square.rank()) + 1),
+                    font.clone(),
+                    label_color,
+                );
+            }
+            if (white && square.rank() == shakmaty::Rank::First)
+                || (!white && square.rank() == shakmaty::Rank::Eighth)
+            {
+                painter.text(
+                    r.max - Vec2::new(4.0, 3.0),
+                    Align2::RIGHT_BOTTOM,
+                    format!("{}", square.file().char()),
+                    font.clone(),
+                    label_color,
+                );
+            }
+        }
+    }
+
     fn clear_annotations(&mut self) {
         self.annotations.clear();
         self.annotation_origin = None;
