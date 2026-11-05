@@ -298,15 +298,16 @@ impl Woodpeck {
             let outcome = self.game_safe.as_mut().unwrap().submit(&uci);
             match outcome {
                 SafeStatus::Cleared | SafeStatus::Blundered => {
+                    let ok = outcome == SafeStatus::Cleared;
                     let engine = self.game_engine.as_mut().unwrap();
-                    let _ = engine.play_any(&uci);
+                    let _ = engine.play_any(&uci, ok);
                     for event in engine.take_sounds() {
                         if self.screenshot.is_none() {
                             crate::sound::play(event, &self.settings);
                         }
                     }
                     self.games_board.player_moved();
-                    let toast = if outcome == SafeStatus::Cleared {
+                    let toast = if ok {
                         "Safe."
                     } else {
                         "Blunder — streak lost."
