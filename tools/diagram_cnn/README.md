@@ -61,6 +61,20 @@ needs none of this; these scripts need Python 3 with numpy, scipy, Pillow, cairo
    INIT=net4_b.pt MAXLR=1e-3 THREADS=3 python train.py 16,32,64 4 net5_b.pt val4.npz t400[1-4].npz real.npz real.npz real6.npz real6.npz
    ```
 
+
+9. Round 6 (newer book styles) fine-tunes the round 5 networks the same way, adding a
+   `real7.npz` of board crops from further privately held purchased books (scanned PDFs and
+   EPUB diagram images). Whole books stay held out for testing. Labels that disagreed with an
+   earlier gate were checked square-by-square against the cell images before being kept. The
+   acceptance thresholds are unchanged. The previous round's `diagram_cnn.bin` is kept beside
+   the new weights as `diagram_cnn_prior.bin` so inference can fall back to it when the new
+   nets abstain, which keeps per-book locate/read from dropping.
+
+   ```sh
+   INIT=net5.pt MAXLR=1e-3 THREADS=3 python train.py 12,24,48 4 net6.pt val4.npz t400[1-4].npz real.npz real.npz real6.npz real6.npz real7.npz real7.npz
+   INIT=net5_b.pt MAXLR=1e-3 THREADS=3 python train.py 16,32,64 4 net6_b.pt val4.npz t400[1-4].npz real.npz real.npz real6.npz real6.npz real7.npz real7.npz
+   ```
+
 Class 13 is "junk": a square cut by a misplaced frame. The acceptance thresholds in
 `src/books/cnn.rs` were chosen on a separate set of real diagrams, so a retrained network
 must be checked again before its thresholds are trusted.

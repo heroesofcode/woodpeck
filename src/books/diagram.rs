@@ -1191,6 +1191,27 @@ impl DiagramRecognizer for Agreeing<'_> {
     }
 }
 
+/// Prefer the primary recognizer; only ask the fallback when the primary abstains.
+/// Disagreement never arises because the fallback is not consulted after a primary hit, so a
+/// newer network can gain boards without giving up ones only the older network still reads.
+pub struct Fallback<'a> {
+    pub primary: &'a dyn DiagramRecognizer,
+    pub fallback: &'a dyn DiagramRecognizer,
+}
+
+impl DiagramRecognizer for Fallback<'_> {
+    fn placement(&self, image: &[u8]) -> Option<String> {
+        self.primary
+            .placement(image)
+            .or_else(|| self.fallback.placement(image))
+    }
+    fn reading(&self, image: &[u8]) -> Option<String> {
+        self.primary
+            .reading(image)
+            .or_else(|| self.fallback.reading(image))
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -1335,6 +1356,34 @@ mod tests {
         for (got, want) in frame.iter().zip([132, 23, 388, 279]) {
             assert!((got - want).abs() <= 3, "{frame:?}");
         }
+    }
+
+    #[test]
+    fn fallback_uses_second_only_when_first_abstains() {
+        assert_eq!(
+            Fallback {
+                primary: &Fixed(Some("new")),
+                fallback: &Fixed(Some("old")),
+            }
+            .placement(&[]),
+            Some("new".into())
+        );
+        assert_eq!(
+            Fallback {
+                primary: &Fixed(None),
+                fallback: &Fixed(Some("old")),
+            }
+            .placement(&[]),
+            Some("old".into())
+        );
+        assert_eq!(
+            Fallback {
+                primary: &Fixed(None),
+                fallback: &Fixed(None),
+            }
+            .placement(&[]),
+            None
+        );
     }
 
     #[test]
