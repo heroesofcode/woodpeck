@@ -17,66 +17,72 @@ impl Woodpeck {
             "Short drills for vision and feel",
             "Pick a drill. They work the same on desktop and on your phone.",
         );
-        // widgets::card adds 2×20 inner margin (+ stroke). Size columns to the
-        // available width so a 2×2 grid never overflows the content pane.
-        let avail = ui.available_width();
-        let cols = if avail >= 2.0 * (200.0 + CARD_INSET) + GAP {
-            2
-        } else {
-            1
-        };
-        let col = ((avail - GAP * (cols as f32 - 1.0)) / cols as f32)
-            .floor()
-            .max(1.0);
-        let inner = (col - CARD_INSET).max(120.0);
-        egui::Grid::new("games-catalog")
-            .num_columns(cols)
-            .spacing([GAP, GAP])
-            .min_col_width(col)
-            .max_col_width(col)
-            .show(ui, |ui| {
-                for (index, game) in games::CATALOG.iter().enumerate() {
-                    self.game_card(ui, game, inner);
-                    if cols == 1 || index % 2 == 1 {
-                        ui.end_row();
-                    }
-                }
-            });
-    }
-
-    fn game_card(&mut self, ui: &mut Ui, game: &games::GameInfo, width: f32) {
-        widgets::card(ui)
-            .fill(
-                ui.visuals()
-                    .widgets
-                    .noninteractive
-                    .bg_fill
-                    .gamma_multiply(if game.available { 1.0 } else { 0.7 }),
-            )
-            .show(ui, |ui| {
-                ui.set_width(width.max(0.0));
-                ui.label(RichText::new(game.title).strong().size(20.0));
-                ui.add_space(4.0);
-                ui.label(game.blurb);
-                ui.add_space(10.0);
-                if game.available {
-                    if widgets::primary(ui, "Play").clicked() {
-                        match game.id {
-                            "board-scan" => self.start_board_scan(DrillMode::HangingPieces),
-                            "safe-move" => self.start_safe_move(),
-                            "blind-line" => self.start_blind_line(),
-                            "human-move" => self.start_human_move(),
-                            _ => {}
-                        }
-                    }
-                } else {
-                    ui.label(
-                        RichText::new("Coming in the next update")
-                            .italics()
-                            .color(ui.visuals().weak_text_color()),
+        let columns = if ui.available_width() >= 600.0 { 2 } else { 1 };
+        let width = ((ui.available_width() - GAP * (columns - 1) as f32) / columns as f32).floor();
+        for row in games::CATALOG.chunks(columns) {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                for game in row {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(width, 208.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| self.game_card(ui, game, width),
                     );
                 }
             });
+            ui.add_space(GAP);
+        }
+    }
+
+    fn game_card(&mut self, ui: &mut Ui, game: &games::GameInfo, width: f32) {
+        let frame = widgets::card(ui).inner_margin(16);
+        let inner = (width - frame.total_margin().sum().x).max(0.0);
+        frame.show(ui, |ui| {
+            ui.set_width(inner);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+            widgets::caption(
+                ui,
+                if game.available {
+                    "READY TO PLAY"
+                } else {
+                    "COMING SOON"
+                },
+            );
+            ui.add_space(6.0);
+            ui.label(RichText::new(game.title).strong().size(22.0));
+            ui.add_space(4.0);
+            ui.allocate_ui(egui::vec2(inner, 64.0), |ui| {
+                ui.set_min_height(64.0);
+                ui.label(game.blurb);
+            });
+            ui.add_space(10.0);
+            let play = ui.add_enabled(
+                game.available,
+                egui::Button::new(
+                    RichText::new(if game.available {
+                        "Play  >"
+                    } else {
+                        "Coming soon"
+                    })
+                    .strong(),
+                )
+                .fill(if game.available {
+                    ui.visuals().selection.bg_fill
+                } else {
+                    ui.visuals().faint_bg_color
+                })
+                .min_size(egui::vec2(inner, 44.0)),
+            );
+            if play.clicked() {
+                match game.id {
+                    "board-scan" => self.start_board_scan(DrillMode::HangingPieces),
+                    "safe-move" => self.start_safe_move(),
+                    "blind-line" => self.start_blind_line(),
+                    "human-move" => self.start_human_move(),
+                    _ => {}
+                }
+            }
+        });
     }
 
     pub(in crate::app) fn start_board_scan(&mut self, mode: DrillMode) {
@@ -650,8 +656,6 @@ impl Woodpeck {
     }
 }
 
-/// Card frame inset (2×20 inner margin + stroke) reserved when sizing hub columns.
-const CARD_INSET: f32 = 42.0;
 const GAP: f32 = 12.0;
 const BOARD_ACTION_RESERVE: f32 = 72.0;
 
