@@ -29,6 +29,7 @@ pub const MIN_ROYAL_PROBABILITY: f32 = 0.99;
 
 static BUILTIN: std::sync::OnceLock<Option<Cnn>> = std::sync::OnceLock::new();
 static BUILTIN_PRIOR: std::sync::OnceLock<Option<Cnn>> = std::sync::OnceLock::new();
+static BUILTIN_HATCH: std::sync::OnceLock<Option<Cnn>> = std::sync::OnceLock::new();
 
 /// The networks bundled with the application (latest training round).
 pub fn builtin() -> Option<&'static Cnn> {
@@ -41,6 +42,14 @@ pub fn builtin() -> Option<&'static Cnn> {
 pub fn builtin_prior() -> Option<&'static Cnn> {
     BUILTIN_PRIOR
         .get_or_init(|| Cnn::decode(include_bytes!("diagram_cnn_prior.bin")))
+        .as_ref()
+}
+
+/// Networks fine-tuned for hatched dark squares, asked only when both [`builtin`] and
+/// [`builtin_prior`] abstain.
+pub fn builtin_hatch() -> Option<&'static Cnn> {
+    BUILTIN_HATCH
+        .get_or_init(|| Cnn::decode(include_bytes!("diagram_cnn_hatch.bin")))
         .as_ref()
 }
 
@@ -384,6 +393,8 @@ mod tests {
         assert_eq!(cnn.networks.len(), 2);
         let prior = builtin_prior().expect("prior networks");
         assert_eq!(prior.networks.len(), 2);
+        let hatch = builtin_hatch().expect("hatch networks");
+        assert_eq!(hatch.networks.len(), 2);
         assert!(cnn.networks.iter().all(|n| n.out.output == CLASSES));
         assert!(Cnn::decode(b"WPCN").is_none());
         let mut truncated = include_bytes!("diagram_cnn.bin").to_vec();
