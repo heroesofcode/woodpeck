@@ -130,6 +130,9 @@ impl Renderer {
                     bytes = diagram::with_side(&bytes, white);
                 }
                 Some(Placed {
+                    left,
+                    bottom: low,
+                    right: left + side,
                     top,
                     area: side * side,
                     bytes,

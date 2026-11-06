@@ -607,6 +607,24 @@ pub fn stated_side(bytes: &[u8]) -> Option<bool> {
     }
 }
 
+/// Key of the PNG text chunk holding a side read from a printed caption beside one diagram.
+const CAPTION_SIDE_KEY: &[u8] = b"woodpeck-caption-side";
+
+/// A PNG with a caption side stored beside the pixels. This is not a printed marker: the
+/// resolver may use it only while the side is still unknown.
+pub fn with_caption_side(png: &[u8], white: bool) -> Vec<u8> {
+    with_text(png, CAPTION_SIDE_KEY, if white { "w" } else { "b" })
+}
+
+/// The side stored by [`with_caption_side`]: `Some(true)` for White to move.
+pub fn stated_caption_side(bytes: &[u8]) -> Option<bool> {
+    match text_chunk(bytes, CAPTION_SIDE_KEY)?.as_slice() {
+        b"w" => Some(true),
+        b"b" => Some(false),
+        _ => None,
+    }
+}
+
 fn with_text(png: &[u8], key: &[u8], value: &str) -> Vec<u8> {
     const HEADER: usize = 8 + 25;
     if png.len() < HEADER || !png.starts_with(b"\x89PNG\r\n\x1a\n") || &png[12..16] != b"IHDR" {
@@ -1580,6 +1598,10 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         assert_eq!(stated_side(&png), None);
+        assert_eq!(stated_caption_side(&png), None);
+        let captioned = with_caption_side(&png, true);
+        assert_eq!(stated_caption_side(&captioned), Some(true));
+        assert_eq!(stated_side(&captioned), None);
         let both = with_side(&with_placement(&png, "8/8/8/8/8/8/8/K6k"), false);
         assert_eq!(stated_side(&both), Some(false));
         assert_eq!(

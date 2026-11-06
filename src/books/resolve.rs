@@ -344,6 +344,17 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
         .iter()
         .filter_map(|a| Some((a.path.clone(), super::diagram::stated_side(&a.bytes)?)))
         .collect();
+    // Caption sides are a separate channel from printed markers: they never demote a side
+    // something else already confirmed.
+    let caption_sides: HashMap<String, bool> = assets
+        .iter()
+        .filter_map(|a| {
+            Some((
+                a.path.clone(),
+                super::diagram::stated_caption_side(&a.bytes)?,
+            ))
+        })
+        .collect();
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let mut best = None;
     for (name, alphabet) in notation::ALPHABETS {
@@ -354,6 +365,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             &placements,
             &readings,
             &markers,
+            &caption_sides,
         );
         if best
             .as_ref()
@@ -374,8 +386,10 @@ fn resolve_with(
     placements: &HashMap<String, Option<String>>,
     readings: &HashMap<String, String>,
     markers: &HashMap<String, bool>,
+    caption_sides: &HashMap<String, bool>,
 ) -> Book {
-    let (recognized, unconfirmed) = recognized_positions(&document, alphabet, placements, markers);
+    let (recognized, unconfirmed) =
+        recognized_positions(&document, alphabet, placements, markers, caption_sides);
     let mut book = Book {
         version: 1,
         document: document.clone(),
@@ -1003,6 +1017,7 @@ fn recognized_positions(
     alphabet: &str,
     placements: &HashMap<String, Option<String>>,
     markers: &HashMap<String, bool>,
+    caption_sides: &HashMap<String, bool>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
@@ -1025,6 +1040,10 @@ fn recognized_positions(
             let image = matches!(block.kind, BlockKind::Image { .. });
             let marker = match &block.kind {
                 BlockKind::Image { path, .. } => markers.get(path).copied(),
+                _ => None,
+            };
+            let caption = match &block.kind {
+                BlockKind::Image { path, .. } => caption_sides.get(path).copied(),
                 _ => None,
             };
             let before = before_image(page, b);
@@ -1054,7 +1073,19 @@ fn recognized_positions(
             {
                 turn = placed(&placement, side).map_or(Turn::Unknown, Turn::Confirmed);
             }
-            match with_marker(turn, marker, &placement) {
+            // A printed caption bound to this diagram by page geometry. It fills a side nothing
+            // else named, and it does not demote a marker, a move, or a check that already did.
+            turn = with_marker(turn, marker, &placement);
+            if matches!(turn, Turn::Unknown)
+                && marker.is_none()
+                && let Some(white) = caption
+            {
+                let side = if white { Color::White } else { Color::Black };
+                if let Some(pos) = placed(&placement, side) {
+                    turn = Turn::Confirmed(pos);
+                }
+            }
+            match turn {
                 Turn::Confirmed(pos) => {
                     out.insert((p, b), pos);
                 }
@@ -1308,7 +1339,7 @@ fn lead_in_turn(text: &str) -> Option<Color> {
     caption_turn(&tail[start..])
 }
 /// The side a short caption names, accepting caption-only forms such as "24) White moves".
-fn caption_turn(text: &str) -> Option<Color> {
+pub(crate) fn caption_turn(text: &str) -> Option<Color> {
     stated_turn(text).or_else(|| {
         if text.chars().count() > 60 {
             return None;
@@ -2086,6 +2117,96 @@ mod image_tests {
         );
         // Moves after it are never played from an assumed side.
         assert!(book.nodes.is_empty());
+    }
+    fn tiny_png() -> Vec<u8> {
+        let image = image::GrayImage::from_raw(1, 1, vec![0]).expect("pixel");
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("png");
+        png
+    }
+    fn shown_bytes(
+        bytes: Vec<u8>,
+        placement: &'static str,
+        alt: &str,
+        texts: &[&str],
+    ) -> BlockKind {
+        let mut page = Page::default();
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: alt.into(),
+            },
+        );
+        for text in texts {
+            page.push(text, BlockKind::Paragraph);
+        }
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes,
+            }],
+        };
+        resolve_using(document, Some(&Fixed(placement)))
+            .document
+            .pages[0]
+            .blocks[0]
+            .kind
+            .clone()
+    }
+    #[test]
+    fn a_geometry_caption_confirms_only_an_unknown_side() {
+        let png = tiny_png();
+        let black = crate::books::diagram::with_caption_side(&png, false);
+        // The alt already names White. A caption that says Black must not replace it.
+        let kind = shown_bytes(black.clone(), PLACEMENT, "White to play", &[]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // Nothing else names the side, so the caption does.
+        let kind = shown_bytes(black, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // A printed marker stays in force when the caption disagrees.
+        let marked = crate::books::diagram::with_caption_side(
+            &crate::books::diagram::with_side(&png, true),
+            false,
+        );
+        let kind = shown_bytes(marked, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // Text that contradicts itself stays unread. The caption does not rescue it.
+        let kind = shown_bytes(
+            crate::books::diagram::with_caption_side(&png, true),
+            PLACEMENT,
+            "Black to play",
+            &["1. Ra8+"],
+        );
+        assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
+        // Check already names Black. A White caption must not replace it.
+        let kind = shown_bytes(
+            crate::books::diagram::with_caption_side(&png, true),
+            "4k3/8/8/8/8/8/8/K3R3",
+            "",
+            &[],
+        );
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
     }
     #[test]
     fn a_contradicted_side_keeps_the_image_unread() {

@@ -7,6 +7,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 use thiserror::Error;
+mod caption;
 mod fontboard;
 mod pdf;
 mod picture;
@@ -27,18 +28,31 @@ pub trait PageSource {
     fn document(&self, path: &Path) -> Result<Document, ImportError>;
 }
 pub struct TextImporter;
+
+fn stamp_pdf_sides(path: &Path, extracted: &mut pdf::Extracted) {
+    pdf::stamp_pdftotext_sides(
+        path,
+        &extracted.pages,
+        &mut extracted.pictures,
+        extracted.cover.as_deref(),
+    );
+    // Geometry captions fill sides the text cascade still leaves unknown. A printed
+    // marker stamped above is left untouched.
+    caption::stamp_geometry_captions(
+        path,
+        &extracted.pages,
+        &mut extracted.pictures,
+        extracted.cover.as_deref(),
+    );
+}
+
 impl PageSource for TextImporter {
     fn document(&self, path: &Path) -> Result<Document, ImportError> {
         let bytes = std::fs::read(path)?;
         if bytes.starts_with(b"%PDF-") {
             let mut extracted =
                 pdf::extract(&bytes).map_err(|e| ImportError::Invalid(e.to_string()))?;
-            pdf::stamp_pdftotext_sides(
-                path,
-                &extracted.pages,
-                &mut extracted.pictures,
-                extracted.cover.as_deref(),
-            );
+            stamp_pdf_sides(path, &mut extracted);
             let texts = &extracted.pages;
             if texts.is_empty()
                 || texts
@@ -815,6 +829,7 @@ mod tests {
             y,
             cells: 1,
             x: 0.0,
+            end: 0.0,
         }
     }
     fn blocks(page: &Page) -> Vec<(BlockKind, u8, &str)> {
