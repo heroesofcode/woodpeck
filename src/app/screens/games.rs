@@ -64,7 +64,12 @@ impl Woodpeck {
                     } else {
                         "Coming soon"
                     })
-                    .strong(),
+                    .strong()
+                    .color(if game.available {
+                        egui::Color32::from_rgb(20, 28, 19)
+                    } else {
+                        ui.visuals().weak_text_color()
+                    }),
                 )
                 .fill(if game.available {
                     ui.visuals().selection.bg_fill
@@ -85,12 +90,19 @@ impl Woodpeck {
         });
     }
 
+    fn game_seed(&self) -> u64 {
+        if self.screenshot.is_some() {
+            1
+        } else {
+            self.origin
+                .elapsed()
+                .as_millis()
+                .wrapping_add(u128::from(self.frames)) as u64
+        }
+    }
+
     pub(in crate::app) fn start_board_scan(&mut self, mode: DrillMode) {
-        let seed = self
-            .origin
-            .elapsed()
-            .as_millis()
-            .wrapping_add(u128::from(self.frames)) as u64;
+        let seed = self.game_seed();
         let mut session = VisionSession::start(mode, seed.max(1));
         let now = self.now();
         let limit = session.round.time_left(Duration::ZERO);
@@ -102,7 +114,7 @@ impl Woodpeck {
 
     pub(in crate::app) fn board_scan_screen(&mut self, ui: &mut Ui) {
         let narrow = ui.available_width() < 640.0;
-        self.board_scan_header(ui, narrow);
+        self.board_scan_header(ui);
         if self.game_vision.is_none() {
             ui.label("Starting…");
             return;
@@ -112,31 +124,36 @@ impl Woodpeck {
             session.tick(now);
         }
         self.board_scan_stats(ui, narrow);
-        self.board_scan_board(ui, narrow);
+        self.board_scan_board(ui);
         self.board_scan_footer(ui);
     }
 
-    fn board_scan_header(&mut self, ui: &mut Ui, narrow: bool) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("< Games").clicked() {
-                self.game_vision = None;
-                self.navigate(Screen::Games);
-            }
-            ui.label(
-                RichText::new("Board scan")
-                    .strong()
-                    .size(if narrow { 18.0 } else { 22.0 }),
-            );
+    fn board_scan_header(&mut self, ui: &mut Ui) {
+        if game_header(ui, "Board scan") {
+            self.game_vision = None;
+            self.game_engine = None;
+            self.toast = None;
+            self.navigate(Screen::Games);
+            return;
+        }
+        let mut mode = self
+            .game_vision
+            .as_ref()
+            .map_or(DrillMode::HangingPieces, |s| s.mode);
+        let previous = mode;
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = 36.0;
+            egui::ComboBox::from_id_salt("scan-mode")
+                .selected_text(mode.label())
+                .show_ui(ui, |ui| {
+                    for choice in DrillMode::ALL {
+                        ui.selectable_value(&mut mode, choice, choice.label());
+                    }
+                });
         });
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            for mode in DrillMode::ALL {
-                let selected = self.game_vision.as_ref().is_some_and(|s| s.mode == mode);
-                if ui.selectable_label(selected, mode.label()).clicked() && !selected {
-                    self.start_board_scan(mode);
-                }
-            }
-        });
+        if mode != previous {
+            self.start_board_scan(mode);
+        }
         ui.add_space(8.0);
     }
 
@@ -157,9 +174,18 @@ impl Woodpeck {
             ui.separator();
             ui.label(format!("Left {}", session.round.remaining_targets()));
             ui.separator();
-            let timer = RichText::new(format!("{secs}s")).strong();
+            let timer = RichText::new(if session.round.status == VisionStatus::Playing {
+                format!("{secs}s left")
+            } else {
+                "Round over".into()
+            })
+            .strong();
             ui.label(if session.round.status == VisionStatus::Playing {
-                timer
+                timer.color(if secs <= 5 {
+                    style::color(self.palette.semantic().incorrect)
+                } else {
+                    ui.visuals().text_color()
+                })
             } else {
                 timer.color(accent)
             });
@@ -167,11 +193,11 @@ impl Woodpeck {
         ui.add_space(8.0);
     }
 
-    fn board_scan_board(&mut self, ui: &mut Ui, narrow: bool) {
+    fn board_scan_board(&mut self, ui: &mut Ui) {
         let Some(session) = self.game_vision.as_ref() else {
             return;
         };
-        let board_budget = game_board_size(ui, narrow);
+        let board_budget = game_board_size(ui);
         let position = session.round.position();
         let white_bottom = session.round.white_bottom;
         let tap_highlights: Vec<(Square, TapHighlight)> = session
@@ -196,7 +222,10 @@ impl Woodpeck {
         if let Some(square) = tapped {
             let outcome = self.game_vision.as_mut().unwrap().tap(square);
             if outcome == VisionOutcome::Miss {
-                self.toast = Some(("Not a target.".into(), web_time::Instant::now()));
+                self.toast = Some((
+                    "Not a target — streak reset. Keep scanning.".into(),
+                    web_time::Instant::now(),
+                ));
             }
         }
         ui.add_space(10.0);
@@ -208,23 +237,22 @@ impl Woodpeck {
         };
         match status {
             VisionStatus::Playing => {
-                ui.label("Tap each matching piece. Empty squares are ignored.");
+                ui.label("Scan both colors. A wrong tap resets your streak.");
                 ui.ctx().request_repaint_after(Duration::from_millis(100));
             }
             VisionStatus::Cleared => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Clear!").strong());
-                    if widgets::primary(ui, "Next board").clicked() {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("Board cleared. Nice scan!").strong());
+                    if next_button(ui, "Next board") {
                         let now = self.now();
                         self.game_vision.as_mut().unwrap().next_round(now);
                     }
                 });
-                ui.ctx().request_repaint_after(Duration::from_millis(16));
             }
             VisionStatus::TimedOut => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Time's up. Missed targets are marked in yellow.");
-                    if widgets::primary(ui, "Try another").clicked() {
+                ui.vertical(|ui| {
+                    ui.label("Time’s up. Yellow marks the missed targets.");
+                    if next_button(ui, "Try another") {
                         let now = self.now();
                         self.game_vision.as_mut().unwrap().next_round(now);
                     }
@@ -234,11 +262,7 @@ impl Woodpeck {
     }
 
     pub(in crate::app) fn start_safe_move(&mut self) {
-        let seed = self
-            .origin
-            .elapsed()
-            .as_millis()
-            .wrapping_add(u128::from(self.frames)) as u64;
+        let seed = self.game_seed();
         let session = SafeSession::start(seed.max(1));
         let engine = Engine::sandbox(session.round.position());
         self.game_safe = Some(session);
@@ -249,19 +273,13 @@ impl Woodpeck {
 
     pub(in crate::app) fn safe_move_screen(&mut self, ui: &mut Ui) {
         let narrow = ui.available_width() < 640.0;
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("< Games").clicked() {
-                self.game_safe = None;
-                self.game_engine = None;
-                self.navigate(Screen::Games);
-            }
-            ui.label(
-                RichText::new("Safe move")
-                    .strong()
-                    .size(if narrow { 18.0 } else { 22.0 }),
-            );
-        });
-        ui.add_space(8.0);
+        if game_header(ui, "Safe move") {
+            self.game_safe = None;
+            self.game_engine = None;
+            self.toast = None;
+            self.navigate(Screen::Games);
+            return;
+        }
         if self.game_safe.is_none() || self.game_engine.is_none() {
             ui.label("Starting…");
             return;
@@ -284,7 +302,7 @@ impl Woodpeck {
         });
         ui.add_space(8.0);
 
-        let board_budget = game_board_size(ui, narrow);
+        let board_budget = game_board_size(ui);
         let theme = self.settings.board_theme;
         let rendering = self.settings.piece_rendering;
         let played = {
@@ -331,7 +349,7 @@ impl Woodpeck {
                 } else {
                     "Try another"
                 };
-                if widgets::primary(ui, label).clicked() {
+                if next_button(ui, label) {
                     self.game_safe.as_mut().unwrap().next_round();
                     let position = self.game_safe.as_ref().unwrap().round.position();
                     self.game_engine = Some(Engine::sandbox(position));
@@ -342,11 +360,7 @@ impl Woodpeck {
     }
 
     pub(in crate::app) fn start_blind_line(&mut self) {
-        let seed = self
-            .origin
-            .elapsed()
-            .as_millis()
-            .wrapping_add(u128::from(self.frames)) as u64;
+        let seed = self.game_seed();
         let now = self.now();
         let session = BlindSession::start(seed.max(1), now);
         let engine = Engine::sandbox(session.round.start_position());
@@ -359,19 +373,13 @@ impl Woodpeck {
     #[allow(clippy::too_many_lines)]
     pub(in crate::app) fn blind_line_screen(&mut self, ui: &mut Ui) {
         let narrow = ui.available_width() < 640.0;
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("< Games").clicked() {
-                self.game_blind = None;
-                self.game_engine = None;
-                self.navigate(Screen::Games);
-            }
-            ui.label(
-                RichText::new("Blind line")
-                    .strong()
-                    .size(if narrow { 18.0 } else { 22.0 }),
-            );
-        });
-        ui.add_space(8.0);
+        if game_header(ui, "Blind line") {
+            self.game_blind = None;
+            self.game_engine = None;
+            self.toast = None;
+            self.navigate(Screen::Games);
+            return;
+        }
         if self.game_blind.is_none() || self.game_engine.is_none() {
             ui.label("Starting…");
             return;
@@ -439,7 +447,7 @@ impl Woodpeck {
         });
         ui.add_space(8.0);
 
-        let board_budget = game_board_size(ui, narrow);
+        let board_budget = game_board_size(ui);
         let theme = self.settings.board_theme;
         let rendering = self.settings.piece_rendering;
 
@@ -530,7 +538,7 @@ impl Woodpeck {
                 } else {
                     "Try another"
                 };
-                if widgets::primary(ui, label).clicked() {
+                if next_button(ui, label) {
                     let now = self.now();
                     self.game_blind.as_mut().unwrap().next_round(now);
                     let position = self.game_blind.as_ref().unwrap().round.start_position();
@@ -542,11 +550,7 @@ impl Woodpeck {
     }
 
     pub(in crate::app) fn start_human_move(&mut self) {
-        let seed = self
-            .origin
-            .elapsed()
-            .as_millis()
-            .wrapping_add(u128::from(self.frames)) as u64;
+        let seed = self.game_seed();
         let session = HumanSession::start(seed.max(1));
         let engine = Engine::sandbox(session.round.position());
         self.game_human = Some(session);
@@ -558,19 +562,13 @@ impl Woodpeck {
     #[allow(clippy::too_many_lines)]
     pub(in crate::app) fn human_move_screen(&mut self, ui: &mut Ui) {
         let narrow = ui.available_width() < 640.0;
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("< Games").clicked() {
-                self.game_human = None;
-                self.game_engine = None;
-                self.navigate(Screen::Games);
-            }
-            ui.label(
-                RichText::new("Human move")
-                    .strong()
-                    .size(if narrow { 18.0 } else { 22.0 }),
-            );
-        });
-        ui.add_space(8.0);
+        if game_header(ui, "Human move") {
+            self.game_human = None;
+            self.game_engine = None;
+            self.toast = None;
+            self.navigate(Screen::Games);
+            return;
+        }
         if self.game_human.is_none() || self.game_engine.is_none() {
             ui.label("Starting…");
             return;
@@ -596,7 +594,7 @@ impl Woodpeck {
         });
         ui.add_space(8.0);
 
-        let board_budget = game_board_size(ui, narrow);
+        let board_budget = game_board_size(ui);
         let theme = self.settings.board_theme;
         let rendering = self.settings.piece_rendering;
         let played = {
@@ -645,7 +643,7 @@ impl Woodpeck {
                 } else {
                     "Try another"
                 };
-                if widgets::primary(ui, label).clicked() {
+                if next_button(ui, label) {
                     self.game_human.as_mut().unwrap().next_round();
                     let position = self.game_human.as_ref().unwrap().round.position();
                     self.game_engine = Some(Engine::sandbox(position));
@@ -657,7 +655,7 @@ impl Woodpeck {
 }
 
 const GAP: f32 = 12.0;
-const BOARD_ACTION_RESERVE: f32 = 72.0;
+const BOARD_ACTION_RESERVE: f32 = 104.0;
 
 fn tap_highlight(h: Highlight) -> TapHighlight {
     match h {
@@ -670,16 +668,36 @@ fn tap_highlight(h: Highlight) -> TapHighlight {
 
 /// Square board that fills the content width on phone, stays capped on desktop,
 /// and leaves room for the primary action when height is scarce.
-fn game_board_size(ui: &Ui, narrow: bool) -> f32 {
-    let width = ui.available_width();
-    // Always leave room for Next / Try another under the board (play screens are
-    // no longer inside a ScrollArea).
-    let height = (ui.available_height() - BOARD_ACTION_RESERVE).max(160.0);
-    if narrow {
-        width.min(height)
-    } else {
-        height.min(width * 0.62).min(560.0).min(width).max(0.0)
-    }
+fn game_board_size(ui: &Ui) -> f32 {
+    ui.available_width()
+        .min((ui.available_height() - BOARD_ACTION_RESERVE).max(0.0))
+        .min(560.0)
+}
+
+fn game_header(ui: &mut Ui, title: &str) -> bool {
+    ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
+    let mut back = false;
+    ui.horizontal_wrapped(|ui| {
+        back = ui
+            .add_sized([88.0, 40.0], egui::Button::new("< Games"))
+            .clicked();
+        ui.label(RichText::new(title).strong().size(22.0));
+    });
+    ui.add_space(8.0);
+    back || game_key(ui, egui::Key::Escape)
+}
+
+fn game_key(ui: &Ui, key: egui::Key) -> bool {
+    !ui.ctx().egui_wants_keyboard_input()
+        && !egui::Popup::is_any_open(ui.ctx())
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key))
+}
+
+fn next_button(ui: &mut Ui, label: &str) -> bool {
+    widgets::primary(ui, label)
+        .on_hover_text("Enter to continue")
+        .clicked()
+        || game_key(ui, egui::Key::Enter)
 }
 
 fn with_centered_board<R>(ui: &mut Ui, size: f32, add: impl FnOnce(&mut Ui, f32) -> R) -> R {
