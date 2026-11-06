@@ -280,6 +280,13 @@ impl Woodpeck {
         app.refresh_books(matches!(screen, Screen::Reader));
         if app.screenshot.is_some() {
             demo::welcome(&mut app, screen);
+            match screen {
+                Screen::BoardScan => app.start_board_scan(crate::games::DrillMode::HangingPieces),
+                Screen::SafeMove => app.start_safe_move(),
+                Screen::BlindLine => app.start_blind_line(),
+                Screen::HumanMove => app.start_human_move(),
+                _ => {}
+            }
         }
         if matches!(screen, Screen::Training | Screen::TrainingSolved) {
             app.resume_selected();

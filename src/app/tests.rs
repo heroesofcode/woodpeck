@@ -1131,3 +1131,99 @@ fn reader_frame_measurements() {
         }
     }
 }
+
+#[test]
+fn games_fit_phone_and_desktop_in_play_and_results() {
+    let ctx = egui::Context::default();
+    let mut app = Woodpeck::new(
+        &ctx,
+        demo::service().unwrap(),
+        PathBuf::from("/tmp/demo.db"),
+        None,
+    );
+    settle(&mut app);
+    for (width, height) in [
+        (360.0, 640.0),
+        (640.0, 480.0),
+        (768.0, 800.0),
+        (1280.0, 820.0),
+    ] {
+        for screen in [
+            Screen::Games,
+            Screen::BoardScan,
+            Screen::SafeMove,
+            Screen::BlindLine,
+            Screen::HumanMove,
+        ] {
+            match screen {
+                Screen::BoardScan => app.start_board_scan(crate::games::DrillMode::HangingPieces),
+                Screen::SafeMove => app.start_safe_move(),
+                Screen::BlindLine => app.start_blind_line(),
+                Screen::HumanMove => app.start_human_move(),
+                _ => app.navigate(screen),
+            }
+            for result in [false, true] {
+                if result {
+                    if let Some(s) = app.game_vision.as_mut() {
+                        s.round.status = crate::games::VisionStatus::TimedOut;
+                    }
+                    if let Some(s) = app.game_safe.as_mut() {
+                        s.round.status = crate::games::SafeStatus::Blundered;
+                    }
+                    if let Some(s) = app.game_blind.as_mut() {
+                        s.round.phase = crate::games::BlindPhase::Missed;
+                    }
+                    if let Some(s) = app.game_human.as_mut() {
+                        s.round.status = crate::games::HumanStatus::Missed;
+                    }
+                }
+                for _ in 0..3 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, height),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            egui::CentralPanel::default()
+                                .frame(egui::Frame::new().inner_margin(14))
+                                .show(ui, |ui| {
+                                    // Leave the same space as the phone navigation bar.
+                                    ui.set_max_height(ui.available_height() - 60.0);
+                                    let bounds = ui.max_rect();
+                                    match screen {
+                                        Screen::Games => {
+                                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                                app.games_hub(ui);
+                                                assert!(
+                                                    ui.min_rect().right() <= bounds.right() + 1.0,
+                                                    "hub overflow at {width}"
+                                                );
+                                            });
+                                        }
+                                        Screen::BoardScan => app.board_scan_screen(ui),
+                                        Screen::SafeMove => app.safe_move_screen(ui),
+                                        Screen::BlindLine => app.blind_line_screen(ui),
+                                        Screen::HumanMove => app.human_move_screen(ui),
+                                        _ => unreachable!(),
+                                    }
+                                    assert!(
+                                        ui.min_rect().right() <= bounds.right() + 1.0,
+                                        "{screen:?} width {width}"
+                                    );
+                                    assert!(
+                                        ui.min_rect().bottom() <= bounds.bottom() + 1.0,
+                                        "{screen:?} height {height}: {:?} vs {bounds:?}",
+                                        ui.min_rect()
+                                    );
+                                });
+                        },
+                    );
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
+}
