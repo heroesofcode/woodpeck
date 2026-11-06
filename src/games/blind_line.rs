@@ -4,7 +4,7 @@ use std::time::Duration;
 
 const PREVIEW_STEP: Duration = Duration::from_millis(700);
 const CONCEAL_FOR: Duration = Duration::from_millis(900);
-const FIRST_DELAY: Duration = Duration::from_millis(500);
+const FIRST_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TickEvent {
@@ -67,6 +67,14 @@ impl Round {
             deadline: now.saturating_add(FIRST_DELAY),
             last_move: None,
         })
+    }
+
+    /// Replay the same cue and preview without changing the session score.
+    pub fn replay(&mut self, now: Duration) {
+        self.phase = Phase::Watching;
+        self.step = 0;
+        self.deadline = now.saturating_add(FIRST_DELAY);
+        self.last_move = None;
     }
 
     pub fn start_position(&self) -> Chess {
