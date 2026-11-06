@@ -38,19 +38,19 @@ pub const CATALOG: &[GameInfo] = &[
     GameInfo {
         id: "safe-move",
         title: "Safe move",
-        blurb: "Play any solid move. The streak ends only when you blunder.",
+        blurb: "Keep your pieces safe. Make a move without leaving more material hanging.",
         available: true,
     },
     GameInfo {
         id: "blind-line",
         title: "Blind line",
-        blurb: "Watch a few moves, keep them in your head, then find the next one.",
+        blurb: "Remember the cued move, watch a short line, then play it from memory.",
         available: true,
     },
     GameInfo {
         id: "human-move",
         title: "Human move",
-        blurb: "Choose the move a player at your rating would actually make.",
+        blurb: "Find a natural move from curated positions. Compare your choice and learn.",
         available: true,
     },
 ];
