@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.8.0](https://github.com/heroesofcode/woodpeck/compare/v0.7.0...v0.8.0) (2026-11-06)
+
+
+### Features
+
+* **books:** add hatch-tuned classifier as third fallback ([a398dda](https://github.com/heroesofcode/woodpeck/commit/a398dda16bfdd99d215f028c2a0c4615e56d5444))
+
+
+### Bug fixes
+
+* **games:** align desktop controls and reclaim phone board space ([3d86863](https://github.com/heroesofcode/woodpeck/commit/3d86863c0984f6c918a83121938391ba8f8524b2))
+* **games:** constrain picker cards to responsive rows ([a6711af](https://github.com/heroesofcode/woodpeck/commit/a6711af2da27c313d7e74bf6950423c945954dc7))
+* **games:** explain safe moves and make blind line recall playable ([539b25f](https://github.com/heroesofcode/woodpeck/commit/539b25f3bb7cbe2d5d5047144599c8f594ff5c3c))
+* **games:** fit drill boards and clarify board scan feedback ([77a7b0e](https://github.com/heroesofcode/woodpeck/commit/77a7b0e3309dddb99c30241585a6f566a8a81124))
+* **games:** keep feedback inline and cover keyboard round loops ([e0e3b03](https://github.com/heroesofcode/woodpeck/commit/e0e3b03f058fb1dfac872a37bd2635f8f4eaf5a4))
+* **games:** reset round feedback and verify memory replay ([513b918](https://github.com/heroesofcode/woodpeck/commit/513b9187fe5e33e5bfec9de946bb4d8192cddcb9))
+* **games:** show human move choices and honest drill guidance ([c3d9d4e](https://github.com/heroesofcode/woodpeck/commit/c3d9d4e08abf396f3d18bdff2215a1a9028127c8))
+
 ## [0.7.0](https://github.com/heroesofcode/woodpeck/compare/v0.6.0...v0.7.0) (2026-11-05)
 
 
