@@ -614,11 +614,8 @@ impl Woodpeck {
             (s.score, s.streak, s.best_streak, s.round.status)
         };
         ui.label(
-            RichText::new("Play the natural move a club player would pick.").size(if narrow {
-                14.0
-            } else {
-                15.0
-            }),
+            RichText::new("Find a natural move from this position’s curated choices.")
+                .size(if narrow { 14.0 } else { 15.0 }),
         );
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
@@ -659,7 +656,7 @@ impl Woodpeck {
                         if ok {
                             "Natural.".into()
                         } else {
-                            "Not the human move — streak lost.".into()
+                            "Not one of this drill’s choices. See the suggested moves.".into()
                         },
                         web_time::Instant::now(),
                     ));
@@ -671,9 +668,19 @@ impl Woodpeck {
         let status = self.game_human.as_ref().unwrap().round.status;
         match status {
             HumanStatus::Playing => {
-                ui.label("Drag or tap. Same controls on desktop and phone.");
+                ui.label(turn_hint(
+                    &self.game_human.as_ref().unwrap().round.position(),
+                ));
             }
             HumanStatus::Cleared | HumanStatus::Missed => {
+                let round = &self.game_human.as_ref().unwrap().round;
+                let choices = move_names(&round.position(), round.answers.iter());
+                let message = if status == HumanStatus::Cleared {
+                    format!("Matched! Natural choices: {choices}.")
+                } else {
+                    format!("Try {choices}. Other moves may also be sound.")
+                };
+                result_message(ui, &message, status == HumanStatus::Cleared);
                 let label = if status == HumanStatus::Cleared {
                     "Next position"
                 } else {
