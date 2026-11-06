@@ -327,6 +327,37 @@ mod tests {
     }
 
     #[test]
+    fn replay_rewinds_the_same_line_without_changing_score() {
+        let mut session = Session::start(1, Duration::ZERO);
+        let expected = session.round.preview.clone();
+        let answer = session.round.answer.clone();
+        session.score = 3;
+        session.streak = 2;
+        session.round.phase = Phase::Answering;
+        session.round.step = expected.len();
+        let now = Duration::from_secs(20);
+        session.round.replay(now);
+        assert_eq!(session.score, 3);
+        assert_eq!(session.streak, 2);
+        assert_eq!(session.round.answer, answer);
+        assert_eq!(session.round.phase, Phase::Watching);
+        assert!(session.tick(now).is_none());
+        let mut seen = Vec::new();
+        while session.round.phase == Phase::Watching {
+            if let Some(TickEvent::Preview(uci)) = session.tick(session.round.deadline) {
+                seen.push(uci);
+            }
+        }
+        assert_eq!(seen, expected);
+        assert_eq!(
+            session.tick(session.round.deadline),
+            Some(TickEvent::ReadyToAnswer)
+        );
+        assert_eq!(session.submit(&answer), Phase::Cleared);
+        assert_eq!(session.score, 4);
+    }
+
+    #[test]
     fn answer_san_and_squares_match_bank() {
         let round = Round::from_puzzle(BANK[0], Duration::ZERO).unwrap();
         assert_eq!(round.answer, "b8c6");
