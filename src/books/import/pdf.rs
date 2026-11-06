@@ -61,6 +61,8 @@ pub(super) struct Line {
     pub size: f64,
     pub y: f64,
     pub x: f64,
+    /// Right edge of the last glyph, in the same page space as `x`.
+    pub end: f64,
     /// Number of separately spaced cells on the row (tables, side-by-side columns).
     pub cells: usize,
 }
@@ -157,7 +159,7 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
 }
 
 /// Re-encode diagram bytes as PNG so [`crate::books::diagram::with_side`] can store the turn.
-fn diagram_png(bytes: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn diagram_png(bytes: &[u8]) -> Option<Vec<u8>> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(bytes.to_vec());
     }
@@ -440,20 +442,26 @@ fn gutter(lines: &[Vec<Glyph>]) -> Option<f64> {
 fn cells(mut line: Vec<Glyph>) -> Vec<Line> {
     line.sort_by(|a, b| a.x.total_cmp(&b.x));
     let y = line[0].y;
-    // Parts split at wide gaps: (text, characters per glyph size).
-    let mut parts = vec![(String::new(), Vec::<(f64, usize)>::new(), line[0].x)];
+    // Parts split at wide gaps: (text, characters per glyph size, left, right).
+    let mut parts = vec![(
+        String::new(),
+        Vec::<(f64, usize)>::new(),
+        line[0].x,
+        line[0].end,
+    )];
     let mut end = None;
     for glyph in line {
         if let Some(last) = end {
             let gap = glyph.x - last;
             if gap > 48.0 {
-                parts.push((String::new(), Vec::new(), glyph.x));
+                parts.push((String::new(), Vec::new(), glyph.x, glyph.end));
             } else if gap > glyph.size * 0.15 {
                 parts.last_mut().expect("text part").0.push(' ');
             }
         }
         let part = parts.last_mut().expect("text part");
         part.0.push_str(&glyph.text);
+        part.3 = glyph.end;
         let chars = glyph.text.trim().chars().count();
         if chars > 0 {
             if let Some(entry) = part
@@ -470,16 +478,18 @@ fn cells(mut line: Vec<Glyph>) -> Vec<Line> {
     }
     parts
         .into_iter()
-        .map(|(s, sizes, x)| {
+        .map(|(s, sizes, x, end)| {
             (
                 s.split_whitespace().collect::<Vec<_>>().join(" "),
                 dominant(&sizes),
                 x,
+                end,
             )
         })
-        .filter(|(s, _, _)| !s.is_empty())
-        .map(|(text, size, x)| Line {
+        .filter(|(s, _, _, _)| !s.is_empty())
+        .map(|(text, size, x, end)| Line {
             x,
+            end,
             text,
             size,
             y,
@@ -587,6 +597,7 @@ fn order(mut glyphs: Vec<Glyph>) -> Vec<Line> {
                 ),
                 y: row[0].y,
                 x: row[0].x,
+                end: row.iter().map(|l| l.end).fold(row[0].x, f64::max),
                 cells: row.len(),
             })
             .collect()
