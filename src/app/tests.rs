@@ -1190,8 +1190,8 @@ fn games_fit_phone_and_desktop_in_play_and_results() {
                             egui::CentralPanel::default()
                                 .frame(egui::Frame::new().inner_margin(14))
                                 .show(ui, |ui| {
-                                    // Leave the same space as the phone navigation bar.
-                                    ui.set_max_height(ui.available_height() - 60.0);
+                                    // Include the two-row phone navigation in the height budget.
+                                    ui.set_max_height(ui.available_height() - 104.0);
                                     let bounds = ui.max_rect();
                                     match screen {
                                         Screen::Games => {
@@ -1203,11 +1203,7 @@ fn games_fit_phone_and_desktop_in_play_and_results() {
                                                 );
                                             });
                                         }
-                                        Screen::BoardScan => app.board_scan_screen(ui),
-                                        Screen::SafeMove => app.safe_move_screen(ui),
-                                        Screen::BlindLine => app.blind_line_screen(ui),
-                                        Screen::HumanMove => app.human_move_screen(ui),
-                                        _ => unreachable!(),
+                                        _ => app.game_screen(ui),
                                     }
                                     assert!(
                                         ui.min_rect().right() <= bounds.right() + 1.0,
@@ -1239,13 +1235,7 @@ fn game_input_frame(app: &mut Woodpeck, ctx: &egui::Context, events: Vec<egui::E
             ..Default::default()
         },
         |ui| {
-            egui::CentralPanel::default().show(ui, |ui| match app.screen {
-                Screen::BoardScan => app.board_scan_screen(ui),
-                Screen::SafeMove => app.safe_move_screen(ui),
-                Screen::BlindLine => app.blind_line_screen(ui),
-                Screen::HumanMove => app.human_move_screen(ui),
-                _ => {}
-            });
+            egui::CentralPanel::default().show(ui, |ui| app.game_screen(ui));
         },
     );
     output.drop_without_applying_deltas();

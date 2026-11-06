@@ -1,4 +1,4 @@
-//! Games hub and Board-scan drill UI (desktop, web desktop, and phone).
+//! Responsive Games catalog and drill screens shared by desktop and web.
 use super::super::{Screen, Woodpeck, board::TapHighlight, style, widgets};
 use crate::games::{
     self, BlindPhase, BlindSession, BlindTick, DrillMode, Highlight, HumanSession, HumanStatus,
@@ -10,6 +10,23 @@ use shakmaty::{Color, Position, Square};
 use std::time::Duration;
 
 impl Woodpeck {
+    pub(in crate::app) fn game_screen(&mut self, ui: &mut Ui) {
+        let width = ui.available_width().min(640.0);
+        let rect = egui::Rect::from_min_size(
+            ui.cursor().min + egui::vec2((ui.available_width() - width) / 2.0, 0.0),
+            egui::vec2(width, ui.available_height()),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            match self.screen {
+                Screen::BoardScan => self.board_scan_screen(ui),
+                Screen::SafeMove => self.safe_move_screen(ui),
+                Screen::BlindLine => self.blind_line_screen(ui),
+                Screen::HumanMove => self.human_move_screen(ui),
+                _ => {}
+            }
+        });
+    }
+
     pub(in crate::app) fn games_hub(&mut self, ui: &mut Ui) {
         widgets::title(
             ui,
@@ -163,10 +180,9 @@ impl Woodpeck {
             return;
         };
         ui.label(RichText::new(session.round.mode.prompt()).size(if narrow { 14.0 } else { 15.0 }));
-        ui.add_space(6.0);
         let secs = session.round.time_left(self.now()).as_secs_f32().ceil() as u32;
         let accent = style::color(self.palette.semantic().accent);
-        ui.horizontal_wrapped(|ui| {
+        stats_row(ui, |ui| {
             ui.label(format!("Score {}", session.score));
             ui.separator();
             ui.label(format!("Streak {}", session.streak));
@@ -191,7 +207,6 @@ impl Woodpeck {
                 timer.color(accent)
             });
         });
-        ui.add_space(8.0);
     }
 
     fn board_scan_board(&mut self, ui: &mut Ui) {
@@ -295,14 +310,13 @@ impl Woodpeck {
                 .size(if narrow { 14.0 } else { 15.0 }),
         );
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
+        stats_row(ui, |ui| {
             ui.label(format!("Score {score}"));
             ui.separator();
             ui.label(format!("Streak {streak}"));
             ui.separator();
             ui.label(format!("Best {best}"));
         });
-        ui.add_space(8.0);
 
         let board_budget = game_board_size(ui);
         let theme = self.settings.board_theme;
@@ -440,7 +454,7 @@ impl Woodpeck {
             BlindPhase::Watching => {
                 let round = &self.game_blind.as_ref().unwrap().round;
                 format!(
-                    "Remember {}. Watching move {} of {}…",
+                    "Remember {}. Preview {}/{}…",
                     round.answer_san(),
                     round.step,
                     round.preview.len()
@@ -456,14 +470,13 @@ impl Woodpeck {
         };
         ui.label(RichText::new(hint).size(if narrow { 14.0 } else { 15.0 }));
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
+        stats_row(ui, |ui| {
             ui.label(format!("Score {score}"));
             ui.separator();
             ui.label(format!("Streak {streak}"));
             ui.separator();
             ui.label(format!("Best {best}"));
         });
-        ui.add_space(8.0);
 
         let board_budget = game_board_size(ui);
         let theme = self.settings.board_theme;
@@ -612,14 +625,13 @@ impl Woodpeck {
                 .size(if narrow { 14.0 } else { 15.0 }),
         );
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
+        stats_row(ui, |ui| {
             ui.label(format!("Score {score}"));
             ui.separator();
             ui.label(format!("Streak {streak}"));
             ui.separator();
             ui.label(format!("Best {best}"));
         });
-        ui.add_space(8.0);
 
         let board_budget = game_board_size(ui);
         let theme = self.settings.board_theme;
@@ -715,6 +727,13 @@ fn game_header(ui: &mut Ui, title: &str) -> bool {
     });
     ui.add_space(8.0);
     back || game_key(ui, egui::Key::Escape)
+}
+
+fn stats_row(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = 20.0;
+        ui.horizontal_wrapped(add);
+    });
 }
 
 fn game_key(ui: &Ui, key: egui::Key) -> bool {
