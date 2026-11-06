@@ -2,7 +2,7 @@
 use super::super::{Screen, Woodpeck, board::TapHighlight, style, widgets};
 use crate::games::{
     self, BlindPhase, BlindSession, BlindTick, DrillMode, Highlight, HumanSession, HumanStatus,
-    SafeSession, SafeStatus, VisionOutcome, VisionSession, VisionStatus,
+    SafeSession, SafeStatus, VisionSession, VisionStatus,
 };
 use crate::puzzle::Engine;
 use eframe::egui::{self, RichText, Ui};
@@ -221,13 +221,7 @@ impl Woodpeck {
             )
         });
         if let Some(square) = tapped {
-            let outcome = self.game_vision.as_mut().unwrap().tap(square);
-            if outcome == VisionOutcome::Miss {
-                self.toast = Some((
-                    "Not a target — streak reset. Keep scanning.".into(),
-                    web_time::Instant::now(),
-                ));
-            }
+            self.game_vision.as_mut().unwrap().tap(square);
         }
         ui.add_space(10.0);
     }
@@ -238,7 +232,11 @@ impl Woodpeck {
         };
         match status {
             VisionStatus::Playing => {
-                ui.label("Scan both colors. A wrong tap resets your streak.");
+                if self.game_vision.as_ref().unwrap().round.wrong.is_empty() {
+                    ui.label("Scan both colors. A wrong tap resets your streak.");
+                } else {
+                    ui.label("Red marks a wrong target. Streak reset — keep scanning.");
+                }
                 ui.ctx().request_repaint_after(Duration::from_millis(100));
             }
             VisionStatus::Cleared => {
@@ -331,12 +329,6 @@ impl Woodpeck {
                         }
                     }
                     self.games_board.player_moved();
-                    let toast = if ok {
-                        "Safe."
-                    } else {
-                        "Blunder — streak lost."
-                    };
-                    self.toast = Some((toast.into(), web_time::Instant::now()));
                 }
                 SafeStatus::Playing => {}
             }
@@ -514,11 +506,9 @@ impl Woodpeck {
                         }
                     }
                     self.games_board.player_moved();
-                    self.toast = Some(("Nice memory.".into(), web_time::Instant::now()));
                 } else {
                     // Reveal the expected move: reseat, play the answer, highlight from/to + SAN.
                     let answer = self.game_blind.as_ref().unwrap().round.answer.clone();
-                    let san = self.game_blind.as_ref().unwrap().round.answer_san();
                     let before = self
                         .game_blind
                         .as_ref()
@@ -540,10 +530,6 @@ impl Woodpeck {
                         }
                     }
                     self.game_engine = Some(engine);
-                    self.toast = Some((
-                        format!("Miss — answer was {san}."),
-                        web_time::Instant::now(),
-                    ));
                 }
             }
         }
@@ -660,14 +646,6 @@ impl Woodpeck {
                         }
                     }
                     self.games_board.player_moved();
-                    self.toast = Some((
-                        if ok {
-                            "Natural.".into()
-                        } else {
-                            "Not one of this drill’s choices. See the suggested moves.".into()
-                        },
-                        web_time::Instant::now(),
-                    ));
                 }
                 HumanStatus::Playing => {}
             }

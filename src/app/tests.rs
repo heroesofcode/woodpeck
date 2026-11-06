@@ -1227,3 +1227,102 @@ fn games_fit_phone_and_desktop_in_play_and_results() {
         }
     }
 }
+
+fn game_input_frame(app: &mut Woodpeck, ctx: &egui::Context, events: Vec<egui::Event>) {
+    let output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(360.0, 640.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| match app.screen {
+                Screen::BoardScan => app.board_scan_screen(ui),
+                Screen::SafeMove => app.safe_move_screen(ui),
+                Screen::BlindLine => app.blind_line_screen(ui),
+                Screen::HumanMove => app.human_move_screen(ui),
+                _ => {}
+            });
+        },
+    );
+    output.drop_without_applying_deltas();
+}
+
+#[test]
+fn games_results_advance_with_enter_and_escape_returns_to_picker() {
+    use crate::games::{BlindPhase, DrillMode};
+    let ctx = egui::Context::default();
+    let mut app = Woodpeck::new(
+        &ctx,
+        demo::service().unwrap(),
+        PathBuf::from("/tmp/demo.db"),
+        None,
+    );
+    settle(&mut app);
+    for screen in [
+        Screen::BoardScan,
+        Screen::SafeMove,
+        Screen::BlindLine,
+        Screen::HumanMove,
+    ] {
+        match screen {
+            Screen::BoardScan => {
+                app.start_board_scan(DrillMode::HangingPieces);
+                let session = app.game_vision.as_mut().unwrap();
+                for square in session.round.targets.clone() {
+                    session.tap(square);
+                }
+                assert_eq!(session.score, 1);
+            }
+            Screen::SafeMove => {
+                app.start_safe_move();
+                let session = app.game_safe.as_mut().unwrap();
+                let answer = session.round.safe.first().unwrap().clone();
+                session.submit(&answer);
+                assert_eq!(session.score, 1);
+            }
+            Screen::BlindLine => {
+                app.start_blind_line();
+                let session = app.game_blind.as_mut().unwrap();
+                session.round.phase = BlindPhase::Answering;
+                session.submit(&session.round.answer.clone());
+                assert_eq!(session.score, 1);
+            }
+            Screen::HumanMove => {
+                app.start_human_move();
+                let session = app.game_human.as_mut().unwrap();
+                let answer = session.round.answers.first().unwrap().clone();
+                session.submit(&answer);
+                assert_eq!(session.score, 1);
+            }
+            _ => unreachable!(),
+        }
+        game_input_frame(&mut app, &ctx, vec![]);
+        game_input_frame(&mut app, &ctx, key(egui::Key::Enter));
+        match screen {
+            Screen::BoardScan => assert_eq!(
+                app.game_vision.as_ref().unwrap().round.status,
+                crate::games::VisionStatus::Playing
+            ),
+            Screen::SafeMove => assert_eq!(
+                app.game_safe.as_ref().unwrap().round.status,
+                crate::games::SafeStatus::Playing
+            ),
+            Screen::BlindLine => assert_eq!(
+                app.game_blind.as_ref().unwrap().round.phase,
+                BlindPhase::Watching
+            ),
+            Screen::HumanMove => assert_eq!(
+                app.game_human.as_ref().unwrap().round.status,
+                crate::games::HumanStatus::Playing
+            ),
+            _ => unreachable!(),
+        }
+        game_input_frame(&mut app, &ctx, key(egui::Key::Escape));
+        assert_eq!(app.screen, Screen::Games);
+        assert!(app.game_engine.is_none());
+    }
+}
