@@ -103,13 +103,7 @@ impl Woodpeck {
                     ) {
                         // Same fixed layout as Train: real height budget + no ScrollArea
                         // stealing piece drags.
-                        match self.screen {
-                            Screen::BoardScan => self.board_scan_screen(ui),
-                            Screen::SafeMove => self.safe_move_screen(ui),
-                            Screen::BlindLine => self.blind_line_screen(ui),
-                            Screen::HumanMove => self.human_move_screen(ui),
-                            _ => {}
-                        }
+                        self.game_screen(ui);
                     } else {
                         let mut scroll =
                             egui::ScrollArea::vertical().id_salt(("screen-scroll", self.screen));
