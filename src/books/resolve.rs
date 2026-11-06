@@ -241,17 +241,23 @@ fn renumber(pos: &Chess, fullmoves: u32) -> Option<Chess> {
 pub fn resolve(document: Document) -> Book {
     let current = super::cnn::builtin();
     let prior = super::cnn::builtin_prior();
+    let hatch = super::cnn::builtin_hatch();
     let prototypes = super::diagram::builtin();
     match (current, prior, prototypes) {
         (Some(primary), Some(fallback), Some(second)) => {
-            let first = super::diagram::Fallback { primary, fallback };
-            resolve_using(
-                document,
-                Some(&super::diagram::Agreeing {
-                    first: &first,
-                    second,
-                }),
-            )
+            let networks = super::diagram::Fallback { primary, fallback };
+            let with_hatch;
+            let first: &dyn super::diagram::DiagramRecognizer = match hatch {
+                Some(hatch) => {
+                    with_hatch = super::diagram::Fallback {
+                        primary: &networks,
+                        fallback: hatch,
+                    };
+                    &with_hatch
+                }
+                None => &networks,
+            };
+            resolve_using(document, Some(&super::diagram::Agreeing { first, second }))
         }
         (Some(first), _, Some(second)) => {
             resolve_using(document, Some(&super::diagram::Agreeing { first, second }))
