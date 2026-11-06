@@ -168,3 +168,15 @@ fn book() -> crate::books::model::Book {
         assets: vec![],
     })
 }
+
+/// Initialize playable drill states for screenshot entry points.
+pub(super) fn screenshot(app: &mut super::Woodpeck, screen: super::Screen) {
+    welcome(app, screen);
+    match screen {
+        super::Screen::BoardScan => app.start_board_scan(crate::games::DrillMode::HangingPieces),
+        super::Screen::SafeMove => app.start_safe_move(),
+        super::Screen::BlindLine => app.start_blind_line(),
+        super::Screen::HumanMove => app.start_human_move(),
+        _ => {}
+    }
+}

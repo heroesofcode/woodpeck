@@ -102,6 +102,7 @@ impl Woodpeck {
     }
 
     pub(in crate::app) fn start_board_scan(&mut self, mode: DrillMode) {
+        self.toast = None;
         let seed = self.game_seed();
         let mut session = VisionSession::start(mode, seed.max(1));
         let now = self.now();
@@ -244,6 +245,7 @@ impl Woodpeck {
                 ui.vertical(|ui| {
                     ui.label(RichText::new("Board cleared. Nice scan!").strong());
                     if next_button(ui, "Next board") {
+                        self.toast = None;
                         let now = self.now();
                         self.game_vision.as_mut().unwrap().next_round(now);
                     }
@@ -253,6 +255,7 @@ impl Woodpeck {
                 ui.vertical(|ui| {
                     ui.label("Time’s up. Yellow marks the missed targets.");
                     if next_button(ui, "Try another") {
+                        self.toast = None;
                         let now = self.now();
                         self.game_vision.as_mut().unwrap().next_round(now);
                     }
@@ -262,6 +265,7 @@ impl Woodpeck {
     }
 
     pub(in crate::app) fn start_safe_move(&mut self) {
+        self.toast = None;
         let seed = self.game_seed();
         let session = SafeSession::start(seed.max(1));
         let engine = Engine::sandbox(session.round.position());
@@ -362,6 +366,7 @@ impl Woodpeck {
                     "Try another"
                 };
                 if next_button(ui, label) {
+                    self.toast = None;
                     self.game_safe.as_mut().unwrap().next_round();
                     let position = self.game_safe.as_ref().unwrap().round.position();
                     self.game_engine = Some(Engine::sandbox(position));
@@ -372,6 +377,7 @@ impl Woodpeck {
     }
 
     pub(in crate::app) fn start_blind_line(&mut self) {
+        self.toast = None;
         let seed = self.game_seed();
         let now = self.now();
         let session = BlindSession::start(seed.max(1), now);
@@ -575,6 +581,7 @@ impl Woodpeck {
                     "Try another"
                 };
                 if next_button(ui, label) {
+                    self.toast = None;
                     let now = self.now();
                     self.game_blind.as_mut().unwrap().next_round(now);
                     let position = self.game_blind.as_ref().unwrap().round.start_position();
@@ -586,6 +593,7 @@ impl Woodpeck {
     }
 
     pub(in crate::app) fn start_human_move(&mut self) {
+        self.toast = None;
         let seed = self.game_seed();
         let session = HumanSession::start(seed.max(1));
         let engine = Engine::sandbox(session.round.position());
@@ -687,6 +695,7 @@ impl Woodpeck {
                     "Try another"
                 };
                 if next_button(ui, label) {
+                    self.toast = None;
                     self.game_human.as_mut().unwrap().next_round();
                     let position = self.game_human.as_ref().unwrap().round.position();
                     self.game_engine = Some(Engine::sandbox(position));
