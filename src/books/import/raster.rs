@@ -131,6 +131,9 @@ impl Renderer {
                 }
                 Some(Placed {
                     top,
+                    left,
+                    bottom: low,
+                    right: left + side,
                     area: side * side,
                     bytes,
                     rendered: true,

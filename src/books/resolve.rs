@@ -344,6 +344,17 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
         .iter()
         .filter_map(|a| Some((a.path.clone(), super::diagram::stated_side(&a.bytes)?)))
         .collect();
+    // Captions bound to each diagram from poppler page geometry. Applied only when every
+    // other signal leaves the side unknown, so a caption never demotes a confirmed board.
+    let geometry: HashMap<String, bool> = assets
+        .iter()
+        .filter_map(|a| {
+            Some((
+                a.path.clone(),
+                super::diagram::stated_geometry_side(&a.bytes)?,
+            ))
+        })
+        .collect();
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let mut best = None;
     for (name, alphabet) in notation::ALPHABETS {
@@ -354,6 +365,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             &placements,
             &readings,
             &markers,
+            &geometry,
         );
         if best
             .as_ref()
@@ -374,8 +386,10 @@ fn resolve_with(
     placements: &HashMap<String, Option<String>>,
     readings: &HashMap<String, String>,
     markers: &HashMap<String, bool>,
+    geometry: &HashMap<String, bool>,
 ) -> Book {
-    let (recognized, unconfirmed) = recognized_positions(&document, alphabet, placements, markers);
+    let (recognized, unconfirmed) =
+        recognized_positions(&document, alphabet, placements, markers, geometry);
     let mut book = Book {
         version: 1,
         document: document.clone(),
@@ -969,6 +983,96 @@ fn stated_turn(text: &str) -> Option<Color> {
         _ => None,
     }
 }
+/// A line that is itself a strict side caption: "White to move", "Black's move", "Weiß am Zug"
+/// and the other phrases [`stated_turn`] accepts, optionally "and win" / "and draw" or a diagram
+/// number. A sentence that only mentions the phrase ("White to move the knight") is not one.
+pub(crate) fn strict_side_line(text: &str) -> Option<Color> {
+    let text = text.trim();
+    let text = text.trim_matches(|c: char| matches!(c, '.' | ':' | '!' | '?' | ';' | ','));
+    let text = strip_leading_label(text.trim());
+    if text.is_empty() || text.chars().count() > 60 {
+        return None;
+    }
+    let side = stated_turn(text)?;
+    let lower = text.to_lowercase();
+    strict_phrases().iter().find_map(|phrase| {
+        let rest = lower.strip_prefix(phrase)?;
+        let rest = rest
+            .trim()
+            .trim_matches(|c: char| matches!(c, '.' | ':' | '!' | '?'));
+        let rest = rest.trim();
+        (rest.is_empty()
+            || rest.eq_ignore_ascii_case("and win")
+            || rest.eq_ignore_ascii_case("and draw")
+            || (rest.len() <= 4 && rest.chars().all(|c| c.is_ascii_digit())))
+        .then_some(side)
+    })
+}
+/// Phrases that name only the side to move. The caption line has to start with one of them.
+fn strict_phrases() -> &'static [&'static str] {
+    &[
+        "white to play",
+        "white to move",
+        "white's move",
+        "white\u{2019}s move",
+        "black to play",
+        "black to move",
+        "black's move",
+        "black\u{2019}s move",
+        "weiß am zug",
+        "weiss am zug",
+        "trait aux blancs",
+        "trait aux noirs",
+        "vez das brancas",
+        "vez das pretas",
+        "vez das negras",
+        "tocca al bianco",
+        "tocca al nero",
+        "wit aan zet",
+        "zwart aan zet",
+        "schwarz am zug",
+        "ход белых",
+        "ход черных",
+        "ход чёрных",
+    ]
+}
+/// Drops a leading diagram label ("24)", "No. 12", "Diagram 3.") so the caption can follow it.
+fn strip_leading_label(text: &str) -> &str {
+    let original = text.trim();
+    let lower = original.to_ascii_lowercase();
+    let mut body = original;
+    for label in [
+        "diagram", "figure", "diag.", "diag", "fig.", "fig", "no.", "nr.", "no", "nr",
+    ] {
+        let Some(stripped) = lower.strip_prefix(label) else {
+            continue;
+        };
+        // The label is ASCII, so the lowercase prefix has the same byte length.
+        let rest = original[original.len() - stripped.len()..].trim_start();
+        // "note" starts with "no" but is not a diagram number.
+        if rest.starts_with(|c: char| c.is_ascii_digit()) {
+            body = rest;
+            break;
+        }
+    }
+    strip_leading_number(body).unwrap_or(original)
+}
+fn strip_leading_number(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == 0 || i > 4 {
+        return None;
+    }
+    let mut j = i;
+    if j < bytes.len() && matches!(bytes[j], b'.' | b')' | b']' | b':') {
+        j += 1;
+    }
+    let rest = text[j..].trim_start();
+    (!rest.is_empty()).then_some(rest)
+}
 /// Every move changes at least two squares, so an ungated reading within this many squares of
 /// the replayed position shows that position and not one a move before or after it.
 const CONFIRM_MAX_DIFFERENCES: usize = 1;
@@ -1003,6 +1107,7 @@ fn recognized_positions(
     alphabet: &str,
     placements: &HashMap<String, Option<String>>,
     markers: &HashMap<String, bool>,
+    geometry: &HashMap<String, bool>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
@@ -1025,6 +1130,12 @@ fn recognized_positions(
             let image = matches!(block.kind, BlockKind::Image { .. });
             let marker = match &block.kind {
                 BlockKind::Image { path, .. } => markers.get(path).copied(),
+                _ => None,
+            };
+            // A geometric caption is not a printed marker: it must not block the #54
+            // fallbacks, and it is consulted only after those fallbacks still abstain.
+            let geometry_side = match &block.kind {
+                BlockKind::Image { path, .. } => geometry.get(path).copied(),
                 _ => None,
             };
             let before = before_image(page, b);
@@ -1059,7 +1170,19 @@ fn recognized_positions(
                     out.insert((p, b), pos);
                 }
                 Turn::Unknown if image => {
-                    unconfirmed.insert((p, b), placement);
+                    // Same gate as the #54 fallbacks: only an unknown side with no printed
+                    // marker. A caption that the board cannot legally play (the other side is
+                    // in check) abstains, and a side something else already confirmed is left
+                    // as it was.
+                    if marker.is_none()
+                        && let Some(white) = geometry_side
+                        && let Some(pos) =
+                            placed(&placement, if white { Color::White } else { Color::Black })
+                    {
+                        out.insert((p, b), pos);
+                    } else {
+                        unconfirmed.insert((p, b), placement);
+                    }
                 }
                 Turn::Unknown | Turn::Contradicted => {}
             }
@@ -2789,6 +2912,144 @@ mod image_tests {
         let b = book("White to move", &["A quiet position."]);
         assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 w - - 0 1"));
         assert!(b.nodes.is_empty());
+    }
+
+    fn tiny_png() -> Vec<u8> {
+        let image = image::GrayImage::from_raw(1, 1, vec![180]).unwrap();
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        png
+    }
+
+    /// Resolves one diagram whose PNG carries `bytes` (a geometry caption, a marker, or both).
+    fn resolve_png(bytes: Vec<u8>, before: &[&str], alt: &str, after: &[&str]) -> Book {
+        let mut page = Page::default();
+        for text in before {
+            page.push(text, BlockKind::Paragraph);
+        }
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: alt.into(),
+            },
+        );
+        for text in after {
+            page.push(text, BlockKind::Paragraph);
+        }
+        resolve_using(
+            Document {
+                cover: None,
+                isbn: None,
+                title: String::new(),
+                author: String::new(),
+                format: "test".into(),
+                pages: vec![page],
+                assets: vec![Asset {
+                    path: "images/d.png".into(),
+                    bytes,
+                }],
+            },
+            Some(&Fixed(PLACEMENT)),
+        )
+    }
+
+    #[test]
+    fn strict_side_lines_are_the_caption_itself() {
+        assert_eq!(strict_side_line("White to move"), Some(Color::White));
+        assert_eq!(strict_side_line("Black to play."), Some(Color::Black));
+        assert_eq!(strict_side_line("White's move"), Some(Color::White));
+        assert_eq!(strict_side_line("Weiß am Zug"), Some(Color::White));
+        assert_eq!(strict_side_line("Trait aux noirs"), Some(Color::Black));
+        assert_eq!(strict_side_line("24) Black to play"), Some(Color::Black));
+        assert_eq!(
+            strict_side_line("White to move and win"),
+            Some(Color::White)
+        );
+        assert_eq!(strict_side_line("White mates in 2"), None);
+        assert_eq!(strict_side_line("White moves"), None);
+        assert_eq!(strict_side_line("White to move the knight"), None);
+        assert_eq!(strict_side_line("It is White to move"), None);
+        assert_eq!(strict_side_line("note the move"), None);
+    }
+
+    #[test]
+    fn a_geometry_caption_confirms_only_an_unknown_side() {
+        let white = crate::books::diagram::with_geometry_side(&tiny_png(), true);
+        let black = crate::books::diagram::with_geometry_side(&tiny_png(), false);
+        let b = resolve_png(white.clone(), &[], "", &["A quiet position."]);
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 w - - 0 1"));
+        let b = resolve_png(black.clone(), &[], "", &["A quiet position."]);
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 b - - 0 1"));
+        // A caption the text already stated is left alone, even when geometry disagrees.
+        let b = resolve_png(white.clone(), &[], "Black to play", &[]);
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 b - - 0 1"));
+        // The last ply before the diagram (#54) already named White. Do not downgrade it.
+        let b = resolve_png(black, &["After 12...Bd6"], "", &[]);
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 w - - 0 1"));
+        // A contradiction stays unread; geometry must not repair it.
+        let b = resolve_png(white, &[], "Black to play", &["1. Ra8+"]);
+        assert_eq!(recognized(&b), None);
+        assert!(matches!(
+            b.document.pages[0].blocks[0].kind,
+            BlockKind::Image { .. }
+        ));
+    }
+
+    #[test]
+    fn a_geometry_caption_does_not_override_a_printed_marker() {
+        let bytes = crate::books::diagram::with_geometry_side(
+            &crate::books::diagram::with_side(&tiny_png(), true),
+            false,
+        );
+        let b = resolve_png(bytes, &[], "", &["A quiet position."]);
+        assert_eq!(recognized(&b), Some("4k3/4p3/8/8/8/8/4P3/R3K3 w - - 0 1"));
+        // Marker and stated caption disagree, so the board is unknown. Geometry must not
+        // pick a side out of that conflict.
+        let bytes = crate::books::diagram::with_geometry_side(
+            &crate::books::diagram::with_side(&tiny_png(), true),
+            true,
+        );
+        let b = resolve_png(bytes, &[], "Black to play", &[]);
+        assert_eq!(recognized(&b), None);
+        assert!(matches!(
+            b.document.pages[0].blocks[0].kind,
+            BlockKind::UnconfirmedDiagram { .. }
+        ));
+    }
+
+    #[test]
+    fn a_check_keeps_its_side_when_geometry_names_the_other() {
+        let bytes = crate::books::diagram::with_geometry_side(&tiny_png(), true);
+        let mut page = Page::default();
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let book = resolve_using(
+            Document {
+                cover: None,
+                isbn: None,
+                title: String::new(),
+                author: String::new(),
+                format: "test".into(),
+                pages: vec![page],
+                assets: vec![Asset {
+                    path: "images/d.png".into(),
+                    bytes,
+                }],
+            },
+            Some(&Fixed("4k3/8/8/8/8/8/8/K3R3")),
+        );
+        assert!(matches!(
+            &book.document.pages[0].blocks[0].kind,
+            BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")
+        ));
     }
 }
 

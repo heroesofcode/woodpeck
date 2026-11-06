@@ -3,10 +3,12 @@
 //! streams are read; other encodings are skipped.
 use lopdf::{Document, Object, ObjectId, Stream};
 
-/// A picture on a page: the height of its top edge in page space (larger is higher) and its
-/// bytes as PNG or JPEG.
+/// A picture on a page: its box in page space (y grows upward) and its bytes as PNG or JPEG.
 pub(super) struct Placed {
     pub top: f64,
+    pub left: f64,
+    pub bottom: f64,
+    pub right: f64,
     /// Area covered on the page, in square points.
     pub area: f64,
     pub bytes: Vec<u8>,
@@ -62,15 +64,14 @@ pub(super) fn pictures(doc: &Document, page: ObjectId) -> Vec<Placed> {
                     continue;
                 };
                 if let Some(bytes) = picture(doc, stream) {
-                    // The unit square maps to the picture; its top is the highest corner.
-                    let top = [0.0, 1.0]
-                        .iter()
-                        .flat_map(|&x| [0.0, 1.0].map(move |y: f64| (x, y)))
-                        .map(|(x, y): (f64, f64)| ctm[1] * x + ctm[3] * y + ctm[5])
-                        .fold(f64::MIN, f64::max);
+                    // The unit square maps to the picture; its box is the axis-aligned corners.
+                    let (left, bottom, right, top) = unit_box(ctm);
                     let area = (ctm[0] * ctm[3] - ctm[1] * ctm[2]).abs();
                     out.push(Placed {
                         top,
+                        left,
+                        bottom,
+                        right,
                         area,
                         bytes,
                         rendered: false,
@@ -82,6 +83,24 @@ pub(super) fn pictures(doc: &Document, page: ObjectId) -> Vec<Placed> {
     }
     out.sort_by(|a, b| b.top.total_cmp(&a.top));
     out
+}
+/// Axis-aligned box of the unit square under `ctm` `[a, b, c, d, e, f]`: left, bottom, right, top.
+fn unit_box(ctm: [f64; 6]) -> (f64, f64, f64, f64) {
+    let mut left = f64::MAX;
+    let mut bottom = f64::MAX;
+    let mut right = f64::MIN;
+    let mut top = f64::MIN;
+    for x in [0.0, 1.0] {
+        for y in [0.0, 1.0] {
+            let px = ctm[0] * x + ctm[2] * y + ctm[4];
+            let py = ctm[1] * x + ctm[3] * y + ctm[5];
+            left = left.min(px);
+            right = right.max(px);
+            bottom = bottom.min(py);
+            top = top.max(py);
+        }
+    }
+    (left, bottom, right, top)
 }
 /// `m × ctm`: the matrix of a `cm` operator applied on top of the current one.
 fn multiply(m: [f64; 6], t: [f64; 6]) -> [f64; 6] {

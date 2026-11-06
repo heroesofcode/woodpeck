@@ -35,7 +35,14 @@ image. The resolver then needs the side to move from the text ("Black to play", 
 Black's move", "12. ..."), looking at the following paragraphs and the next page. The
 first move number followed by a move legal for the side it names decides; other numbers
 (ranks, example numbers) are skipped, a move legal only for the other side abstains, and
-conflicting statements abstain. Without any evidence the image is kept. A recognized image becomes
+conflicting statements abstain. Without any evidence the image is kept. When the glyph
+extractor scrambles a text layer, poppler page geometry can still bind a strict side
+caption ("White to move", "Black's move", and the same phrases in the other languages the
+resolver already accepts) to the diagram it sits under, or to the first line of the next
+column or page when the diagram ends a column. That caption confirms a board only when
+every other signal left the side unknown. It never changes a side that was already
+confirmed, and a caption closer to the next diagram, or two captions that disagree,
+abstains. Move text from poppler is not used as a side. A recognized image becomes
 a `RecognizedDiagram` block whose position has no castling or en passant rights, and its
 move numbers are taken from the first following move. `DiagramRecognizer` is the seam
 for an OCR or neural recognizer. Prototypes are rebuilt with

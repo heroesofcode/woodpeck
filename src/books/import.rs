@@ -7,6 +7,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 use thiserror::Error;
+mod caption;
 mod fontboard;
 mod pdf;
 mod picture;
@@ -33,12 +34,7 @@ impl PageSource for TextImporter {
         if bytes.starts_with(b"%PDF-") {
             let mut extracted =
                 pdf::extract(&bytes).map_err(|e| ImportError::Invalid(e.to_string()))?;
-            pdf::stamp_pdftotext_sides(
-                path,
-                &extracted.pages,
-                &mut extracted.pictures,
-                extracted.cover.as_deref(),
-            );
+            stamp_pdf_sides(path, &mut extracted);
             let texts = &extracted.pages;
             if texts.is_empty()
                 || texts
@@ -132,6 +128,21 @@ impl PageSource for TextImporter {
         }
         epub(&bytes)
     }
+}
+/// Page-level captions on textless pages, then one caption per diagram from poppler geometry.
+fn stamp_pdf_sides(path: &Path, extracted: &mut pdf::Extracted) {
+    pdf::stamp_pdftotext_sides(
+        path,
+        &extracted.pages,
+        &mut extracted.pictures,
+        extracted.cover.as_deref(),
+    );
+    caption::stamp_geometry_sides(
+        path,
+        &mut extracted.pictures,
+        &extracted.boxes,
+        extracted.cover.as_deref(),
+    );
 }
 /// The size most body text is set in, weighted by characters.
 fn body_size(pages: &[Vec<pdf::Line>]) -> f64 {

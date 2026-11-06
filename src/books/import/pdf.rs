@@ -55,6 +55,15 @@ impl OutputDev for Layout {
         Ok(())
     }
 }
+/// Crop box of one page in PDF space (y grows upward). `upright` is false when the page is
+/// rotated by 90 or 270 degrees, which would put poppler's axes on a different edge.
+pub(super) struct PageBox {
+    pub x0: f64,
+    pub y0: f64,
+    pub x1: f64,
+    pub y1: f64,
+    pub upright: bool,
+}
 /// One reconstructed text line with its dominant glyph size and baseline height.
 pub(super) struct Line {
     pub text: String,
@@ -76,6 +85,8 @@ pub(super) struct Extracted {
     pub pictures: Vec<Vec<super::picture::Placed>>,
     /// Board crops found by rendering pages (scans, drawings), included in `pictures`.
     pub boards: usize,
+    /// Crop box of each page, in the same order as `pages` and `pictures`.
+    pub boxes: Vec<PageBox>,
 }
 pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
     let doc = lopdf::Document::load_mem(bytes)?;
@@ -145,6 +156,11 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
     }
     let pages: Vec<_> = layout.pages.into_iter().map(order).collect();
     let pictures = pictures(&doc, bytes, &fonts);
+    let boxes = doc
+        .get_pages()
+        .into_values()
+        .map(|id| page_box(&doc, id))
+        .collect();
     Ok(Extracted {
         outline: chapters(outline, pages.len()),
         pages,
@@ -153,11 +169,66 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
         cover: first_page_picture(&doc),
         boards: pictures.iter().flatten().filter(|p| p.rendered).count(),
         pictures,
+        boxes,
     })
+}
+/// Crop box or, failing that, media box, inherited from a parent pages node. A quarter-turn
+/// rotation is recorded so caption binding can abstain instead of using swapped axes.
+fn page_box(doc: &lopdf::Document, page: lopdf::ObjectId) -> PageBox {
+    let mut id = page;
+    let mut upright = true;
+    let mut saw_rotate = false;
+    let mut rect = None;
+    for _ in 0..8 {
+        let Ok(dict) = doc.get_dictionary(id) else {
+            break;
+        };
+        if !saw_rotate && let Ok(rotate) = dict.get(b"Rotate").and_then(lopdf::Object::as_i64) {
+            upright = rotate.rem_euclid(180) == 0;
+            saw_rotate = true;
+        }
+        if rect.is_none() {
+            rect = dict_box(dict, b"CropBox").or_else(|| dict_box(dict, b"MediaBox"));
+        }
+        if rect.is_some() && saw_rotate {
+            break;
+        }
+        let Ok(parent) = dict.get(b"Parent").and_then(lopdf::Object::as_reference) else {
+            break;
+        };
+        id = parent;
+    }
+    let (x0, y0, x1, y1) = rect.unwrap_or((0.0, 0.0, 0.0, 0.0));
+    PageBox {
+        x0,
+        y0,
+        x1,
+        y1,
+        upright,
+    }
+}
+fn dict_box(dict: &lopdf::Dictionary, key: &[u8]) -> Option<(f64, f64, f64, f64)> {
+    let values = dict.get(key).ok()?.as_array().ok()?;
+    let number = |index: usize| values.get(index)?.as_float().ok().map(f64::from);
+    let left = number(0)?;
+    let bottom = number(1)?;
+    let right = number(2)?;
+    let top = number(3)?;
+    let (x0, x1) = if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let (y0, y1) = if bottom <= top {
+        (bottom, top)
+    } else {
+        (top, bottom)
+    };
+    Some((x0, y0, x1, y1))
 }
 
 /// Re-encode diagram bytes as PNG so [`crate::books::diagram::with_side`] can store the turn.
-fn diagram_png(bytes: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn diagram_png(bytes: &[u8]) -> Option<Vec<u8>> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(bytes.to_vec());
     }

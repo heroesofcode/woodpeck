@@ -607,6 +607,24 @@ pub fn stated_side(bytes: &[u8]) -> Option<bool> {
     }
 }
 
+/// Key of the PNG text chunk holding a side caption bound from page geometry.
+/// Kept apart from [`SIDE_KEY`] so a caption cannot demote a printed marker.
+const GEOMETRY_SIDE_KEY: &[u8] = b"woodpeck-geometry-side";
+
+/// A PNG with the side a geometric caption named, as [`with_side`] stores a marker.
+pub fn with_geometry_side(png: &[u8], white: bool) -> Vec<u8> {
+    with_text(png, GEOMETRY_SIDE_KEY, if white { "w" } else { "b" })
+}
+
+/// The side stored by [`with_geometry_side`]: `Some(true)` for White to move.
+pub fn stated_geometry_side(bytes: &[u8]) -> Option<bool> {
+    match text_chunk(bytes, GEOMETRY_SIDE_KEY)?.as_slice() {
+        b"w" => Some(true),
+        b"b" => Some(false),
+        _ => None,
+    }
+}
+
 fn with_text(png: &[u8], key: &[u8], value: &str) -> Vec<u8> {
     const HEADER: usize = 8 + 25;
     if png.len() < HEADER || !png.starts_with(b"\x89PNG\r\n\x1a\n") || &png[12..16] != b"IHDR" {
@@ -1580,8 +1598,13 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         assert_eq!(stated_side(&png), None);
-        let both = with_side(&with_placement(&png, "8/8/8/8/8/8/8/K6k"), false);
+        assert_eq!(stated_geometry_side(&png), None);
+        let both = with_geometry_side(
+            &with_side(&with_placement(&png, "8/8/8/8/8/8/8/K6k"), false),
+            true,
+        );
         assert_eq!(stated_side(&both), Some(false));
+        assert_eq!(stated_geometry_side(&both), Some(true));
         assert_eq!(
             stated_placement(&both).as_deref(),
             Some("8/8/8/8/8/8/8/K6k")
