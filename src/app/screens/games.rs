@@ -289,7 +289,7 @@ impl Woodpeck {
             (s.score, s.streak, s.best_streak, s.round.status)
         };
         ui.label(
-            RichText::new("Play any solid move. Hanging a piece ends the streak.")
+            RichText::new("Find a move that does not leave more material hanging.")
                 .size(if narrow { 14.0 } else { 15.0 }),
         );
         ui.add_space(6.0);
@@ -341,9 +341,21 @@ impl Woodpeck {
         let status = self.game_safe.as_ref().unwrap().round.status;
         match status {
             SafeStatus::Playing => {
-                ui.label("Drag or tap a move. Any non-blunder keeps the streak alive.");
+                ui.label(turn_hint(
+                    &self.game_safe.as_ref().unwrap().round.position(),
+                ));
             }
             SafeStatus::Cleared | SafeStatus::Blundered => {
+                let round = &self.game_safe.as_ref().unwrap().round;
+                let message = if status == SafeStatus::Cleared {
+                    "Safe move. Streak extended!".to_owned()
+                } else {
+                    format!(
+                        "Material left hanging. Try {}.",
+                        move_names(&round.position(), round.safe.iter().take(1))
+                    )
+                };
+                result_message(ui, &message, status == SafeStatus::Cleared);
                 let label = if status == SafeStatus::Cleared {
                     "Next position"
                 } else {
@@ -427,10 +439,18 @@ impl Woodpeck {
             (s.score, s.streak, s.best_streak, s.round.phase)
         };
         let hint = match phase {
-            BlindPhase::Watching => "Watch the line…".to_string(),
+            BlindPhase::Watching => {
+                let round = &self.game_blind.as_ref().unwrap().round;
+                format!(
+                    "Remember {}. Watching move {} of {}…",
+                    round.answer_san(),
+                    round.step,
+                    round.preview.len()
+                )
+            }
             BlindPhase::Concealed => "Hold it in your head…".to_string(),
-            BlindPhase::Answering => "Play the next move.".to_string(),
-            BlindPhase::Cleared => "Correct.".to_string(),
+            BlindPhase::Answering => "Recall the cued move and play it now.".to_string(),
+            BlindPhase::Cleared => "Correct — you remembered the move!".to_string(),
             BlindPhase::Missed => {
                 let san = self.game_blind.as_ref().unwrap().round.answer_san();
                 format!("Not that move. Answer: {san}")
@@ -530,7 +550,23 @@ impl Woodpeck {
                 ui.ctx().request_repaint_after(Duration::from_millis(50));
             }
             BlindPhase::Answering => {
-                ui.label("Drag or tap the next move. Works with mouse and touch.");
+                ui.label(turn_hint(
+                    &self
+                        .game_blind
+                        .as_ref()
+                        .unwrap()
+                        .round
+                        .position_after_preview(),
+                ));
+                if ui
+                    .add_sized([120.0, 40.0], egui::Button::new("Replay cue"))
+                    .clicked()
+                {
+                    self.game_blind.as_mut().unwrap().round.replay(now);
+                    let position = self.game_blind.as_ref().unwrap().round.start_position();
+                    self.game_engine = Some(Engine::sandbox(position));
+                    self.games_board = super::super::board::BoardWidget::default();
+                }
             }
             BlindPhase::Cleared | BlindPhase::Missed => {
                 let label = if phase == BlindPhase::Cleared {
@@ -717,4 +753,34 @@ fn with_centered_board<R>(ui: &mut Ui, size: f32, add: impl FnOnce(&mut Ui, f32)
         });
     });
     out.expect("board closure ran")
+}
+
+fn turn_hint(position: &shakmaty::Chess) -> &'static str {
+    if position.turn() == Color::White {
+        "White to move. Tap a piece, then its destination."
+    } else {
+        "Black to move. Tap a piece, then its destination."
+    }
+}
+
+fn move_names<'a>(position: &shakmaty::Chess, moves: impl Iterator<Item = &'a String>) -> String {
+    moves
+        .filter_map(|uci| {
+            let mv = uci
+                .parse::<shakmaty::uci::UciMove>()
+                .ok()?
+                .to_move(position)
+                .ok()?;
+            Some(shakmaty::san::SanPlus::from_move(position.clone(), mv).to_string())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn result_message(ui: &mut Ui, message: &str, success: bool) {
+    ui.label(RichText::new(message).strong().color(if success {
+        ui.visuals().selection.bg_fill
+    } else {
+        ui.visuals().warn_fg_color
+    }));
 }
