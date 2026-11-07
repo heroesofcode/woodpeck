@@ -142,25 +142,51 @@ impl Renderer {
                 rendered: true,
             });
         }
-        // Corner and caption squares are decided with every board in view, so a mark shared
-        // by two diagrams abstains. They never replace a bottom-right or triangle marker.
-        let wide = diagram::side_marks(&gray, &boards);
-        for ((placed, board), mark) in out.iter_mut().zip(&boards).zip(wide) {
-            placed.bytes = stamp_side(&gray, *board, mark, std::mem::take(&mut placed.bytes));
-        }
+        // Squares and triangles are decided with every board in view, so a mark shared by two
+        // diagrams abstains.
+        stamp_boards(&gray, &boards, &mut out);
         out
     }
 }
 
-/// Bottom-right and triangle markers keep the channel that can disagree with the text.
-/// Any other printed square is stored aside and applied only while the side is unknown.
-fn stamp_side(gray: &Gray, board: diagram::Frame, wide: Option<bool>, bytes: Vec<u8>) -> Vec<u8> {
+/// A bottom-right square or a Quality Chess triangle keeps the marker channel. Any other
+/// square outranks a triangle found elsewhere.
+fn stamp_boards(gray: &Gray, boards: &[diagram::Frame], placed: &mut [Placed]) {
+    let squares = diagram::side_marks(gray, boards);
+    let triangles = diagram::triangle_marks(gray, boards);
+    for ((picture, board), (square, triangle)) in placed
+        .iter_mut()
+        .zip(boards)
+        .zip(squares.into_iter().zip(triangles))
+    {
+        picture.bytes = stamp_side(
+            gray,
+            *board,
+            square,
+            triangle,
+            std::mem::take(&mut picture.bytes),
+        );
+    }
+}
+
+/// Bottom-right and Quality Chess triangles keep the channel that can disagree with the text.
+/// Any other printed square is stored aside. A triangle elsewhere is stored only when neither
+/// of those fired, and the resolver applies it only while the side is unknown.
+fn stamp_side(
+    gray: &Gray,
+    board: diagram::Frame,
+    square: Option<bool>,
+    triangle: Option<bool>,
+    bytes: Vec<u8>,
+) -> Vec<u8> {
     if let Some(white) =
         diagram::side_marker(gray, board).or_else(|| diagram::triangle_marker(gray, board))
     {
         diagram::with_side(&bytes, white)
-    } else if let Some(white) = wide {
+    } else if let Some(white) = square {
         diagram::with_mark_side(&bytes, white)
+    } else if let Some(white) = triangle {
+        diagram::with_triangle_side(&bytes, white)
     } else {
         bytes
     }

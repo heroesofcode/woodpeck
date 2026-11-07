@@ -361,6 +361,17 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
         .iter()
         .filter_map(|a| Some((a.path.clone(), super::diagram::stated_mark_side(&a.bytes)?)))
         .collect();
+    // Triangles off the Quality Chess places. Unknown-only, and both captions and side squares
+    // win when they also name a side.
+    let triangle_sides: HashMap<String, bool> = assets
+        .iter()
+        .filter_map(|a| {
+            Some((
+                a.path.clone(),
+                super::diagram::stated_triangle_side(&a.bytes)?,
+            ))
+        })
+        .collect();
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let mut best = None;
     for (name, alphabet) in notation::ALPHABETS {
@@ -373,6 +384,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             &markers,
             &caption_sides,
             &printed_marks,
+            &triangle_sides,
         );
         if best
             .as_ref()
@@ -395,6 +407,7 @@ fn resolve_with(
     markers: &HashMap<String, bool>,
     caption_sides: &HashMap<String, bool>,
     printed_marks: &HashMap<String, bool>,
+    triangle_sides: &HashMap<String, bool>,
 ) -> Book {
     let (recognized, unconfirmed) = recognized_positions(
         &document,
@@ -403,6 +416,7 @@ fn resolve_with(
         markers,
         caption_sides,
         printed_marks,
+        triangle_sides,
     );
     let mut book = Book {
         version: 1,
@@ -1033,6 +1047,7 @@ fn recognized_positions(
     markers: &HashMap<String, bool>,
     caption_sides: &HashMap<String, bool>,
     printed_marks: &HashMap<String, bool>,
+    triangle_sides: &HashMap<String, bool>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
@@ -1065,6 +1080,10 @@ fn recognized_positions(
                 BlockKind::Image { path, .. } => printed_marks.get(path).copied(),
                 _ => None,
             };
+            let triangle = match &block.kind {
+                BlockKind::Image { path, .. } => triangle_sides.get(path).copied(),
+                _ => None,
+            };
             let before = before_image(page, b);
             let mut turn = image_position(
                 page.blocks[b + 1..]
@@ -1092,13 +1111,16 @@ fn recognized_positions(
             {
                 turn = placed(&placement, side).map_or(Turn::Unknown, Turn::Confirmed);
             }
-            // A printed caption, then a side square found off the bottom-right corner. Both fill
-            // a side nothing else named. Neither demotes a marker, a move, or a check, and a
-            // caption wins when it and the square disagree.
+            // A printed caption, then a side square off the bottom-right corner, then a triangle
+            // elsewhere. Each fills a side nothing else named. None of them demotes a marker, a
+            // move, or a check. A caption wins over a square, and a square wins over a triangle.
+            // Under a "mate in N" heading the triangle is kept only when that side has the mate.
             turn = with_marker(turn, marker, &placement);
+            let triangle = triangle
+                .filter(|&white| triangle_under_mate(white, &placement, before.heading_mate));
             if matches!(turn, Turn::Unknown)
                 && marker.is_none()
-                && let Some(white) = caption.or(printed)
+                && let Some(white) = caption.or(printed).or(triangle)
             {
                 let side = if white { Color::White } else { Color::Black };
                 if let Some(pos) = placed(&placement, side) {
@@ -1117,6 +1139,16 @@ fn recognized_positions(
         }
     }
     (out, unconfirmed)
+}
+/// A triangle read off the Quality Chess places. With no "mate in N" heading it may name the
+/// side. When a section heading states the theme, the mark is kept only if that side can force
+/// mate in N — a printed triangle that contradicts the mate is left unread.
+fn triangle_under_mate(white: bool, placement: &str, heading_mate: Option<u8>) -> bool {
+    let Some(n) = heading_mate else {
+        return true;
+    };
+    let side = if white { Color::White } else { Color::Black };
+    placed(placement, side).is_some_and(|pos| mates_within(&pos, n))
 }
 /// Adds a printed side-to-move marker to what the text says: it confirms a board nothing else
 /// does, agrees with a confirmed one, and leaves a board unconfirmed when the two disagree.
@@ -1163,14 +1195,16 @@ struct Before {
     puzzle_label: Option<Color>,
     /// The page's "mate in N" theme, if one heads the diagrams on it.
     mate: Option<u8>,
+    /// The same theme when the nearest statement of it is a section heading.
+    heading_mate: Option<u8>,
 }
 /// Reads the caption right above block `b` and the "mate in N" theme heading its page.
 fn before_image(page: &Page, b: usize) -> Before {
     let mut before = Before::default();
     // Captions and trailing plies stop at the previous image so they cannot leak onto the
     // next board. A page-level "mate in N" theme may still sit above earlier diagrams.
-    let mut near: Vec<&str> = Vec::new();
-    let mut above: Vec<&str> = Vec::new();
+    let mut near: Vec<(&str, bool)> = Vec::new();
+    let mut above: Vec<(&str, bool)> = Vec::new();
     let mut past_image = false;
     for block in page.blocks[..b].iter().rev() {
         match &block.kind {
@@ -1180,10 +1214,11 @@ fn before_image(page: &Page, b: usize) -> Before {
                 if text.is_empty() {
                     continue;
                 }
+                let heading = matches!(block.kind, BlockKind::Heading);
                 if past_image {
-                    above.push(text);
+                    above.push((text, heading));
                 } else {
-                    near.push(text);
+                    near.push((text, heading));
                 }
             }
             _ => {}
@@ -1191,7 +1226,7 @@ fn before_image(page: &Page, b: usize) -> Before {
     }
     let mut skip_number = false;
     let mut blocked_by_commentary = false;
-    for (i, text) in near.iter().copied().enumerate() {
+    for (i, (text, heading)) in near.iter().copied().enumerate() {
         if i == 0 {
             before.stated = lead_in_turn(text);
             before.after_move = side_after_trailing_move(text);
@@ -1208,6 +1243,9 @@ fn before_image(page: &Page, b: usize) -> Before {
         }
         if let Some(n) = mate_in(text) {
             before.mate = Some(n);
+            if heading {
+                before.heading_mate = Some(n);
+            }
             break;
         }
         // Commentary between the theme and the board may concern another position.
@@ -1219,9 +1257,12 @@ fn before_image(page: &Page, b: usize) -> Before {
     // Long near-board commentary already broke the theme search — do not inherit a mate
     // heading from an earlier diagram above that wall of prose.
     if before.mate.is_none() && !blocked_by_commentary {
-        for text in &above {
+        for &(text, heading) in &above {
             if let Some(n) = mate_in(text) {
                 before.mate = Some(n);
+                if heading {
+                    before.heading_mate = Some(n);
+                }
                 break;
             }
             if text.chars().count() > 200 {
@@ -1232,7 +1273,7 @@ fn before_image(page: &Page, b: usize) -> Before {
     // Puzzle numbers with a side figurine ("No. 187 xk" / "çk") sit as headings above a
     // board or a left/right pair. Prefer the nearest label in `near`; otherwise the one
     // that introduced the pair (`above`, just past the sibling image).
-    for text in near.iter().copied().chain(above.iter().copied()) {
+    for (text, _) in near.iter().copied().chain(above.iter().copied()) {
         if let Some(side) = puzzle_label_turn(text) {
             before.puzzle_label = Some(side);
             break;
@@ -2272,6 +2313,132 @@ mod image_tests {
             &["1. Ra8+"],
         );
         assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
+    }
+    fn shown_headed(bytes: Vec<u8>, placement: &'static str, heading: &str) -> BlockKind {
+        let mut page = Page::default();
+        page.heading(heading, 2);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes,
+            }],
+        };
+        resolve_using(document, Some(&Fixed(placement)))
+            .document
+            .pages[0]
+            .blocks[1]
+            .kind
+            .clone()
+    }
+    #[test]
+    fn a_printed_triangle_fills_only_an_unknown_side() {
+        let png = tiny_png();
+        let marked = crate::books::diagram::with_triangle_side(&png, true);
+        // The alt already names Black. The triangle must not replace it.
+        let kind = shown_bytes(marked.clone(), PLACEMENT, "Black to play", &[]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // Nothing else names the side, so the triangle does.
+        let kind = shown_bytes(marked, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // A bottom-right or Quality Chess marker stays in force when the triangle disagrees.
+        let prior = crate::books::diagram::with_triangle_side(
+            &crate::books::diagram::with_side(&png, false),
+            true,
+        );
+        let kind = shown_bytes(prior, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // A caption already confirmed the side. The triangle does not replace it.
+        let captioned = crate::books::diagram::with_triangle_side(
+            &crate::books::diagram::with_caption_side(&png, false),
+            true,
+        );
+        let kind = shown_bytes(captioned, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // A square from the wider search wins over the triangle.
+        let square = crate::books::diagram::with_triangle_side(
+            &crate::books::diagram::with_mark_side(&png, false),
+            true,
+        );
+        let kind = shown_bytes(square, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // Check already names Black. A White triangle must not replace it.
+        let kind = shown_bytes(
+            crate::books::diagram::with_triangle_side(&png, true),
+            "4k3/8/8/8/8/8/8/K3R3",
+            "",
+            &[],
+        );
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // Text that contradicts itself stays unread.
+        let kind = shown_bytes(
+            crate::books::diagram::with_triangle_side(&png, true),
+            PLACEMENT,
+            "Black to play",
+            &["1. Ra8+"],
+        );
+        assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
+    }
+    #[test]
+    fn a_triangle_abstains_when_the_marked_side_has_no_mate_in_n() {
+        let png = tiny_png();
+        let white = crate::books::diagram::with_triangle_side(&png, true);
+        // Two kings: neither side has a mate. The heading withdraws the triangle.
+        let quiet = "4k3/8/8/8/8/8/8/4K3";
+        let kind = shown_headed(white.clone(), quiet, "Mate in 1");
+        assert!(
+            matches!(kind, BlockKind::UnconfirmedDiagram { .. }),
+            "{kind:?}"
+        );
+        // The same mark names White when the page has no mate heading.
+        let kind = shown_bytes(white.clone(), quiet, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // White to move mates in one. A triangle for White is kept; one for Black is not applied.
+        let mate = "6k1/5ppp/8/8/8/8/8/R5K1";
+        let kind = shown_headed(white, mate, "Mate in 1");
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        let black = crate::books::diagram::with_triangle_side(&png, false);
+        let kind = shown_headed(black, mate, "Mate in 1");
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
     }
     #[test]
     fn a_contradicted_side_keeps_the_image_unread() {
