@@ -124,13 +124,39 @@ mod tests {
         .expect("font");
         let phrase = "White to move";
         let scaled = font.as_scaled(46.0);
+        let gray = crate::books::diagram::Gray::from_luma(width, height, &luma).expect("board");
+        let crop = crate::books::diagram::page_boards(&gray)
+            .into_iter()
+            .next()
+            .expect("one crop");
+        let inner = crate::books::diagram::locate(&gray.crop(crop).expect("crop image"))
+            .expect("board inside the crop");
+        let board_left = crop[0].max(0) + inner[0];
+        let board_right = crop[0].max(0) + inner[2];
+        let board_bottom = crop[1].max(0) + inner[3];
+        let board_width = (board_right - board_left) as f32;
+        // Glyph tops sit inside the detector padding, past the minimum gap under the board.
+        let gap = 0.045 * board_width + 2.0;
+        assert!(
+            board_bottom < crop[3] && (board_bottom as f32 + gap) < crop[3] as f32,
+            "the caption starts in the crop padding, below the located board"
+        );
+        let glyph_top = phrase
+            .chars()
+            .filter_map(|ch| {
+                let glyph = scaled
+                    .glyph_id(ch)
+                    .with_scale_and_position(scaled.scale(), point(0.0, 0.0));
+                font.outline_glyph(glyph)
+                    .map(|outlined| outlined.px_bounds().min.y)
+            })
+            .fold(f32::MAX, f32::min);
+        let baseline = board_bottom as f32 + gap - glyph_top;
         let advances: f32 = phrase
             .chars()
             .map(|ch| scaled.h_advance(scaled.glyph_id(ch)))
             .sum();
-        let mut caret = (left + side / 2) as f32 - advances / 2.0;
-        // Far enough under the crop margin to sit inside the below-board window.
-        let baseline = (top + side) as f32 + side as f32 * 0.20;
+        let mut caret = (board_left + board_right) as f32 / 2.0 - advances / 2.0;
         for ch in phrase.chars() {
             let id = scaled.glyph_id(ch);
             let glyph = id.with_scale_and_position(scaled.scale(), point(caret, baseline));
