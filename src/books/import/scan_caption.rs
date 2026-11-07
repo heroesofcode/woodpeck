@@ -261,8 +261,8 @@ fn bind(
     if targets.len() != frames.len() {
         return None;
     }
-    // `page_boards` pads every crop. The caption gap is measured from the board `locate`
-    // finds inside that crop, so the padding is not counted as gap already spent.
+    // Census identity stays on the padded detector crops. The caption window uses the
+    // board `locate` finds inside each crop, so that padding is not part of the gap.
     let boards = located_boards(gray, &frames)?;
     Some(assign_edges(&frames, &boards, &payload.lines, targets))
 }
@@ -448,7 +448,7 @@ fn assign_edges(
 fn sole_owner(frames: &[Frame], boards: &[Frame], line: &OcrLine) -> Option<usize> {
     let mut owner = None;
     for (index, frame) in frames.iter().enumerate() {
-        if !below_board(*frame, boards[index], line) {
+        if !below_board(boards[index], line) {
             continue;
         }
         let own = frame_distance(*frame, line);
@@ -468,22 +468,15 @@ fn sole_owner(frames: &[Frame], boards: &[Frame], line: &OcrLine) -> Option<usiz
     owner
 }
 
+/// `board` is the located diagram, not the padded detector crop.
 #[allow(clippy::cast_precision_loss)]
-fn below_board(crop: Frame, board: Frame, line: &OcrLine) -> bool {
-    let width = (crop[2] - crop[0]) as f64;
-    let board_width = (board[2] - board[0]) as f64;
-    if width < 1.0 || board_width < 1.0 || !line_box_ok(line) {
-        return false;
-    }
-    // `crop` is the detector frame and includes its margin. The near edge is the board
-    // itself; the far edge stays GAP_MAX below that certified crop.
-    let pad = crop[3] as f64 - board[3] as f64;
-    if pad < 0.0 {
+fn below_board(board: Frame, line: &OcrLine) -> bool {
+    let width = (board[2] - board[0]) as f64;
+    if width < 1.0 || !line_box_ok(line) {
         return false;
     }
     let gap = line.top - board[3] as f64;
-    let farthest = pad + CAPTION_GAP_MAX * width;
-    if !(CAPTION_GAP_MIN * board_width..=farthest).contains(&gap) {
+    if !(CAPTION_GAP_MIN * width..=CAPTION_GAP_MAX * width).contains(&gap) {
         return false;
     }
     let height = line.bottom - line.top;
@@ -491,12 +484,12 @@ fn below_board(crop: Frame, board: Frame, line: &OcrLine) -> bool {
         return false;
     }
     let center = f64::midpoint(line.left, line.right);
-    let middle = f64::midpoint(crop[0] as f64, crop[2] as f64);
+    let middle = f64::midpoint(board[0] as f64, board[2] as f64);
     if (center - middle).abs() > CAPTION_CENTER_SLACK * width {
         return false;
     }
     let margin = CAPTION_MARGIN * width;
-    line.left >= crop[0] as f64 - margin && line.right <= crop[2] as f64 + margin
+    line.left >= board[0] as f64 - margin && line.right <= board[2] as f64 + margin
 }
 
 fn line_box_ok(line: &OcrLine) -> bool {
