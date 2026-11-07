@@ -289,14 +289,13 @@ fn midpoint_y(rect: &Rect) -> f64 {
 }
 
 fn aligned(anchor: &TextBox, word: &TextBox) -> bool {
-    let h = height(anchor.rect).min(height(word.rect)).max(1.0);
-    overlap(
-        anchor.rect.bottom,
-        anchor.rect.top,
-        word.rect.bottom,
-        word.rect.top,
-    ) > 0.45 * h
-        || (midpoint_y(&anchor.rect) - midpoint_y(&word.rect)).abs() < h
+    let anchor = anchor.rect;
+    let word = word.rect;
+    let h = height(anchor).min(height(word)).max(1.0);
+    // `|Δ(top + bottom)| < h` is a midpoint gap below half the shorter word.
+    // A full line height would merge the next row of tight leading.
+    overlap(anchor.bottom, anchor.top, word.bottom, word.top) > 0.45 * h
+        || ((anchor.bottom + anchor.top) - (word.bottom + word.top)).abs() < h
 }
 
 fn split_row(mut words: Vec<TextBox>) -> Vec<TextBox> {
@@ -666,6 +665,22 @@ mod tests {
             text("the move", 116.0, 371.2, 180.0, 385.4),
         ];
         assert_eq!(bind_side_captions(&diagrams, &split), vec![Some(true)]);
+    }
+
+    #[test]
+    fn baselines_join_within_half_a_line_and_not_at_three_quarters() {
+        let diagrams = [rect(40.0, 400.0, 220.0, 560.0)];
+        let h = 16.0;
+        let line = |word: &str, left: f64, shift: f64| {
+            text(word, left, 370.0 - shift, left + 48.0, 370.0 + h - shift)
+        };
+        // 0.75h sits inside a full-height window and outside the half-height one.
+        // Joining these would mint "White wins"; apart, neither word is a caption.
+        let apart = [line("White", 42.0, 0.0), line("wins", 96.0, 0.75 * h)];
+        assert_eq!(bind_side_captions(&diagrams, &apart), vec![None]);
+        // 0.4h is inside the old half-height window, so the pair is one caption.
+        let together = [line("Black", 42.0, 0.0), line("wins", 96.0, 0.4 * h)];
+        assert_eq!(bind_side_captions(&diagrams, &together), vec![Some(false)]);
     }
 
     #[test]
