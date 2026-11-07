@@ -666,6 +666,7 @@ fn text_chunk(bytes: &[u8], key: &[u8]) -> Option<Vec<u8>> {
 /// The side-to-move marker some books print beside a diagram: a small square level with the
 /// bottom rank, just right of the board, hollow for White and filled for Black. `Some(true)` is
 /// White. Only one clear square counts; anything doubtful abstains.
+/// Squares on the other three corners, and in the caption line, are read by [`side_marks`].
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -885,6 +886,543 @@ pub fn triangle_marker(g: &Gray, frame: Frame) -> Option<bool> {
         _ => None,
     }
 }
+
+/// Printed side squares on every side of a board, for pages where [`side_marker`] abstains.
+mod side_square {
+    #![allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss
+    )]
+
+    use super::{Frame, Gray, locate_with_light_rim};
+
+    /// PNG text chunk for a side square that is not the bottom-right marker.
+    const KEY: &[u8] = b"woodpeck-mark-side";
+    /// Ink at or below this luma joins a mark. Gray fills (about 0.5) stay connected to the outline.
+    const INK: f32 = 0.60;
+    /// Interior range at or above this is a glyph (a letter, a rank "8"), not a flat printed square.
+    const FLAT: f32 = 0.40;
+    /// Corner bands accept a square down to this fraction of the board. Caption text sits a little larger.
+    const MIN_CORNER: f64 = 0.03;
+    const MIN_CAPTION: f64 = 0.04;
+    const MAX_MARK: f64 = 0.13;
+
+    /// A PNG with a side read from a square off the bottom-right corner.
+    /// The resolver may use it only while the side to move is still unknown.
+    pub fn with_mark_side(png: &[u8], white: bool) -> Vec<u8> {
+        super::with_text(png, KEY, if white { "w" } else { "b" })
+    }
+
+    /// The side stored by [`with_mark_side`]: `Some(true)` for White to move.
+    pub fn stated_mark_side(bytes: &[u8]) -> Option<bool> {
+        match super::text_chunk(bytes, KEY)?.as_slice() {
+            b"w" => Some(true),
+            b"b" => Some(false),
+            _ => None,
+        }
+    }
+
+    /// When `bytes` is one diagram and a side square sits off the bottom-right corner, return
+    /// the image with that side stored beside the pixels. `None` leaves the bytes unchanged.
+    /// A side already stored by [`super::with_side`] is not replaced.
+    pub(crate) fn attach_printed_mark(bytes: &[u8]) -> Option<Vec<u8>> {
+        if super::stated_side(bytes).is_some() || stated_mark_side(bytes).is_some() {
+            return None;
+        }
+        let gray = Gray::decode(bytes)?;
+        let frame = locate_with_light_rim(&gray)?;
+        let white = side_marks(&gray, &[frame]).pop().flatten()?;
+        // Keep the source pixels. A JPEG (or other) embed is re-encoded as PNG only so the
+        // side can sit in a text chunk; the colours are not reduced to gray.
+        let png = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            bytes.to_vec()
+        } else {
+            let image = image::load_from_memory(bytes).ok()?;
+            let mut png = Vec::new();
+            image
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .ok()?;
+            png
+        };
+        Some(with_mark_side(&png, white))
+    }
+
+    #[derive(Clone, Copy)]
+    struct Mark {
+        white: bool,
+        x0: i64,
+        y0: i64,
+        x1: i64,
+        y1: i64,
+    }
+
+    struct Survey {
+        /// Every square found, including ones that made the reading doubtful.
+        marks: Vec<Mark>,
+        side: Option<bool>,
+    }
+
+    /// One reading per frame. `Some(true)` is White to move. `None` abstains.
+    ///
+    /// Looks in five bands: the four corners just outside the board, and the caption line
+    /// directly under it. A hollow square is White; a filled or gray-filled square is Black.
+    /// A thin arrow attached to a square, or drawn beside it, is not another mark. The inside
+    /// of an accepted square is one flat tone — a varying interior is a glyph, not a mark.
+    ///
+    /// Abstains when one band holds two marks, two bands name different sides, a mark is shared
+    /// by two boards, or a mark is about as close to another board as to its own. Callers must
+    /// apply a hit only while the side is still unknown.
+    pub fn side_marks(g: &Gray, frames: &[Frame]) -> Vec<Option<bool>> {
+        let surveys: Vec<Survey> = frames
+            .iter()
+            .copied()
+            .map(|frame| survey(g, frame))
+            .collect();
+        let n = surveys.len();
+        let mut drop = vec![false; n];
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let shared = surveys[i]
+                    .marks
+                    .iter()
+                    .any(|a| surveys[j].marks.iter().any(|b| boxes_overlap(a, b)));
+                if shared {
+                    drop[i] = true;
+                    drop[j] = true;
+                }
+            }
+        }
+        for (i, survey) in surveys.iter().enumerate() {
+            if drop[i] {
+                continue;
+            }
+            if survey.marks.iter().any(|mark| contested(frames, i, mark)) {
+                drop[i] = true;
+            }
+        }
+        surveys
+            .into_iter()
+            .enumerate()
+            .map(|(i, survey)| if drop[i] { None } else { survey.side })
+            .collect()
+    }
+
+    fn survey(g: &Gray, frame: Frame) -> Survey {
+        let s = board_side(frame);
+        if s < 80.0 {
+            return Survey {
+                marks: Vec::new(),
+                side: None,
+            };
+        }
+        let mut marks = Vec::new();
+        let mut doubt = false;
+        for (window, caption) in bands(frame) {
+            let hits = scan_band(g, window, s, caption);
+            if let Ok(clear) = merge_overlaps(hits.clone(), true) {
+                marks.extend(clear);
+            } else {
+                doubt = true;
+                marks.extend(hits);
+            }
+        }
+        let side = if doubt {
+            None
+        } else {
+            merge_overlaps(marks.clone(), false)
+                .ok()
+                .and_then(|clear| clear.first().map(|mark| mark.white))
+        };
+        // `marks` keeps every hit, including a doubtful one, so a neighbour can see a shared square.
+        Survey { marks, side }
+    }
+
+    fn board_side(frame: Frame) -> f64 {
+        if frame[2] <= frame[0] || frame[3] <= frame[1] {
+            return 0.0;
+        }
+        (frame[2] - frame[0]).min(frame[3] - frame[1]) as f64
+    }
+
+    /// `(window, caption band)`.
+    fn bands(frame: Frame) -> [(Frame, bool); 5] {
+        let s = board_side(frame);
+        let reach = snap(0.42 * s);
+        let along = snap(0.28 * s);
+        let past = snap(0.12 * s);
+        let below = snap(0.18 * s);
+        let pad = snap(0.008 * s).clamp(2, 6);
+        let (left, top, right, bottom) = (frame[0], frame[1], frame[2], frame[3]);
+        [
+            ([left - reach, top - past, left - pad, top + along], false),
+            ([right + pad, top - past, right + reach, top + along], false),
+            (
+                [left - reach, bottom - along, left - pad, bottom + past],
+                false,
+            ),
+            (
+                [right + pad, bottom - along, right + reach, bottom + past],
+                false,
+            ),
+            (
+                [left - past, bottom + pad, right + past, bottom + below],
+                true,
+            ),
+        ]
+    }
+
+    fn snap(v: f64) -> i64 {
+        v.round() as i64
+    }
+
+    fn scan_band(g: &Gray, window: Frame, s: f64, caption: bool) -> Vec<Mark> {
+        let Some((x0, y0, x1, y1)) = clamp_window(window, g.width, g.height) else {
+            return Vec::new();
+        };
+        let ww = x1 - x0;
+        let hh = y1 - y0;
+        let mut dark = vec![false; ww * hh];
+        for y in 0..hh {
+            for x in 0..ww {
+                dark[y * ww + x] = g.px[(y0 + y) * g.width + (x0 + x)] < INK;
+            }
+        }
+        // One pixel of closing joins a broken outline without reaching across a real gap.
+        let mut closed = dark.clone();
+        for y in 0..hh {
+            for x in 0..ww {
+                if !dark[y * ww + x] {
+                    continue;
+                }
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let nx = x as isize + dx;
+                        let ny = y as isize + dy;
+                        if nx >= 0 && ny >= 0 && (nx as usize) < ww && (ny as usize) < hh {
+                            closed[ny as usize * ww + nx as usize] = true;
+                        }
+                    }
+                }
+            }
+        }
+        let mut seen = vec![false; ww * hh];
+        let mut marks = Vec::new();
+        let huge = (0.45 * s).powi(2).max(64.0) as usize;
+        for start in 0..ww * hh {
+            if seen[start] || !closed[start] {
+                continue;
+            }
+            let mut stack = vec![start];
+            seen[start] = true;
+            let mut pix = Vec::new();
+            while let Some(i) = stack.pop() {
+                let (x, y) = (i % ww, i / ww);
+                if dark[i] {
+                    pix.push((x, y));
+                }
+                for (dx, dy) in [
+                    (-1, 0),
+                    (1, 0),
+                    (0, -1),
+                    (0, 1),
+                    (-1, -1),
+                    (-1, 1),
+                    (1, -1),
+                    (1, 1),
+                ] {
+                    let nx = x as isize + dx;
+                    let ny = y as isize + dy;
+                    if nx >= 0 && ny >= 0 && (nx as usize) < ww && (ny as usize) < hh {
+                        let ni = ny as usize * ww + nx as usize;
+                        if !seen[ni] && closed[ni] {
+                            seen[ni] = true;
+                            stack.push(ni);
+                        }
+                    }
+                }
+            }
+            if pix.is_empty() || pix.len() > huge {
+                continue;
+            }
+            if let Some(mark) = classify(g, &pix, ww, x0, y0, s, caption) {
+                marks.push(mark);
+            }
+        }
+        marks
+    }
+
+    fn clamp_window(
+        window: Frame,
+        width: usize,
+        height: usize,
+    ) -> Option<(usize, usize, usize, usize)> {
+        let x0 = window[0].max(0);
+        let y0 = window[1].max(0);
+        let x1 = window[2].min(width as i64);
+        let y1 = window[3].min(height as i64);
+        if x1 - x0 < 4 || y1 - y0 < 4 {
+            return None;
+        }
+        Some((x0 as usize, y0 as usize, x1 as usize, y1 as usize))
+    }
+
+    fn classify(
+        g: &Gray,
+        pix: &[(usize, usize)],
+        ww: usize,
+        origin_x: usize,
+        origin_y: usize,
+        s: f64,
+        caption: bool,
+    ) -> Option<Mark> {
+        let window_h = pix.iter().map(|p| p.1).max().unwrap_or(0) + 1;
+        let mut member = vec![false; ww * window_h.max(1)];
+        let (mut x0, mut y0, mut x1, mut y1) = (ww, window_h, 0usize, 0usize);
+        for &(x, y) in pix {
+            if y < window_h && x < ww {
+                member[y * ww + x] = true;
+            }
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x + 1);
+            y1 = y1.max(y + 1);
+        }
+        (x0, y0, x1, y1) = trim_arrow(&member, ww, x0, y0, x1, y1);
+        let (bw, bh) = ((x1 - x0) as f64, (y1 - y0) as f64);
+        let max_side = bw.max(bh);
+        let min_frac = if caption { MIN_CAPTION } else { MIN_CORNER };
+        if max_side < min_frac * s || max_side > MAX_MARK * s {
+            return None;
+        }
+        if (bw - bh).abs() > 0.28 * max_side || bw.min(bh) < 0.72 * max_side {
+            return None;
+        }
+        let (mean, range, samples) = interior(g, origin_x, origin_y, x0, y0, x1, y1);
+        if samples < 4 || range >= FLAT {
+            return None;
+        }
+        let white = if mean <= 0.72 {
+            false
+        } else if mean >= 0.80 && borders_inked(&member, ww, x0, y0, x1, y1) {
+            true
+        } else {
+            return None;
+        };
+        Some(Mark {
+            white,
+            x0: (origin_x + x0) as i64,
+            y0: (origin_y + y0) as i64,
+            x1: (origin_x + x1) as i64,
+            y1: (origin_y + y1) as i64,
+        })
+    }
+
+    /// Drops outer rows and columns that are only a thin shaft, so an arrow attached to a
+    /// square does not stretch the box. A hollow square keeps its full span on every row.
+    fn trim_arrow(
+        member: &[bool],
+        ww: usize,
+        mut x0: usize,
+        mut y0: usize,
+        mut x1: usize,
+        mut y1: usize,
+    ) -> (usize, usize, usize, usize) {
+        for _ in 0..32 {
+            if x1.saturating_sub(x0) < 4 || y1.saturating_sub(y0) < 4 {
+                break;
+            }
+            let max_row = (y0..y1)
+                .map(|y| row_span(member, ww, x0, x1, y))
+                .max()
+                .unwrap_or(0);
+            let max_col = (x0..x1)
+                .map(|x| col_span(member, ww, x, y0, y1))
+                .max()
+                .unwrap_or(0);
+            let row_keep = ((max_row as f64) * 0.50).ceil().max(1.0) as usize;
+            let col_keep = ((max_col as f64) * 0.50).ceil().max(1.0) as usize;
+            let mut next = (x0, y0, x1, y1);
+            if row_span(member, ww, x0, x1, y0) < row_keep {
+                next.1 += 1;
+            }
+            if next.3 > next.1 && row_span(member, ww, x0, x1, y1 - 1) < row_keep {
+                next.3 -= 1;
+            }
+            if col_span(member, ww, x0, y0, y1) < col_keep {
+                next.0 += 1;
+            }
+            if next.2 > next.0 && col_span(member, ww, x1 - 1, y0, y1) < col_keep {
+                next.2 -= 1;
+            }
+            if next == (x0, y0, x1, y1) {
+                break;
+            }
+            (x0, y0, x1, y1) = next;
+        }
+        (x0, y0, x1, y1)
+    }
+
+    fn row_span(member: &[bool], ww: usize, x0: usize, x1: usize, y: usize) -> usize {
+        let mut min = x1;
+        let mut max = x0;
+        for x in x0..x1 {
+            if member.get(y * ww + x).copied().unwrap_or(false) {
+                min = min.min(x);
+                max = max.max(x + 1);
+            }
+        }
+        max.saturating_sub(min)
+    }
+
+    fn col_span(member: &[bool], ww: usize, x: usize, y0: usize, y1: usize) -> usize {
+        let mut min = y1;
+        let mut max = y0;
+        for y in y0..y1 {
+            if member.get(y * ww + x).copied().unwrap_or(false) {
+                min = min.min(y);
+                max = max.max(y + 1);
+            }
+        }
+        max.saturating_sub(min)
+    }
+
+    fn interior(
+        g: &Gray,
+        origin_x: usize,
+        origin_y: usize,
+        x0: usize,
+        y0: usize,
+        x1: usize,
+        y1: usize,
+    ) -> (f32, f32, usize) {
+        let inset = |span: usize| ((span as f64) * 0.30).floor().max(1.0) as usize;
+        let ix = inset(x1 - x0);
+        let iy = inset(y1 - y0);
+        if x0 + ix >= x1.saturating_sub(ix) || y0 + iy >= y1.saturating_sub(iy) {
+            return (1.0, 1.0, 0);
+        }
+        let mut min_v = 1.0f32;
+        let mut max_v = 0.0f32;
+        let mut sum = 0.0f32;
+        let mut n = 0usize;
+        for y in (y0 + iy)..(y1 - iy) {
+            for x in (x0 + ix)..(x1 - ix) {
+                let v = g.px[(origin_y + y) * g.width + origin_x + x];
+                min_v = min_v.min(v);
+                max_v = max_v.max(v);
+                sum += v;
+                n += 1;
+            }
+        }
+        if n == 0 {
+            return (1.0, 1.0, 0);
+        }
+        (sum / n as f32, max_v - min_v, n)
+    }
+
+    fn borders_inked(
+        member: &[bool],
+        ww: usize,
+        x0: usize,
+        y0: usize,
+        x1: usize,
+        y1: usize,
+    ) -> bool {
+        let w = x1.saturating_sub(x0);
+        let h = y1.saturating_sub(y0);
+        if w < 4 || h < 4 {
+            return false;
+        }
+        let bx = (w / 5).max(1);
+        let by = (h / 5).max(1);
+        let row = |y: usize| {
+            let ink = (x0..x1)
+                .filter(|&x| member.get(y * ww + x).copied().unwrap_or(false))
+                .count();
+            ink as f64 / w as f64
+        };
+        let col = |x: usize| {
+            let ink = (y0..y1)
+                .filter(|&y| member.get(y * ww + x).copied().unwrap_or(false))
+                .count();
+            ink as f64 / h as f64
+        };
+        let max_rows = |from: usize, to: usize| (from..to).map(row).fold(0.0_f64, f64::max);
+        let max_cols = |from: usize, to: usize| (from..to).map(col).fold(0.0_f64, f64::max);
+        max_rows(y0, y0 + by) > 0.72
+            && max_rows(y1 - by, y1) > 0.72
+            && max_cols(x0, x0 + bx) > 0.72
+            && max_cols(x1 - bx, x1) > 0.72
+    }
+
+    /// `Err` when the squares disagree, or when `many_is_doubt` and more than one remains.
+    fn merge_overlaps(marks: Vec<Mark>, many_is_doubt: bool) -> Result<Vec<Mark>, ()> {
+        let mut kept: Vec<Mark> = Vec::new();
+        for mark in marks {
+            if let Some(prev) = kept.iter_mut().find(|prev| boxes_overlap(prev, &mark)) {
+                if prev.white != mark.white {
+                    return Err(());
+                }
+                prev.x0 = prev.x0.min(mark.x0);
+                prev.y0 = prev.y0.min(mark.y0);
+                prev.x1 = prev.x1.max(mark.x1);
+                prev.y1 = prev.y1.max(mark.y1);
+            } else if kept.iter().any(|prev| prev.white != mark.white) {
+                return Err(());
+            } else {
+                kept.push(mark);
+            }
+        }
+        if many_is_doubt && kept.len() >= 2 {
+            return Err(());
+        }
+        Ok(kept)
+    }
+
+    fn boxes_overlap(a: &Mark, b: &Mark) -> bool {
+        let ix = (a.x1.min(b.x1) - a.x0.max(b.x0)).max(0);
+        let iy = (a.y1.min(b.y1) - a.y0.max(b.y0)).max(0);
+        if ix == 0 || iy == 0 {
+            return false;
+        }
+        let inter = ix * iy;
+        let area = |m: &Mark| (m.x1 - m.x0).max(1) * (m.y1 - m.y0).max(1);
+        inter * 2 >= area(a).min(area(b))
+    }
+
+    /// True when some other board is about as close to the square as its own board.
+    fn contested(frames: &[Frame], index: usize, mark: &Mark) -> bool {
+        let own = frames[index];
+        let d_own = gap(own, mark);
+        frames.iter().enumerate().any(|(other_i, other)| {
+            other_i != index && gap(*other, mark) <= d_own.mul_add(1.35, 2.0)
+        })
+    }
+
+    fn gap(frame: Frame, mark: &Mark) -> f64 {
+        let cx = f64::midpoint(mark.x0 as f64, mark.x1 as f64);
+        let cy = f64::midpoint(mark.y0 as f64, mark.y1 as f64);
+        let dx = if cx < frame[0] as f64 {
+            frame[0] as f64 - cx
+        } else if cx > frame[2] as f64 {
+            cx - frame[2] as f64
+        } else {
+            0.0
+        };
+        let dy = if cy < frame[1] as f64 {
+            frame[1] as f64 - cy
+        } else if cy > frame[3] as f64 {
+            cy - frame[3] as f64
+        } else {
+            0.0
+        };
+        dx.hypot(dy)
+    }
+}
+
+pub(crate) use side_square::attach_printed_mark;
+pub use side_square::{side_marks, stated_mark_side, with_mark_side};
 
 /// Boards on a whole page (a scan or a rendered page): square clusters of connected ink, each
 /// confirmed by [`locate`] on its own crop. Returned as crop boxes with a small margin, top to
@@ -1590,6 +2128,226 @@ mod tests {
         assert_eq!(triangle_marker(&g, f), None);
     }
 
+    /// How a synthetic square is painted. `Glyph` is a flat outline with a cross through it.
+    #[derive(Clone, Copy)]
+    enum MarkInk {
+        Hollow,
+        Filled,
+        Gray,
+        Glyph,
+    }
+
+    fn paint_square(
+        buf: &mut [u8],
+        width: usize,
+        height: usize,
+        left: usize,
+        top: usize,
+        side: usize,
+        ink: MarkInk,
+    ) {
+        let thick = if side < 12 { 1 } else { 2 };
+        for dy in 0..side {
+            if top + dy >= height {
+                break;
+            }
+            for dx in 0..side {
+                if left + dx >= width {
+                    break;
+                }
+                let border = dx < thick || dy < thick || dx + thick >= side || dy + thick >= side;
+                let bar =
+                    (dx > side / 3 && dx < side * 2 / 3) || (dy > side / 3 && dy < side * 2 / 3);
+                let pixel = match ink {
+                    MarkInk::Hollow => {
+                        if border {
+                            0
+                        } else {
+                            255
+                        }
+                    }
+                    MarkInk::Filled => 0,
+                    MarkInk::Gray => {
+                        if border {
+                            0
+                        } else {
+                            128
+                        }
+                    }
+                    MarkInk::Glyph => {
+                        if border || bar {
+                            0
+                        } else {
+                            255
+                        }
+                    }
+                };
+                buf[(top + dy) * width + left + dx] = pixel;
+            }
+        }
+    }
+
+    fn paint_arrow(
+        buf: &mut [u8],
+        width: usize,
+        height: usize,
+        left: usize,
+        top: usize,
+        side: usize,
+        attached: bool,
+    ) {
+        let (ax, ay) = if attached {
+            (left + side / 2 - 1, top + side - 2)
+        } else {
+            (left + side + 6, top)
+        };
+        let tall = if attached { side / 2 + 4 } else { side };
+        for dy in 0..tall {
+            for dx in 0..2 {
+                let (px, py) = (ax + dx, ay + dy);
+                if px < width && py < height {
+                    buf[py * width + px] = 0;
+                }
+            }
+        }
+    }
+
+    fn page_with(width: usize, height: usize, paint: impl FnOnce(&mut [u8])) -> Gray {
+        let mut luma = vec![255u8; width * height];
+        paint(&mut luma);
+        Gray::from_luma(width, height, &luma).expect("page")
+    }
+
+    #[test]
+    fn side_marks_reads_hollow_white_and_filled_or_gray_black() {
+        let frame = [40, 40, 340, 340];
+        let g = page_with(500, 460, |buf| {
+            paint_square(buf, 500, 460, 360, 290, 22, MarkInk::Hollow);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![Some(true)]);
+        let g = page_with(500, 460, |buf| {
+            paint_square(buf, 500, 460, 360, 290, 22, MarkInk::Filled);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![Some(false)]);
+        let g = page_with(500, 460, |buf| {
+            paint_square(buf, 500, 460, 360, 290, 22, MarkInk::Gray);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![Some(false)]);
+    }
+
+    #[test]
+    fn side_marks_reads_a_square_on_every_side_and_the_caption() {
+        let frame = [40, 40, 340, 340];
+        // Left-top, right-top, left-bottom, right-bottom, caption under the board.
+        let spots = [
+            (8, 20, 22, "left-top"),
+            (360, 20, 22, "right-top"),
+            (8, 280, 22, "left-bottom"),
+            (360, 290, 22, "right-bottom"),
+            (150, 352, 20, "caption"),
+        ];
+        for (x, y, side, band) in spots {
+            for ink in [MarkInk::Hollow, MarkInk::Filled] {
+                let g = page_with(500, 460, |buf| {
+                    paint_square(buf, 500, 460, x, y, side, ink);
+                });
+                let want = matches!(ink, MarkInk::Hollow);
+                assert_eq!(side_marks(&g, &[frame]), vec![Some(want)], "{band} {want}");
+            }
+        }
+    }
+
+    #[test]
+    fn side_marks_tolerates_a_thin_arrow() {
+        let frame = [40, 40, 340, 340];
+        let g = page_with(500, 460, |buf| {
+            paint_square(buf, 500, 460, 360, 290, 22, MarkInk::Hollow);
+            paint_arrow(buf, 500, 460, 360, 290, 22, true);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![Some(true)]);
+        let g = page_with(500, 460, |buf| {
+            paint_square(buf, 500, 460, 360, 290, 22, MarkInk::Filled);
+            paint_arrow(buf, 500, 460, 360, 290, 22, false);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![Some(false)]);
+    }
+
+    #[test]
+    fn side_marks_rejects_a_glyph_with_a_varying_interior() {
+        let frame = [40, 40, 340, 340];
+        let g = page_with(500, 460, |buf| {
+            paint_square(buf, 500, 460, 360, 290, 22, MarkInk::Glyph);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![None]);
+        // The glyph is not a mark, so a real square in another band still counts.
+        let g = page_with(500, 460, |buf| {
+            paint_square(buf, 500, 460, 8, 20, 22, MarkInk::Glyph);
+            paint_square(buf, 500, 460, 360, 290, 22, MarkInk::Filled);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![Some(false)]);
+    }
+
+    #[test]
+    fn side_marks_abstains_when_marks_conflict() {
+        let frame = [40, 40, 340, 340];
+        // Two bands, two sides.
+        let g = page_with(500, 460, |buf| {
+            paint_square(buf, 500, 460, 8, 20, 22, MarkInk::Hollow);
+            paint_square(buf, 500, 460, 360, 290, 22, MarkInk::Filled);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![None]);
+        // One band, two squares, even when they name the same side.
+        let g = page_with(500, 460, |buf| {
+            paint_square(buf, 500, 460, 360, 270, 18, MarkInk::Hollow);
+            paint_square(buf, 500, 460, 400, 270, 18, MarkInk::Hollow);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![None]);
+        // The same side on two bands is one reading.
+        let g = page_with(500, 460, |buf| {
+            paint_square(buf, 500, 460, 8, 20, 22, MarkInk::Hollow);
+            paint_square(buf, 500, 460, 150, 352, 20, MarkInk::Hollow);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![Some(true)]);
+    }
+
+    #[test]
+    fn side_marks_abstains_when_a_square_is_shared_or_between_boards() {
+        // The square sits in the gutter and in both boards' bands.
+        let left = [40, 40, 300, 300];
+        let right = [340, 40, 600, 300];
+        let g = page_with(640, 360, |buf| {
+            paint_square(buf, 640, 360, 312, 50, 16, MarkInk::Filled);
+        });
+        assert_eq!(side_marks(&g, &[left, right]), vec![None, None]);
+        // A square next to the first board, far from the second, belongs to the first.
+        let far = [640, 40, 900, 300];
+        let g = page_with(960, 360, |buf| {
+            paint_square(buf, 960, 360, 308, 50, 14, MarkInk::Hollow);
+        });
+        assert_eq!(side_marks(&g, &[left, far]), vec![Some(true), None]);
+        // A caption tucked under the upper board is closer to it than to the board below.
+        let lower = [40, 520, 340, 820];
+        let upper = [40, 40, 340, 340];
+        let g = page_with(400, 880, |buf| {
+            paint_square(buf, 400, 880, 150, 360, 20, MarkInk::Hollow);
+        });
+        assert_eq!(side_marks(&g, &[upper, lower]), vec![Some(true), None]);
+    }
+
+    #[test]
+    fn side_marks_accepts_a_square_near_three_percent_of_the_board() {
+        // 8 px on a 260 px board is just over 0.03. One pixel smaller is not a mark.
+        let frame = [30, 30, 290, 290];
+        let g = page_with(400, 400, |buf| {
+            paint_square(buf, 400, 400, 8, 250, 8, MarkInk::Hollow);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![Some(true)]);
+        let g = page_with(400, 400, |buf| {
+            paint_square(buf, 400, 400, 8, 250, 7, MarkInk::Hollow);
+        });
+        assert_eq!(side_marks(&g, &[frame]), vec![None]);
+    }
+
     #[test]
     fn side_survives_the_png_text_chunk() {
         let image = image::GrayImage::from_raw(2, 2, vec![0, 255, 255, 0]).unwrap();
@@ -1599,6 +2357,10 @@ mod tests {
             .unwrap();
         assert_eq!(stated_side(&png), None);
         assert_eq!(stated_caption_side(&png), None);
+        assert_eq!(stated_mark_side(&png), None);
+        let marked = with_mark_side(&png, true);
+        assert_eq!(stated_mark_side(&marked), Some(true));
+        assert_eq!(stated_side(&marked), None);
         let captioned = with_caption_side(&png, true);
         assert_eq!(stated_caption_side(&captioned), Some(true));
         assert_eq!(stated_side(&captioned), None);

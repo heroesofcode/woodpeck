@@ -87,58 +87,81 @@ impl Renderer {
         let Some(gray) = Gray::from_luma(w, h, &luma) else {
             return Vec::new();
         };
-        diagram::page_boards(&gray)
-            .into_iter()
-            .filter_map(|frame| {
-                let crop = gray.crop(frame)?;
-                let image = image::GrayImage::from_raw(
-                    u32::try_from(crop.width).ok()?,
-                    u32::try_from(crop.height).ok()?,
-                    crop.luma(),
-                )?;
-                let mut bytes = Vec::new();
-                image
-                    .write_to(
-                        &mut std::io::Cursor::new(&mut bytes),
-                        image::ImageFormat::Png,
-                    )
-                    .ok()?;
-                // Page space has its origin at the bottom; the crop's top edge is its height.
-                let top = bottom + f64::from(ph) * (1.0 - frame[1] as f64 / h as f64);
-                let side = (frame[2] - frame[0]) as f64 / f64::from(scale);
-                let left = origin + frame[0] as f64 / f64::from(scale);
-                let low = top - (frame[3] - frame[1]) as f64 / f64::from(scale);
-                // The glyph board whose centre lies inside this crop.
-                let font = fonts.iter().find(|b| {
-                    let (cx, cy) = (
-                        f64::midpoint(b.left, b.right),
-                        f64::midpoint(b.top, b.bottom),
-                    );
-                    (left..left + side).contains(&cx) && (low..top).contains(&cy)
-                });
-                if let Some(font) = font {
-                    bytes = diagram::with_placement(&bytes, &font.placement);
-                }
-                // The crop carries a margin; the marker is placed against the board itself.
-                let board = diagram::locate(&crop).map_or(frame, |f| {
-                    let (x, y) = (frame[0].max(0), frame[1].max(0));
-                    [x + f[0], y + f[1], x + f[2], y + f[3]]
-                });
-                if let Some(white) = diagram::side_marker(&gray, board)
-                    .or_else(|| diagram::triangle_marker(&gray, board))
-                {
-                    bytes = diagram::with_side(&bytes, white);
-                }
-                Some(Placed {
-                    left,
-                    bottom: low,
-                    right: left + side,
-                    top,
-                    area: side * side,
-                    bytes,
-                    rendered: true,
-                })
-            })
-            .collect()
+        let mut out = Vec::new();
+        let mut boards = Vec::new();
+        for frame in diagram::page_boards(&gray) {
+            let Some(crop) = gray.crop(frame) else {
+                continue;
+            };
+            let (Ok(width), Ok(height)) = (u32::try_from(crop.width), u32::try_from(crop.height))
+            else {
+                continue;
+            };
+            let Some(image) = image::GrayImage::from_raw(width, height, crop.luma()) else {
+                continue;
+            };
+            let mut bytes = Vec::new();
+            if image
+                .write_to(
+                    &mut std::io::Cursor::new(&mut bytes),
+                    image::ImageFormat::Png,
+                )
+                .is_err()
+            {
+                continue;
+            }
+            // Page space has its origin at the bottom; the crop's top edge is its height.
+            let top = bottom + f64::from(ph) * (1.0 - frame[1] as f64 / h as f64);
+            let side = (frame[2] - frame[0]) as f64 / f64::from(scale);
+            let left = origin + frame[0] as f64 / f64::from(scale);
+            let low = top - (frame[3] - frame[1]) as f64 / f64::from(scale);
+            // The glyph board whose centre lies inside this crop.
+            let font = fonts.iter().find(|b| {
+                let (cx, cy) = (
+                    f64::midpoint(b.left, b.right),
+                    f64::midpoint(b.top, b.bottom),
+                );
+                (left..left + side).contains(&cx) && (low..top).contains(&cy)
+            });
+            if let Some(font) = font {
+                bytes = diagram::with_placement(&bytes, &font.placement);
+            }
+            // The crop carries a margin; the marker is placed against the board itself.
+            let board = diagram::locate(&crop).map_or(frame, |f| {
+                let (x, y) = (frame[0].max(0), frame[1].max(0));
+                [x + f[0], y + f[1], x + f[2], y + f[3]]
+            });
+            boards.push(board);
+            out.push(Placed {
+                left,
+                bottom: low,
+                right: left + side,
+                top,
+                area: side * side,
+                bytes,
+                rendered: true,
+            });
+        }
+        // Corner and caption squares are decided with every board in view, so a mark shared
+        // by two diagrams abstains. They never replace a bottom-right or triangle marker.
+        let wide = diagram::side_marks(&gray, &boards);
+        for ((placed, board), mark) in out.iter_mut().zip(&boards).zip(wide) {
+            placed.bytes = stamp_side(&gray, *board, mark, std::mem::take(&mut placed.bytes));
+        }
+        out
+    }
+}
+
+/// Bottom-right and triangle markers keep the channel that can disagree with the text.
+/// Any other printed square is stored aside and applied only while the side is unknown.
+fn stamp_side(gray: &Gray, board: diagram::Frame, wide: Option<bool>, bytes: Vec<u8>) -> Vec<u8> {
+    if let Some(white) =
+        diagram::side_marker(gray, board).or_else(|| diagram::triangle_marker(gray, board))
+    {
+        diagram::with_side(&bytes, white)
+    } else if let Some(white) = wide {
+        diagram::with_mark_side(&bytes, white)
+    } else {
+        bytes
     }
 }
