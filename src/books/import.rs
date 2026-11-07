@@ -43,6 +43,9 @@ fn stamp_pdf_sides(path: &Path, extracted: &mut pdf::Extracted) {
         }
         if let Some(stamped) = crate::books::diagram::attach_printed_mark(&picture.bytes) {
             picture.bytes = stamped;
+        } else if let Some(stamped) = crate::books::diagram::attach_printed_triangle(&picture.bytes)
+        {
+            picture.bytes = stamped;
         }
     }
     pdf::stamp_pdftotext_sides(
@@ -676,6 +679,9 @@ fn epub(bytes: &[u8]) -> Result<Document, ImportError> {
                             doc.assets.push(Asset {
                                 path: path.clone(),
                                 bytes: crate::books::diagram::attach_printed_mark(bytes)
+                                    .or_else(|| {
+                                        crate::books::diagram::attach_printed_triangle(bytes)
+                                    })
                                     .unwrap_or_else(|| bytes.clone()),
                             });
                         }

@@ -774,9 +774,10 @@ pub fn side_marker(g: &Gray, frame: Frame) -> Option<bool> {
     found
 }
 
-/// Quality Chess–style triangle beside the board: outline ▲ by the bottom rank for White,
-/// filled ▼ by the top rank for Black. Used only when [`side_marker`] abstains. `Some(true)` is
-/// White. Anything doubtful (two markers, wrong place, not a triangle) abstains.
+/// Quality Chess triangle beside the board: outline ▲ by the bottom rank for White, filled ▼
+/// by the top rank for Black. Used only when [`side_marker`] abstains. `Some(true)` is White.
+/// Anything doubtful (two markers, wrong place, not a triangle) abstains. Triangles on any rank
+/// to the right of the board, or in the caption line, are read by [`triangle_marks`].
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -1423,6 +1424,523 @@ mod side_square {
 
 pub(crate) use side_square::attach_printed_mark;
 pub use side_square::{side_marks, stated_mark_side, with_mark_side};
+pub(crate) use side_triangle::attach_printed_triangle;
+pub use side_triangle::{stated_triangle_side, triangle_marks, with_triangle_side};
+
+/// Printed triangles the Quality Chess reader misses: any rank in the band right of the board,
+/// or the caption line under it. A filled triangle is Black and a hollow one is White, pointing
+/// either way. Applied only while the side to move is still unknown.
+mod side_triangle {
+    #![allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss
+    )]
+
+    use super::{Frame, Gray, locate_with_light_rim};
+
+    /// PNG text chunk for a triangle that is not the Quality Chess bottom/top pair.
+    const KEY: &[u8] = b"woodpeck-triangle-side";
+    /// Ink at or below this luma belongs to the mark.
+    const INK: f32 = 0.55;
+    const MIN_MARK: f64 = 0.045;
+    const MAX_MARK: f64 = 0.14;
+
+    /// A PNG with a side read from a triangle off the Quality Chess places.
+    /// The resolver may use it only while the side to move is still unknown.
+    pub fn with_triangle_side(png: &[u8], white: bool) -> Vec<u8> {
+        super::with_text(png, KEY, if white { "w" } else { "b" })
+    }
+
+    /// The side stored by [`with_triangle_side`]: `Some(true)` for White to move.
+    pub fn stated_triangle_side(bytes: &[u8]) -> Option<bool> {
+        match super::text_chunk(bytes, KEY)?.as_slice() {
+            b"w" => Some(true),
+            b"b" => Some(false),
+            _ => None,
+        }
+    }
+
+    /// When `bytes` is one diagram and a side triangle sits in its margin, return the image
+    /// with that side stored beside the pixels. `None` leaves the bytes unchanged. A side
+    /// already stored by a square marker or [`super::with_side`] is not replaced.
+    pub(crate) fn attach_printed_triangle(bytes: &[u8]) -> Option<Vec<u8>> {
+        if super::stated_side(bytes).is_some()
+            || super::stated_mark_side(bytes).is_some()
+            || stated_triangle_side(bytes).is_some()
+        {
+            return None;
+        }
+        let gray = Gray::decode(bytes)?;
+        let frame = locate_with_light_rim(&gray)?;
+        let white = triangle_marks(&gray, &[frame]).pop().flatten()?;
+        let png = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            bytes.to_vec()
+        } else {
+            let image = image::load_from_memory(bytes).ok()?;
+            let mut png = Vec::new();
+            image
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .ok()?;
+            png
+        };
+        Some(with_triangle_side(&png, white))
+    }
+
+    #[derive(Clone, Copy)]
+    struct Mark {
+        white: bool,
+        x0: i64,
+        y0: i64,
+        x1: i64,
+        y1: i64,
+    }
+
+    struct Survey {
+        marks: Vec<Mark>,
+        side: Option<bool>,
+    }
+
+    /// One reading per frame. `Some(true)` is White to move. `None` abstains.
+    ///
+    /// Looks in the band just right of the board, at any rank, and in the caption line under
+    /// the board. A filled triangle is Black; a hollow triangle is White; the point may face
+    /// up or down. The outline must taper in a straight line, so a letter is not a triangle.
+    /// In the caption band the mark must sit apart from other ink.
+    ///
+    /// Abstains when one band holds two marks, two marks name different sides, a mark is shared
+    /// by two boards, or a mark is about as close to another board as to its own.
+    pub fn triangle_marks(g: &Gray, frames: &[Frame]) -> Vec<Option<bool>> {
+        let surveys: Vec<Survey> = frames
+            .iter()
+            .copied()
+            .map(|frame| survey(g, frame))
+            .collect();
+        let n = surveys.len();
+        let mut drop = vec![false; n];
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let shared = surveys[i]
+                    .marks
+                    .iter()
+                    .any(|a| surveys[j].marks.iter().any(|b| boxes_overlap(a, b)));
+                if shared {
+                    drop[i] = true;
+                    drop[j] = true;
+                }
+            }
+        }
+        for (i, survey) in surveys.iter().enumerate() {
+            if drop[i] {
+                continue;
+            }
+            if survey.marks.iter().any(|mark| contested(frames, i, mark)) {
+                drop[i] = true;
+            }
+        }
+        surveys
+            .into_iter()
+            .enumerate()
+            .map(|(i, survey)| if drop[i] { None } else { survey.side })
+            .collect()
+    }
+
+    fn survey(g: &Gray, frame: Frame) -> Survey {
+        let s = board_side(frame);
+        if s < 80.0 {
+            return Survey {
+                marks: Vec::new(),
+                side: None,
+            };
+        }
+        let mut marks = Vec::new();
+        let mut doubt = false;
+        for (window, caption) in bands(frame) {
+            let hits = scan_band(g, frame, window, s, caption);
+            if let Ok(clear) = merge_overlaps(hits.clone(), true) {
+                marks.extend(clear);
+            } else {
+                doubt = true;
+                marks.extend(hits);
+            }
+        }
+        let side = if doubt {
+            None
+        } else {
+            merge_overlaps(marks.clone(), false)
+                .ok()
+                .and_then(|clear| clear.first().map(|mark| mark.white))
+        };
+        Survey { marks, side }
+    }
+
+    fn board_side(frame: Frame) -> f64 {
+        if frame[2] <= frame[0] || frame[3] <= frame[1] {
+            return 0.0;
+        }
+        (frame[2] - frame[0]).min(frame[3] - frame[1]) as f64
+    }
+
+    /// `(window, caption band)`. The right-hand window covers every rank.
+    fn bands(frame: Frame) -> [(Frame, bool); 2] {
+        let s = board_side(frame);
+        let reach = snap(0.32 * s);
+        let y_pad = snap(0.05 * s);
+        let below = snap(0.22 * s);
+        let past = snap(0.10 * s);
+        let (left, top, right, bottom) = (frame[0], frame[1], frame[2], frame[3]);
+        [
+            (
+                [right + 1, top - y_pad, right + reach, bottom + y_pad],
+                false,
+            ),
+            (
+                [left - past, bottom + 2, right + past, bottom + below],
+                true,
+            ),
+        ]
+    }
+
+    fn snap(v: f64) -> i64 {
+        v.round() as i64
+    }
+
+    fn scan_band(g: &Gray, board: Frame, window: Frame, s: f64, caption: bool) -> Vec<Mark> {
+        let Some((x0, y0, x1, y1)) = clamp_window(window, g.width, g.height) else {
+            return Vec::new();
+        };
+        let ww = x1 - x0;
+        let hh = y1 - y0;
+        let mut dark = vec![false; ww * hh];
+        for y in 0..hh {
+            for x in 0..ww {
+                dark[y * ww + x] = g.px[(y0 + y) * g.width + (x0 + x)] < INK;
+            }
+        }
+        let mut seen = vec![false; ww * hh];
+        let mut marks = Vec::new();
+        let huge = (0.45 * s).powi(2).max(64.0) as usize;
+        for start in 0..ww * hh {
+            if seen[start] || !dark[start] {
+                continue;
+            }
+            let mut stack = vec![start];
+            seen[start] = true;
+            let mut pix = Vec::new();
+            while let Some(i) = stack.pop() {
+                let (x, y) = (i % ww, i / ww);
+                pix.push((x, y));
+                for (dx, dy) in [
+                    (-1, 0),
+                    (1, 0),
+                    (0, -1),
+                    (0, 1),
+                    (-1, -1),
+                    (-1, 1),
+                    (1, -1),
+                    (1, 1),
+                ] {
+                    let nx = x as isize + dx;
+                    let ny = y as isize + dy;
+                    if nx >= 0 && ny >= 0 && (nx as usize) < ww && (ny as usize) < hh {
+                        let ni = ny as usize * ww + nx as usize;
+                        if !seen[ni] && dark[ni] {
+                            seen[ni] = true;
+                            stack.push(ni);
+                        }
+                    }
+                }
+            }
+            if pix.len() < 8 || pix.len() > huge {
+                continue;
+            }
+            if let Some(mark) = classify(g, board, &pix, x0, y0, s, caption) {
+                marks.push(mark);
+            }
+        }
+        marks
+    }
+
+    fn clamp_window(
+        window: Frame,
+        width: usize,
+        height: usize,
+    ) -> Option<(usize, usize, usize, usize)> {
+        let x0 = window[0].max(0);
+        let y0 = window[1].max(0);
+        let x1 = window[2].min(width as i64);
+        let y1 = window[3].min(height as i64);
+        if x1 - x0 < 4 || y1 - y0 < 4 {
+            return None;
+        }
+        Some((x0 as usize, y0 as usize, x1 as usize, y1 as usize))
+    }
+
+    fn classify(
+        g: &Gray,
+        board: Frame,
+        pix: &[(usize, usize)],
+        origin_x: usize,
+        origin_y: usize,
+        s: f64,
+        caption: bool,
+    ) -> Option<Mark> {
+        let (x0, y0, x1, y1) = bbox(pix);
+        let (bw, bh) = ((x1 - x0) as f64, (y1 - y0) as f64);
+        let max_side = bw.max(bh);
+        if max_side < MIN_MARK * s || max_side > MAX_MARK * s || bw.min(bh) < 0.55 * max_side {
+            return None;
+        }
+        let white = triangle_color(pix, x0, y0, x1, y1)?;
+        let mark = Mark {
+            white,
+            x0: (origin_x + x0) as i64,
+            y0: (origin_y + y0) as i64,
+            x1: (origin_x + x1) as i64,
+            y1: (origin_y + y1) as i64,
+        };
+        if caption && !isolated(g, board, &mark) {
+            return None;
+        }
+        Some(mark)
+    }
+
+    fn bbox(pix: &[(usize, usize)]) -> (usize, usize, usize, usize) {
+        let mut x0 = usize::MAX;
+        let mut y0 = usize::MAX;
+        let mut x1 = 0usize;
+        let mut y1 = 0usize;
+        for &(x, y) in pix {
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x + 1);
+            y1 = y1.max(y + 1);
+        }
+        (x0, y0, x1, y1)
+    }
+
+    /// `Some(true)` when the blob is a hollow triangle. Filled is `Some(false)`.
+    fn triangle_color(
+        pix: &[(usize, usize)],
+        x0: usize,
+        y0: usize,
+        x1: usize,
+        y1: usize,
+    ) -> Option<bool> {
+        let mut rows = row_spans(pix, y0, y1);
+        if rows.len() < 8 || rows.iter().any(|row| row.ink == 0) {
+            return None;
+        }
+        let k = (rows.len() / 4).max(1);
+        let top: usize = rows[..k].iter().map(|row| row.width).sum();
+        let bot: usize = rows[rows.len() - k..].iter().map(|row| row.width).sum();
+        let up = bot > top.saturating_mul(2);
+        let down = top > bot.saturating_mul(2);
+        if up == down {
+            return None;
+        }
+        if down {
+            rows.reverse();
+        }
+        let base = rows.last().map_or(0, |row| row.width);
+        let apex = rows.first().map_or(base, |row| row.width);
+        if base < 8 || apex * 2 > base {
+            return None;
+        }
+        let apex_mid = rows.first().map_or(0.0, Span::mid);
+        let base_mid = rows.last().map_or(0.0, Span::mid);
+        if (apex_mid - base_mid).abs() > 0.22 * base as f64 {
+            return None;
+        }
+        if edge_deviation(&rows) > (0.12 * base as f64).max(1.75) {
+            return None;
+        }
+        let area = ((x1 - x0) * (y1 - y0)).max(1) as f64;
+        let fill = pix.len() as f64 / area;
+        let solid = rows
+            .iter()
+            .filter(|row| row.ink * 5 >= row.width * 4)
+            .count() as f64
+            / rows.len() as f64;
+        let base_row = rows.last()?;
+        let base_ink = base_row.ink as f64 / base_row.width.max(1) as f64;
+        if fill >= 0.40 && solid >= 0.80 {
+            return Some(false);
+        }
+        let middle_clear = rows.iter().enumerate().all(|(i, row)| {
+            let t = i as f64 / (rows.len() - 1) as f64;
+            if row.width < 8 || !(0.18..=0.82).contains(&t) || row.interior == 0 {
+                return true;
+            }
+            row.interior_ink * 5 < row.interior
+        });
+        ((0.08..=0.38).contains(&fill) && base_ink >= 0.75 && middle_clear).then_some(true)
+    }
+
+    struct Span {
+        width: usize,
+        ink: usize,
+        interior_ink: usize,
+        interior: usize,
+        left: f64,
+        right: f64,
+    }
+
+    impl Span {
+        fn mid(&self) -> f64 {
+            f64::midpoint(self.left, self.right)
+        }
+    }
+
+    fn row_spans(pix: &[(usize, usize)], y0: usize, y1: usize) -> Vec<Span> {
+        let mut rows: Vec<Vec<usize>> = vec![Vec::new(); y1.saturating_sub(y0)];
+        for &(x, y) in pix {
+            if y >= y0 && y < y1 {
+                rows[y - y0].push(x);
+            }
+        }
+        rows.iter()
+            .map(|xs| {
+                if xs.is_empty() {
+                    return Span {
+                        width: 0,
+                        ink: 0,
+                        interior_ink: 0,
+                        interior: 0,
+                        left: 0.0,
+                        right: 0.0,
+                    };
+                }
+                let left = *xs.iter().min().unwrap_or(&0);
+                let right = xs.iter().max().unwrap_or(&left) + 1;
+                let width = right.saturating_sub(left);
+                let inset = width / 4;
+                let (mid_l, mid_r) = if width >= 8 && inset > 0 {
+                    (left + inset, right.saturating_sub(inset))
+                } else {
+                    (left, left)
+                };
+                let interior_ink = xs.iter().filter(|x| **x >= mid_l && **x < mid_r).count();
+                Span {
+                    width,
+                    ink: xs.len(),
+                    interior_ink,
+                    interior: mid_r.saturating_sub(mid_l),
+                    left: left as f64,
+                    right: right as f64,
+                }
+            })
+            .collect()
+    }
+
+    /// How far the left and right edges stray from the straight sides through the apex and base.
+    fn edge_deviation(rows: &[Span]) -> f64 {
+        let n = rows.len();
+        let (Some(apex), Some(base)) = (rows.first(), rows.last()) else {
+            return f64::MAX;
+        };
+        let mut worst = 0.0_f64;
+        for (i, row) in rows.iter().enumerate() {
+            let t = i as f64 / (n - 1) as f64;
+            let expect_l = apex.left + t * (base.left - apex.left);
+            let expect_r = apex.right + t * (base.right - apex.right);
+            worst = worst.max((row.left - expect_l).abs());
+            worst = worst.max((row.right - expect_r).abs());
+        }
+        worst
+    }
+
+    /// Caption glyphs sit a fraction of the mark away. The board border is not a glyph.
+    fn isolated(g: &Gray, board: Frame, mark: &Mark) -> bool {
+        let span = (mark.x1 - mark.x0).max(mark.y1 - mark.y0).max(1) as f64;
+        let margin = (span * 0.25).round().clamp(3.0, 14.0) as i64;
+        let (x0, y0) = (mark.x0 - margin, mark.y0 - margin);
+        let (x1, y1) = (mark.x1 + margin, mark.y1 + margin);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if (mark.x0..mark.x1).contains(&x) && (mark.y0..mark.y1).contains(&y) {
+                    continue;
+                }
+                if x < 0 || y < 0 || x >= g.width as i64 || y >= g.height as i64 {
+                    continue;
+                }
+                if (board[0] - 2..board[2] + 2).contains(&x)
+                    && (board[1] - 2..board[3] + 2).contains(&y)
+                {
+                    continue;
+                }
+                if g.px[y as usize * g.width + x as usize] < INK {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// `Err` when the triangles disagree, or when `many_is_doubt` and more than one remains.
+    fn merge_overlaps(marks: Vec<Mark>, many_is_doubt: bool) -> Result<Vec<Mark>, ()> {
+        let mut kept: Vec<Mark> = Vec::new();
+        for mark in marks {
+            if let Some(prev) = kept.iter_mut().find(|prev| boxes_overlap(prev, &mark)) {
+                if prev.white != mark.white {
+                    return Err(());
+                }
+                prev.x0 = prev.x0.min(mark.x0);
+                prev.y0 = prev.y0.min(mark.y0);
+                prev.x1 = prev.x1.max(mark.x1);
+                prev.y1 = prev.y1.max(mark.y1);
+            } else if kept.iter().any(|prev| prev.white != mark.white) {
+                return Err(());
+            } else {
+                kept.push(mark);
+            }
+        }
+        if many_is_doubt && kept.len() >= 2 {
+            return Err(());
+        }
+        Ok(kept)
+    }
+
+    fn boxes_overlap(a: &Mark, b: &Mark) -> bool {
+        let ix = (a.x1.min(b.x1) - a.x0.max(b.x0)).max(0);
+        let iy = (a.y1.min(b.y1) - a.y0.max(b.y0)).max(0);
+        if ix == 0 || iy == 0 {
+            return false;
+        }
+        let inter = ix * iy;
+        let area = |m: &Mark| (m.x1 - m.x0).max(1) * (m.y1 - m.y0).max(1);
+        inter * 2 >= area(a).min(area(b))
+    }
+
+    /// True when some other board is about as close to the triangle as its own board.
+    fn contested(frames: &[Frame], index: usize, mark: &Mark) -> bool {
+        let own = frames[index];
+        let d_own = gap(own, mark);
+        frames.iter().enumerate().any(|(other_i, other)| {
+            other_i != index && gap(*other, mark) <= d_own.mul_add(1.35, 2.0)
+        })
+    }
+
+    fn gap(frame: Frame, mark: &Mark) -> f64 {
+        let cx = f64::midpoint(mark.x0 as f64, mark.x1 as f64);
+        let cy = f64::midpoint(mark.y0 as f64, mark.y1 as f64);
+        let dx = if cx < frame[0] as f64 {
+            frame[0] as f64 - cx
+        } else if cx > frame[2] as f64 {
+            cx - frame[2] as f64
+        } else {
+            0.0
+        };
+        let dy = if cy < frame[1] as f64 {
+            frame[1] as f64 - cy
+        } else if cy > frame[3] as f64 {
+            cy - frame[3] as f64
+        } else {
+            0.0
+        };
+        dx.hypot(dy)
+    }
+}
 
 /// Boards on a whole page (a scan or a rendered page): square clusters of connected ink, each
 /// confirmed by [`locate`] on its own crop. Returned as crop boxes with a small margin, top to
@@ -2126,6 +2644,313 @@ mod tests {
         // Filled ▼ parked by the bottom rank is not the convention.
         let (g, f) = marked_triangles(&[(360, 310, 28, true, false)]);
         assert_eq!(triangle_marker(&g, f), None);
+    }
+
+    /// `filled` paints a solid triangle; otherwise only the three sides. `up` points the apex up.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::too_many_arguments
+    )]
+    fn paint_triangle(
+        buf: &mut [u8],
+        width: usize,
+        height: usize,
+        left: usize,
+        top: usize,
+        side: usize,
+        filled: bool,
+        up: bool,
+    ) {
+        if side < 2 {
+            return;
+        }
+        for dy in 0..side {
+            let t = if up {
+                dy as f64 / (side as f64 - 1.0)
+            } else {
+                1.0 - dy as f64 / (side as f64 - 1.0)
+            };
+            let half = (t * (side as f64) / 2.0).round() as isize;
+            let mid = left + side / 2;
+            let y = top + dy;
+            if y >= height {
+                continue;
+            }
+            for dx in -half..=half {
+                let x = mid as isize + dx;
+                if x < 0 {
+                    continue;
+                }
+                let x = x as usize;
+                if x >= width {
+                    continue;
+                }
+                let on_edge = dx.abs() >= half.saturating_sub(1) || dy == 0 || dy + 1 == side;
+                if filled || on_edge {
+                    buf[y * width + x] = 0;
+                }
+            }
+        }
+    }
+
+    /// Outline ▲ with a crossbar: a letter, not a mark.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss
+    )]
+    fn paint_letter_a(
+        buf: &mut [u8],
+        width: usize,
+        height: usize,
+        left: usize,
+        top: usize,
+        side: usize,
+    ) {
+        paint_triangle(buf, width, height, left, top, side, false, true);
+        let bar = side / 2;
+        for dy in bar.saturating_sub(1)..(bar + 2).min(side) {
+            let y = top + dy;
+            if y >= height {
+                continue;
+            }
+            let t = dy as f64 / (side as f64 - 1.0);
+            let half = (t * (side as f64) / 2.0).round() as isize;
+            let mid = left + side / 2;
+            for dx in -half..=half {
+                let x = mid as isize + dx;
+                if x >= 0 && (x as usize) < width {
+                    buf[y * width + x as usize] = 0;
+                }
+            }
+        }
+    }
+
+    /// Two stems and a diagonal.
+    fn paint_letter_n(
+        buf: &mut [u8],
+        width: usize,
+        height: usize,
+        left: usize,
+        top: usize,
+        side: usize,
+    ) {
+        for dy in 0..side {
+            let y = top + dy;
+            if y >= height {
+                continue;
+            }
+            for dx in 0..2 {
+                for x in [left + dx, left + side - 1 - dx] {
+                    if x < width {
+                        buf[y * width + x] = 0;
+                    }
+                }
+            }
+            let x = left + dy * side.saturating_sub(1) / side.saturating_sub(1).max(1);
+            for dx in 0..2 {
+                if x + dx < width {
+                    buf[y * width + x + dx] = 0;
+                }
+            }
+        }
+    }
+
+    /// A vertical stroke and a foot. The wide end is not centered on the tip.
+    fn paint_letter_l(
+        buf: &mut [u8],
+        width: usize,
+        height: usize,
+        left: usize,
+        top: usize,
+        side: usize,
+    ) {
+        for dy in 0..side {
+            let y = top + dy;
+            if y >= height {
+                continue;
+            }
+            for dx in 0..2 {
+                if left + dx < width {
+                    buf[y * width + left + dx] = 0;
+                }
+            }
+        }
+        let y = top + side - 1;
+        if y < height {
+            for dx in 0..side {
+                if left + dx < width {
+                    buf[y * width + left + dx] = 0;
+                }
+            }
+        }
+    }
+
+    /// Two strokes that meet at a point and never close the wide end.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss
+    )]
+    fn paint_letter_v(
+        buf: &mut [u8],
+        width: usize,
+        height: usize,
+        left: usize,
+        top: usize,
+        side: usize,
+    ) {
+        if side < 2 {
+            return;
+        }
+        for dy in 0..side {
+            let t = 1.0 - dy as f64 / (side as f64 - 1.0);
+            let half = (t * (side as f64) / 2.0).round() as isize;
+            let mid = left + side / 2;
+            let y = top + dy;
+            if y >= height {
+                continue;
+            }
+            for dx in [half.saturating_neg(), half] {
+                let x = mid as isize + dx;
+                if x >= 0 && (x as usize) < width {
+                    buf[y * width + x as usize] = 0;
+                    if dx != 0 {
+                        let inner = mid as isize + dx.signum() * dx.abs().saturating_sub(1);
+                        if inner >= 0 && (inner as usize) < width {
+                            buf[y * width + inner as usize] = 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn triangle_marks_reads_hollow_white_and_filled_black() {
+        let frame = [50, 50, 350, 350];
+        let g = page_with(500, 420, |buf| {
+            paint_triangle(buf, 500, 420, 360, 180, 28, false, true);
+        });
+        assert_eq!(triangle_marks(&g, &[frame]), vec![Some(true)]);
+        let g = page_with(500, 420, |buf| {
+            paint_triangle(buf, 500, 420, 360, 180, 28, true, true);
+        });
+        assert_eq!(triangle_marks(&g, &[frame]), vec![Some(false)]);
+    }
+
+    #[test]
+    fn triangle_marks_reads_either_orientation() {
+        let frame = [50, 50, 350, 350];
+        // Hollow, point up or down, is White. Filled, either way, is Black.
+        for up in [true, false] {
+            let g = page_with(500, 420, |buf| {
+                paint_triangle(buf, 500, 420, 362, 160, 28, false, up);
+            });
+            assert_eq!(
+                triangle_marks(&g, &[frame]),
+                vec![Some(true)],
+                "hollow up={up}"
+            );
+            let g = page_with(500, 420, |buf| {
+                paint_triangle(buf, 500, 420, 362, 160, 28, true, up);
+            });
+            assert_eq!(
+                triangle_marks(&g, &[frame]),
+                vec![Some(false)],
+                "filled up={up}"
+            );
+        }
+        // Filled ▼ by the bottom rank is outside the Quality Chess pair, and still Black.
+        let (g, f) = marked_triangles(&[(360, 310, 28, true, false)]);
+        assert_eq!(triangle_marker(&g, f), None);
+        assert_eq!(triangle_marks(&g, &[f]), vec![Some(false)]);
+    }
+
+    #[test]
+    fn triangle_marks_reads_the_right_band_and_the_caption() {
+        let frame = [50, 50, 350, 350];
+        // Mid-rank on the right is not the top or bottom Quality Chess place.
+        let (g, f) = marked_triangles(&[(360, 160, 28, false, true)]);
+        assert_eq!(triangle_marker(&g, f), None);
+        assert_eq!(triangle_marks(&g, &[f]), vec![Some(true)]);
+        // The caption line under the board, not the band beside it.
+        let g = page_with(500, 460, |buf| {
+            paint_triangle(buf, 500, 460, 160, 362, 24, true, false);
+        });
+        assert_eq!(triangle_marks(&g, &[frame]), vec![Some(false)]);
+        // A triangle on the left of the board is not a side mark.
+        let g = page_with(500, 420, |buf| {
+            paint_triangle(buf, 500, 420, 8, 160, 28, false, true);
+        });
+        assert_eq!(triangle_marks(&g, &[frame]), vec![None]);
+        // A caption triangle with another glyph beside it is not isolated.
+        let g = page_with(500, 460, |buf| {
+            paint_triangle(buf, 500, 460, 160, 362, 24, false, true);
+            for y in 364..378 {
+                for x in 190..204 {
+                    buf[y * 500 + x] = 0;
+                }
+            }
+        });
+        assert_eq!(triangle_marks(&g, &[frame]), vec![None]);
+    }
+
+    #[test]
+    fn triangle_marks_rejects_letter_shapes() {
+        let frame = [50, 50, 350, 350];
+        let reject = |g: &Gray, place: &str| {
+            assert_eq!(triangle_marks(g, &[frame]), vec![None], "{place}");
+        };
+        let right = page_with(500, 420, |buf| paint_letter_a(buf, 500, 420, 360, 160, 28));
+        reject(&right, "A beside the board");
+        let caption = page_with(500, 460, |buf| paint_letter_a(buf, 500, 460, 160, 362, 28));
+        reject(&caption, "A in the caption");
+        let right = page_with(500, 420, |buf| paint_letter_n(buf, 500, 420, 360, 160, 28));
+        reject(&right, "N beside the board");
+        let caption = page_with(500, 460, |buf| paint_letter_n(buf, 500, 460, 160, 362, 28));
+        reject(&caption, "N in the caption");
+        let right = page_with(500, 420, |buf| paint_letter_l(buf, 500, 420, 360, 160, 28));
+        reject(&right, "L beside the board");
+        let caption = page_with(500, 460, |buf| paint_letter_l(buf, 500, 460, 160, 362, 28));
+        reject(&caption, "L in the caption");
+        let right = page_with(500, 420, |buf| paint_letter_v(buf, 500, 420, 360, 160, 28));
+        reject(&right, "V beside the board");
+        let caption = page_with(500, 460, |buf| paint_letter_v(buf, 500, 460, 160, 362, 28));
+        reject(&caption, "V in the caption");
+    }
+
+    #[test]
+    fn triangle_marks_abstains_when_shared_or_between_boards() {
+        // The triangle sits in the gutter, about as close to each board.
+        let left = [40, 40, 300, 300];
+        let right = [340, 40, 600, 300];
+        let g = page_with(640, 360, |buf| {
+            paint_triangle(buf, 640, 360, 312, 70, 18, true, true);
+        });
+        assert_eq!(triangle_marks(&g, &[left, right]), vec![None, None]);
+        // A triangle next to the first board, far from the second, belongs to the first.
+        let far = [640, 40, 900, 300];
+        let g = page_with(960, 360, |buf| {
+            paint_triangle(buf, 960, 360, 308, 70, 18, false, false);
+        });
+        assert_eq!(triangle_marks(&g, &[left, far]), vec![Some(true), None]);
+        // A caption under the upper board is closer to it than to the board below.
+        let upper = [40, 40, 340, 340];
+        let lower = [40, 520, 340, 820];
+        let g = page_with(400, 880, |buf| {
+            paint_triangle(buf, 400, 880, 150, 360, 22, false, true);
+        });
+        assert_eq!(triangle_marks(&g, &[upper, lower]), vec![Some(true), None]);
+        // Halfway between two boards, the same caption is nobody's mark.
+        let close = [40, 400, 340, 700];
+        let g = page_with(400, 760, |buf| {
+            paint_triangle(buf, 400, 760, 150, 358, 22, true, false);
+        });
+        assert_eq!(triangle_marks(&g, &[upper, close]), vec![None, None]);
     }
 
     /// How a synthetic square is painted. `Glyph` is a flat outline with a cross through it.

@@ -92,14 +92,96 @@ const RESIDUE: &[&str] = &[
 /// `Some(true)` is White to move. Only a short line that is a side caption counts.
 pub(super) fn side_caption(text: &str) -> Option<bool> {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if text.is_empty() || text.chars().count() > 60 || text.split_whitespace().count() > 8 {
+    if !caption_length(&text) {
         return None;
     }
-    if let Some(side) = crate::books::resolve::caption_turn(&text) {
-        // A phrase buried in other words is commentary, not the caption under a diagram.
-        return residue_ok(&text).then_some(side == Color::White);
+    // "12a) White moves" — the exercise label is not part of the phrase.
+    let text = strip_exercise_label(&text);
+    if !caption_length(text) {
+        return None;
     }
-    scrambled_side(&text)
+    if let Some(side) = crate::books::resolve::caption_turn(text) {
+        // A phrase buried in other words is commentary, not the caption under a diagram.
+        return residue_ok(text).then_some(side == Color::White);
+    }
+    wider_side(text).or_else(|| scrambled_side(text))
+}
+
+fn caption_length(text: &str) -> bool {
+    !text.is_empty() && text.chars().count() <= 60 && text.split_whitespace().count() <= 8
+}
+
+/// Digits, an optional letter, then `)` `.` or `:`. "12a) White wins" loses the "12a)".
+fn strip_exercise_label(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let mut end = 0;
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    if end == 0 {
+        return text;
+    }
+    if end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+        end += 1;
+    }
+    if end < bytes.len() && matches!(bytes[end], b')' | b'.' | b':') {
+        end += 1;
+        while end < bytes.len() && bytes[end].is_ascii_whitespace() {
+            end += 1;
+        }
+        return &text[end..];
+    }
+    text
+}
+
+/// Verbs that name a side only as a caption under a diagram: "Black wins", "White to draw",
+/// "Black has the move". They are not read from nearby prose.
+fn wider_side(text: &str) -> Option<bool> {
+    const WIDER: &[(&str, bool)] = &[
+        ("white has the move", true),
+        ("black has the move", false),
+        ("white to win", true),
+        ("black to win", false),
+        ("white to draw", true),
+        ("black to draw", false),
+        ("white wins", true),
+        ("black wins", false),
+        ("white draws", true),
+        ("black draws", false),
+        ("white mates", true),
+        ("black mates", false),
+    ];
+    let lower = text.to_lowercase();
+    let mut found = None;
+    let mut rest = lower.clone();
+    for (phrase, white) in WIDER {
+        let Some(at) = phrase_at(&rest, phrase) else {
+            continue;
+        };
+        if found.is_some() {
+            return None;
+        }
+        found = Some(*white);
+        rest.replace_range(at..at + phrase.len(), " ");
+    }
+    let white = found?;
+    words_are_residue(&rest).then_some(white)
+}
+
+/// Index of `phrase` bounded by non-letters, so "white wins" is not part of a longer word.
+fn phrase_at(text: &str, phrase: &str) -> Option<usize> {
+    let mut start = 0;
+    while let Some(offset) = text[start..].find(phrase) {
+        let at = start + offset;
+        let before = text[..at].chars().next_back();
+        let after = text[at + phrase.len()..].chars().next();
+        let boundary = |c: Option<char>| c.is_none_or(|c| !c.is_alphabetic());
+        if boundary(before) && boundary(after) {
+            return Some(at);
+        }
+        start = at + phrase.len();
+    }
+    None
 }
 
 fn residue_ok(text: &str) -> bool {
@@ -111,8 +193,11 @@ fn residue_ok(text: &str) -> bool {
             lower = lower.replace(phrase, " ");
         }
     }
-    lower
-        .split(|c: char| !c.is_alphanumeric())
+    words_are_residue(&lower)
+}
+
+fn words_are_residue(text: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
         .all(|word| word.chars().all(|c| c.is_ascii_digit()) || RESIDUE.contains(&word))
 }
@@ -179,40 +264,61 @@ fn overlap(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
     (a1.min(b1) - a0.max(b0)).max(0.0)
 }
 
-/// Words that share a baseline and sit a word-space apart become one line. A column gutter
-/// stays split, so two captions on one row keep their own sides.
+/// Words on one baseline become one line, whatever order the PDF emitted them in and however
+/// it had already grouped them. A column gutter stays split, so two captions on one row keep
+/// their own sides.
 fn lines_of(mut words: Vec<TextBox>) -> Vec<TextBox> {
     words.sort_by(|a, b| {
-        b.rect
-            .top
-            .total_cmp(&a.rect.top)
+        midpoint_y(&b.rect)
+            .total_cmp(&midpoint_y(&a.rect))
             .then(a.rect.left.total_cmp(&b.rect.left))
     });
+    let mut rows: Vec<Vec<TextBox>> = Vec::new();
+    for word in words {
+        if let Some(row) = rows.iter_mut().find(|row| aligned(&row[0], &word)) {
+            row.push(word);
+        } else {
+            rows.push(vec![word]);
+        }
+    }
+    rows.into_iter().flat_map(split_row).collect()
+}
+
+fn midpoint_y(rect: &Rect) -> f64 {
+    f64::midpoint(rect.bottom, rect.top)
+}
+
+fn aligned(anchor: &TextBox, word: &TextBox) -> bool {
+    let h = height(anchor.rect).min(height(word.rect)).max(1.0);
+    overlap(
+        anchor.rect.bottom,
+        anchor.rect.top,
+        word.rect.bottom,
+        word.rect.top,
+    ) > 0.45 * h
+        || (midpoint_y(&anchor.rect) - midpoint_y(&word.rect)).abs() < h
+}
+
+fn split_row(mut words: Vec<TextBox>) -> Vec<TextBox> {
+    words.sort_by(|a, b| a.rect.left.total_cmp(&b.rect.left));
     let mut groups: Vec<Vec<TextBox>> = Vec::new();
     for word in words {
-        if groups.last().is_some_and(|line| same_line(line, &word)) {
+        let join = groups.last().is_some_and(|line| {
+            let right = line
+                .iter()
+                .map(|item| item.rect.right)
+                .fold(f64::MIN, f64::max);
+            let h = height(line[0].rect).min(height(word.rect)).max(1.0);
+            let gap = word.rect.left - right;
+            gap < (h * 1.6).max(14.0) && gap > -h
+        });
+        if join {
             groups.last_mut().expect("line").push(word);
         } else {
             groups.push(vec![word]);
         }
     }
     groups.into_iter().map(join_line).collect()
-}
-
-fn same_line(line: &[TextBox], word: &TextBox) -> bool {
-    let anchor = line[0].rect;
-    let h = height(anchor).min(height(word.rect)).max(1.0);
-    let aligned = overlap(anchor.bottom, anchor.top, word.rect.bottom, word.rect.top) > 0.45 * h
-        || ((anchor.bottom + anchor.top) - (word.rect.bottom + word.rect.top)).abs() < h;
-    if !aligned {
-        return false;
-    }
-    let right = line
-        .iter()
-        .map(|item| item.rect.right)
-        .fold(f64::MIN, f64::max);
-    let gap = word.rect.left - right;
-    gap < (h * 1.6).max(14.0) && gap > -h
 }
 
 fn join_line(mut words: Vec<TextBox>) -> TextBox {
@@ -506,6 +612,23 @@ mod tests {
     }
 
     #[test]
+    fn an_exercise_label_and_the_wider_verbs_name_the_side() {
+        assert_eq!(side_caption("12a) White moves"), Some(true));
+        assert_eq!(side_caption("8b) Black wins"), Some(false));
+        assert_eq!(side_caption("3. White to win"), Some(true));
+        assert_eq!(side_caption("7: Black draws"), Some(false));
+        assert_eq!(side_caption("4) White mates"), Some(true));
+        assert_eq!(side_caption("9a. Black to draw"), Some(false));
+        assert_eq!(side_caption("2) White has the move"), Some(true));
+        assert_eq!(side_caption("5c: Black has the move"), Some(false));
+        // The same verbs inside a sentence are not a caption.
+        assert_eq!(side_caption("White wins the exchange"), None);
+        assert_eq!(side_caption("Black mates in 2"), None);
+        assert_eq!(side_caption("12ab) White wins"), None);
+        assert_eq!(side_caption("See how Black draws the game"), None);
+    }
+
+    #[test]
     fn a_mixed_page_keeps_each_diagram_its_own_side() {
         let diagrams = [
             rect(40.0, 400.0, 180.0, 540.0),
@@ -519,6 +642,30 @@ mod tests {
             bind_side_captions(&diagrams, &texts),
             vec![Some(true), Some(false)]
         );
+    }
+
+    #[test]
+    fn words_join_into_a_caption_by_geometry() {
+        let diagrams = [rect(40.0, 400.0, 200.0, 540.0)];
+        // The extractor emitted the line out of order, on slightly different baselines.
+        let words = [
+            text("wins", 118.0, 368.4, 156.0, 382.2),
+            text("8b)", 42.0, 370.0, 68.0, 384.0),
+            text("Black", 74.0, 369.2, 112.0, 383.0),
+        ];
+        assert_eq!(bind_side_captions(&diagrams, &words), vec![Some(false)]);
+        // The same words far from the diagram are not its caption.
+        let loose = [
+            text("Black", 40.0, 700.0, 80.0, 714.0),
+            text("wins", 86.0, 700.0, 120.0, 714.0),
+        ];
+        assert_eq!(bind_side_captions(&diagrams, &loose), vec![None]);
+        // Split across what the PDF called two lines, still one caption under the board.
+        let split = [
+            text("White has", 42.0, 372.0, 110.0, 386.0),
+            text("the move", 116.0, 371.2, 180.0, 385.4),
+        ];
+        assert_eq!(bind_side_captions(&diagrams, &split), vec![Some(true)]);
     }
 
     #[test]
