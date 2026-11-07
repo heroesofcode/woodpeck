@@ -261,7 +261,28 @@ fn bind(
     if targets.len() != frames.len() {
         return None;
     }
-    Some(assign(&frames, &payload.lines, targets))
+    // `page_boards` pads every crop. The caption gap is measured from the board `locate`
+    // finds inside that crop, so the padding is not counted as gap already spent.
+    let boards = located_boards(gray, &frames)?;
+    Some(assign_edges(&frames, &boards, &payload.lines, targets))
+}
+
+/// Board edges inside each detector crop, in page pixels. `None` when a crop has no board.
+fn located_boards(gray: &Gray, crops: &[Frame]) -> Option<Vec<Frame>> {
+    crops
+        .iter()
+        .copied()
+        .map(|crop| {
+            let inner = diagram::locate(&gray.crop(crop)?)?;
+            let board = [
+                crop[0].max(0) + inner[0],
+                crop[1].max(0) + inner[1],
+                crop[0].max(0) + inner[2],
+                crop[1].max(0) + inner[3],
+            ];
+            (board[2] > board[0] && board[3] > board[1] && board[3] <= crop[3]).then_some(board)
+        })
+        .collect()
 }
 
 fn transform_ok(facts: RenderFacts, width: usize, height: usize) -> bool {
@@ -383,7 +404,20 @@ fn confident(line: &OcrLine) -> bool {
     line.confidence.is_finite() && (OCR_CONFIDENCE_MIN..=1.0).contains(&line.confidence)
 }
 
+#[cfg(test)]
 fn assign(frames: &[Frame], lines: &[OcrLine], targets: &[ScanTarget]) -> Vec<Option<bool>> {
+    assign_edges(frames, frames, lines, targets)
+}
+
+fn assign_edges(
+    frames: &[Frame],
+    boards: &[Frame],
+    lines: &[OcrLine],
+    targets: &[ScanTarget],
+) -> Vec<Option<bool>> {
+    if frames.len() != boards.len() || frames.len() != targets.len() {
+        return vec![None; frames.len()];
+    }
     let mut owned = vec![Vec::new(); frames.len()];
     for (index, line) in lines.iter().enumerate() {
         let Some(white) = explicit_turn_line(&line.text) else {
@@ -392,7 +426,7 @@ fn assign(frames: &[Frame], lines: &[OcrLine], targets: &[ScanTarget]) -> Vec<Op
         if !confident(line) || crowded(lines, index) {
             continue;
         }
-        if let Some(owner) = sole_owner(frames, line) {
+        if let Some(owner) = sole_owner(frames, boards, line) {
             owned[owner].push(white);
         }
     }
@@ -411,10 +445,10 @@ fn assign(frames: &[Frame], lines: &[OcrLine], targets: &[ScanTarget]) -> Vec<Op
         .collect()
 }
 
-fn sole_owner(frames: &[Frame], line: &OcrLine) -> Option<usize> {
+fn sole_owner(frames: &[Frame], boards: &[Frame], line: &OcrLine) -> Option<usize> {
     let mut owner = None;
     for (index, frame) in frames.iter().enumerate() {
-        if !below_board(*frame, line) {
+        if !below_board(*frame, boards[index], line) {
             continue;
         }
         let own = frame_distance(*frame, line);
@@ -435,13 +469,21 @@ fn sole_owner(frames: &[Frame], line: &OcrLine) -> Option<usize> {
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn below_board(frame: Frame, line: &OcrLine) -> bool {
-    let width = (frame[2] - frame[0]) as f64;
-    if width < 1.0 || !line_box_ok(line) {
+fn below_board(crop: Frame, board: Frame, line: &OcrLine) -> bool {
+    let width = (crop[2] - crop[0]) as f64;
+    let board_width = (board[2] - board[0]) as f64;
+    if width < 1.0 || board_width < 1.0 || !line_box_ok(line) {
         return false;
     }
-    let gap = line.top - frame[3] as f64;
-    if !(CAPTION_GAP_MIN * width..=CAPTION_GAP_MAX * width).contains(&gap) {
+    // `crop` is the detector frame and includes its margin. The near edge is the board
+    // itself; the far edge stays GAP_MAX below that certified crop.
+    let pad = crop[3] as f64 - board[3] as f64;
+    if pad < 0.0 {
+        return false;
+    }
+    let gap = line.top - board[3] as f64;
+    let farthest = pad + CAPTION_GAP_MAX * width;
+    if !(CAPTION_GAP_MIN * board_width..=farthest).contains(&gap) {
         return false;
     }
     let height = line.bottom - line.top;
@@ -449,12 +491,12 @@ fn below_board(frame: Frame, line: &OcrLine) -> bool {
         return false;
     }
     let center = f64::midpoint(line.left, line.right);
-    let board = f64::midpoint(frame[0] as f64, frame[2] as f64);
-    if (center - board).abs() > CAPTION_CENTER_SLACK * width {
+    let middle = f64::midpoint(crop[0] as f64, crop[2] as f64);
+    if (center - middle).abs() > CAPTION_CENTER_SLACK * width {
         return false;
     }
     let margin = CAPTION_MARGIN * width;
-    line.left >= frame[0] as f64 - margin && line.right <= frame[2] as f64 + margin
+    line.left >= crop[0] as f64 - margin && line.right <= crop[2] as f64 + margin
 }
 
 fn line_box_ok(line: &OcrLine) -> bool {
@@ -522,8 +564,8 @@ fn crowds(a: &OcrLine, b: &OcrLine) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        OCR_CONFIDENCE_MIN, OcrLine, RenderFacts, ScanTarget, assign, bind, certify,
-        explicit_turn_line, page_identity,
+        CAPTION_GAP_MIN, OCR_CONFIDENCE_MIN, OcrLine, RenderFacts, ScanTarget, assign, bind,
+        certify, explicit_turn_line, page_identity,
     };
     use crate::books::diagram::{Frame, Gray};
 
@@ -697,6 +739,36 @@ mod tests {
         wide.right = center + 125.0;
         assert!(wide.right > frame[2] as f64 + 0.22 * 200.0);
         assert_eq!(assign(&frames, &[wide], &open(1)), vec![None]);
+    }
+
+    #[test]
+    fn a_caption_inside_the_detector_padding_can_still_clear_the_board() {
+        let gray = paint(&[(80, 70, 240)]);
+        let (preview, _) = sealed(&gray, &[]);
+        let crop = preview.frames[0];
+        let board = super::located_boards(&gray, &[crop]).expect("board")[0];
+        assert!(
+            board[3] < crop[3],
+            "the detector crop is padded below the board"
+        );
+        let width = (board[2] - board[0]) as f64;
+        let gap = CAPTION_GAP_MIN * width + 1.0;
+        assert!(
+            board[3] as f64 + gap < crop[3] as f64,
+            "this line starts inside the crop padding"
+        );
+        let line = caption("White to move", board, gap, 0.0, 0.08 * width, 0.96);
+        let (cert, payload) = sealed(&gray, &[line]);
+        assert_eq!(
+            bind(&cert, &gray, &payload, &cert.frames, &open(1)).expect("bound"),
+            vec![Some(true)]
+        );
+        let tucked = caption("White to move", board, 1.0, 0.0, 0.08 * width, 0.96);
+        let (cert, payload) = sealed(&gray, &[tucked]);
+        assert_eq!(
+            bind(&cert, &gray, &payload, &cert.frames, &open(1)).expect("bound"),
+            vec![None]
+        );
     }
 
     #[test]
