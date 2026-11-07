@@ -32,7 +32,11 @@ rank). Engraved kings and queens differ mostly in the crown, so when a side show
 kings the one clearly closer to that side's queen prototypes becomes the queen; the
 separation is gated like any other square margin. Anything else abstains and stays an
 image. The resolver then needs the side to move from the text ("Black to play", "It is
-Black's move", "12. ..."), looking at the following paragraphs and the next page. The
+Black's move", "12. ..."), looking at the following paragraphs and the next page.
+When that side is still unknown, a printed square beside the diagram supplies it:
+hollow for White, filled or gray for Black, on any side of the board or in the
+caption line under it. A doubtful mark (two readings, or a mark about as close to
+another diagram) leaves the side unknown and never replaces a side already confirmed. The
 first move number followed by a move legal for the side it names decides; other numbers
 (ranks, example numbers) are skipped, a move legal only for the other side abstains, and
 conflicting statements abstain. Without any evidence the image is kept. A recognized image becomes

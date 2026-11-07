@@ -44,6 +44,17 @@ fn stamp_pdf_sides(path: &Path, extracted: &mut pdf::Extracted) {
         &mut extracted.pictures,
         extracted.cover.as_deref(),
     );
+    // Embedded diagrams carry their own square. Rendered crops were stamped with the
+    // whole page in hand, where a mark can sit outside the crop or between two boards.
+    let cover = extracted.cover.as_deref();
+    for page in &mut extracted.pictures {
+        for picture in page.iter_mut() {
+            if picture.rendered || cover.is_some_and(|bytes| bytes == picture.bytes.as_slice()) {
+                continue;
+            }
+            picture.bytes = crate::books::diagram::attach_band_side(&picture.bytes);
+        }
+    }
 }
 
 impl PageSource for TextImporter {
@@ -698,6 +709,10 @@ fn epub(bytes: &[u8]) -> Result<Document, ImportError> {
     doc.isbn = opf
         .select(&selector("dc\\:identifier"))
         .find_map(|e| isbn(&e.text().collect::<String>()));
+    // Each picture is its own diagram. A printed square on it fills a side nothing else named.
+    for asset in &mut doc.assets {
+        asset.bytes = crate::books::diagram::attach_band_side(&asset.bytes);
+    }
     Ok(doc)
 }
 /// Whether a picture decodes as one of the formats the library can draw (PNG, JPEG).

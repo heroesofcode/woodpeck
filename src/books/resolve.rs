@@ -355,6 +355,11 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             ))
         })
         .collect();
+    // Squares on any side of the board. Applied only while the side is still unknown.
+    let band_sides: HashMap<String, bool> = assets
+        .iter()
+        .filter_map(|a| Some((a.path.clone(), super::diagram::stated_band_side(&a.bytes)?)))
+        .collect();
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let mut best = None;
     for (name, alphabet) in notation::ALPHABETS {
@@ -366,6 +371,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             &readings,
             &markers,
             &caption_sides,
+            &band_sides,
         );
         if best
             .as_ref()
@@ -378,7 +384,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
     best.document.assets = assets;
     best
 }
-#[allow(clippy::too_many_lines)] // One pass keeps block order, sections and seeding together.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One pass keeps block order, sections and seeding together.
 fn resolve_with(
     mut document: Document,
     language: &str,
@@ -387,9 +393,16 @@ fn resolve_with(
     readings: &HashMap<String, String>,
     markers: &HashMap<String, bool>,
     caption_sides: &HashMap<String, bool>,
+    band_sides: &HashMap<String, bool>,
 ) -> Book {
-    let (recognized, unconfirmed) =
-        recognized_positions(&document, alphabet, placements, markers, caption_sides);
+    let (recognized, unconfirmed) = recognized_positions(
+        &document,
+        alphabet,
+        placements,
+        markers,
+        caption_sides,
+        band_sides,
+    );
     let mut book = Book {
         version: 1,
         document: document.clone(),
@@ -1018,6 +1031,7 @@ fn recognized_positions(
     placements: &HashMap<String, Option<String>>,
     markers: &HashMap<String, bool>,
     caption_sides: &HashMap<String, bool>,
+    band_sides: &HashMap<String, bool>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
@@ -1044,6 +1058,10 @@ fn recognized_positions(
             };
             let caption = match &block.kind {
                 BlockKind::Image { path, .. } => caption_sides.get(path).copied(),
+                _ => None,
+            };
+            let band = match &block.kind {
+                BlockKind::Image { path, .. } => band_sides.get(path).copied(),
                 _ => None,
             };
             let before = before_image(page, b);
@@ -1079,6 +1097,17 @@ fn recognized_positions(
             if matches!(turn, Turn::Unknown)
                 && marker.is_none()
                 && let Some(white) = caption
+            {
+                let side = if white { Color::White } else { Color::Black };
+                if let Some(pos) = placed(&placement, side) {
+                    turn = Turn::Confirmed(pos);
+                }
+            }
+            // A printed square on any side of the board, or in the caption line. It fills a
+            // side nothing else named and does not replace one that is already confirmed.
+            if matches!(turn, Turn::Unknown)
+                && marker.is_none()
+                && let Some(white) = band
             {
                 let side = if white { Color::White } else { Color::Black };
                 if let Some(pos) = placed(&placement, side) {
@@ -2205,6 +2234,62 @@ mod image_tests {
         );
         assert!(
             matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+    }
+    #[test]
+    fn a_band_mark_confirms_only_an_unknown_side() {
+        let png = tiny_png();
+        let black = crate::books::diagram::with_band_side(&png, false);
+        // The alt already names White. A square that says Black must not replace it.
+        let kind = shown_bytes(black.clone(), PLACEMENT, "White to play", &[]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // Nothing else names the side, so the square does.
+        let kind = shown_bytes(black, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // A bottom-right marker stays in force when the other bands disagree.
+        let marked = crate::books::diagram::with_band_side(
+            &crate::books::diagram::with_side(&png, true),
+            false,
+        );
+        let kind = shown_bytes(marked, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // Text that contradicts itself stays unread. The square does not rescue it.
+        let kind = shown_bytes(
+            crate::books::diagram::with_band_side(&png, true),
+            PLACEMENT,
+            "Black to play",
+            &["1. Ra8+"],
+        );
+        assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
+        // Check already names Black. A White square must not replace it.
+        let kind = shown_bytes(
+            crate::books::diagram::with_band_side(&png, true),
+            "4k3/8/8/8/8/8/8/K3R3",
+            "",
+            &[],
+        );
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // A geometry caption already confirmed the side. The square does not replace it.
+        let both = crate::books::diagram::with_band_side(
+            &crate::books::diagram::with_caption_side(&png, true),
+            false,
+        );
+        let kind = shown_bytes(both, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
             "{kind:?}"
         );
     }

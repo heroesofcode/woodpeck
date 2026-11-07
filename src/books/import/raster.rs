@@ -87,58 +87,116 @@ impl Renderer {
         let Some(gray) = Gray::from_luma(w, h, &luma) else {
             return Vec::new();
         };
-        diagram::page_boards(&gray)
+        let mut crops = Vec::new();
+        for frame in diagram::page_boards(&gray) {
+            let Some(crop) = page_crop(
+                &gray,
+                frame,
+                &PageMap {
+                    bottom,
+                    origin,
+                    page_h: ph,
+                    pixels_h: h,
+                    scale,
+                },
+                fonts,
+            ) else {
+                continue;
+            };
+            crops.push(crop);
+        }
+        // Every board on the page, so a mark between two of them can be rejected.
+        let frames: Vec<_> = crops.iter().map(|crop| crop.board).collect();
+        let bands = diagram::band_sides(&gray, &frames);
+        crops
             .into_iter()
-            .filter_map(|frame| {
-                let crop = gray.crop(frame)?;
-                let image = image::GrayImage::from_raw(
-                    u32::try_from(crop.width).ok()?,
-                    u32::try_from(crop.height).ok()?,
-                    crop.luma(),
-                )?;
-                let mut bytes = Vec::new();
-                image
-                    .write_to(
-                        &mut std::io::Cursor::new(&mut bytes),
-                        image::ImageFormat::Png,
-                    )
-                    .ok()?;
-                // Page space has its origin at the bottom; the crop's top edge is its height.
-                let top = bottom + f64::from(ph) * (1.0 - frame[1] as f64 / h as f64);
-                let side = (frame[2] - frame[0]) as f64 / f64::from(scale);
-                let left = origin + frame[0] as f64 / f64::from(scale);
-                let low = top - (frame[3] - frame[1]) as f64 / f64::from(scale);
-                // The glyph board whose centre lies inside this crop.
-                let font = fonts.iter().find(|b| {
-                    let (cx, cy) = (
-                        f64::midpoint(b.left, b.right),
-                        f64::midpoint(b.top, b.bottom),
-                    );
-                    (left..left + side).contains(&cx) && (low..top).contains(&cy)
-                });
-                if let Some(font) = font {
-                    bytes = diagram::with_placement(&bytes, &font.placement);
-                }
-                // The crop carries a margin; the marker is placed against the board itself.
-                let board = diagram::locate(&crop).map_or(frame, |f| {
-                    let (x, y) = (frame[0].max(0), frame[1].max(0));
-                    [x + f[0], y + f[1], x + f[2], y + f[3]]
-                });
-                if let Some(white) = diagram::side_marker(&gray, board)
-                    .or_else(|| diagram::triangle_marker(&gray, board))
-                {
-                    bytes = diagram::with_side(&bytes, white);
-                }
-                Some(Placed {
-                    left,
-                    bottom: low,
-                    right: left + side,
-                    top,
-                    area: side * side,
-                    bytes,
-                    rendered: true,
-                })
+            .zip(bands)
+            .map(|(crop, band)| Placed {
+                left: crop.left,
+                bottom: crop.bottom,
+                right: crop.left + crop.side,
+                top: crop.top,
+                area: crop.side * crop.side,
+                // The corner search fills a side the bottom-right square and the triangle left open.
+                bytes: diagram::stamp_printed_side(&crop.bytes, crop.known, band),
+                rendered: true,
             })
             .collect()
     }
+}
+
+struct PageMap {
+    bottom: f64,
+    origin: f64,
+    page_h: f32,
+    pixels_h: usize,
+    scale: f32,
+}
+
+struct PageCrop {
+    bytes: Vec<u8>,
+    left: f64,
+    bottom: f64,
+    top: f64,
+    side: f64,
+    board: diagram::Frame,
+    /// Side from the bottom-right square or the triangle, already confirmed for this board.
+    known: Option<bool>,
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn page_crop(
+    gray: &Gray,
+    frame: diagram::Frame,
+    page: &PageMap,
+    fonts: &[FontBoard],
+) -> Option<PageCrop> {
+    let crop = gray.crop(frame)?;
+    let image = image::GrayImage::from_raw(
+        u32::try_from(crop.width).ok()?,
+        u32::try_from(crop.height).ok()?,
+        crop.luma(),
+    )?;
+    let mut bytes = Vec::new();
+    image
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .ok()?;
+    // Page space has its origin at the bottom; the crop's top edge is its height.
+    let top = page.bottom + f64::from(page.page_h) * (1.0 - frame[1] as f64 / page.pixels_h as f64);
+    let side = (frame[2] - frame[0]) as f64 / f64::from(page.scale);
+    let left = page.origin + frame[0] as f64 / f64::from(page.scale);
+    let low = top - (frame[3] - frame[1]) as f64 / f64::from(page.scale);
+    // The glyph board whose centre lies inside this crop.
+    let font = fonts.iter().find(|b| {
+        let (cx, cy) = (
+            f64::midpoint(b.left, b.right),
+            f64::midpoint(b.top, b.bottom),
+        );
+        (left..left + side).contains(&cx) && (low..top).contains(&cy)
+    });
+    if let Some(font) = font {
+        bytes = diagram::with_placement(&bytes, &font.placement);
+    }
+    // The crop carries a margin; the marker is placed against the board itself.
+    let board = diagram::locate(&crop).map_or(frame, |f| {
+        let (x, y) = (frame[0].max(0), frame[1].max(0));
+        [x + f[0], y + f[1], x + f[2], y + f[3]]
+    });
+    let known = diagram::side_marker(gray, board).or_else(|| diagram::triangle_marker(gray, board));
+    Some(PageCrop {
+        bytes,
+        left,
+        bottom: low,
+        top,
+        side,
+        board,
+        known,
+    })
 }

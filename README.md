@@ -303,8 +303,9 @@ DRM-protected books are not supported. Scanned books contribute only the diagram
 
 A diagram's side to move comes from its book: a caption such as "White to play", "Brancas
 jogam" or "Schwarz am Zug", the first numbered move after it, a check (only the side in
-check can be to move), or a "mate in 1/2" theme that only one side can carry out. When
-nothing confirms it, the board is still shown, marked **Side to move not confirmed**:
+check can be to move), a "mate in 1/2" theme that only one side can carry out, or a small
+printed square (hollow for White, filled for Black) on any side of the board or in the
+caption line. When nothing confirms it, the board is still shown, marked **Side to move not confirmed**:
 choose White or Black under it to explore it. Moves in the text are never played from
 such a board. Books imported earlier show these boards once removed and imported again.
 
