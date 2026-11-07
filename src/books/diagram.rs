@@ -625,6 +625,24 @@ pub fn stated_caption_side(bytes: &[u8]) -> Option<bool> {
     }
 }
 
+/// Key of the PNG text chunk holding a side read from a numbered solution.
+const KEY_SIDE_KEY: &[u8] = b"woodpeck-key-side";
+
+/// A PNG with a side taken from a numbered answer key. Weaker than a caption or a printed
+/// mark: the resolver may use it only while every stronger signal left the side unknown.
+pub fn with_key_side(png: &[u8], white: bool) -> Vec<u8> {
+    with_text(png, KEY_SIDE_KEY, if white { "w" } else { "b" })
+}
+
+/// The side stored by [`with_key_side`]: `Some(true)` for White to move.
+pub fn stated_key_side(bytes: &[u8]) -> Option<bool> {
+    match text_chunk(bytes, KEY_SIDE_KEY)?.as_slice() {
+        b"w" => Some(true),
+        b"b" => Some(false),
+        _ => None,
+    }
+}
+
 fn with_text(png: &[u8], key: &[u8], value: &str) -> Vec<u8> {
     const HEADER: usize = 8 + 25;
     if png.len() < HEADER || !png.starts_with(b"\x89PNG\r\n\x1a\n") || &png[12..16] != b"IHDR" {
