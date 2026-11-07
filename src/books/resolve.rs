@@ -355,6 +355,12 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             ))
         })
         .collect();
+    // Side squares off the bottom-right corner. Same unknown-only rule as a caption, and a
+    // caption wins when both name a side.
+    let printed_marks: HashMap<String, bool> = assets
+        .iter()
+        .filter_map(|a| Some((a.path.clone(), super::diagram::stated_mark_side(&a.bytes)?)))
+        .collect();
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let mut best = None;
     for (name, alphabet) in notation::ALPHABETS {
@@ -366,6 +372,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             &readings,
             &markers,
             &caption_sides,
+            &printed_marks,
         );
         if best
             .as_ref()
@@ -378,7 +385,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
     best.document.assets = assets;
     best
 }
-#[allow(clippy::too_many_lines)] // One pass keeps block order, sections and seeding together.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One pass keeps block order, sections and seeding together.
 fn resolve_with(
     mut document: Document,
     language: &str,
@@ -387,9 +394,16 @@ fn resolve_with(
     readings: &HashMap<String, String>,
     markers: &HashMap<String, bool>,
     caption_sides: &HashMap<String, bool>,
+    printed_marks: &HashMap<String, bool>,
 ) -> Book {
-    let (recognized, unconfirmed) =
-        recognized_positions(&document, alphabet, placements, markers, caption_sides);
+    let (recognized, unconfirmed) = recognized_positions(
+        &document,
+        alphabet,
+        placements,
+        markers,
+        caption_sides,
+        printed_marks,
+    );
     let mut book = Book {
         version: 1,
         document: document.clone(),
@@ -1018,6 +1032,7 @@ fn recognized_positions(
     placements: &HashMap<String, Option<String>>,
     markers: &HashMap<String, bool>,
     caption_sides: &HashMap<String, bool>,
+    printed_marks: &HashMap<String, bool>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
@@ -1044,6 +1059,10 @@ fn recognized_positions(
             };
             let caption = match &block.kind {
                 BlockKind::Image { path, .. } => caption_sides.get(path).copied(),
+                _ => None,
+            };
+            let printed = match &block.kind {
+                BlockKind::Image { path, .. } => printed_marks.get(path).copied(),
                 _ => None,
             };
             let before = before_image(page, b);
@@ -1073,12 +1092,13 @@ fn recognized_positions(
             {
                 turn = placed(&placement, side).map_or(Turn::Unknown, Turn::Confirmed);
             }
-            // A printed caption bound to this diagram by page geometry. It fills a side nothing
-            // else named, and it does not demote a marker, a move, or a check that already did.
+            // A printed caption, then a side square found off the bottom-right corner. Both fill
+            // a side nothing else named. Neither demotes a marker, a move, or a check, and a
+            // caption wins when it and the square disagree.
             turn = with_marker(turn, marker, &placement);
             if matches!(turn, Turn::Unknown)
                 && marker.is_none()
-                && let Some(white) = caption
+                && let Some(white) = caption.or(printed)
             {
                 let side = if white { Color::White } else { Color::Black };
                 if let Some(pos) = placed(&placement, side) {
@@ -2207,6 +2227,51 @@ mod image_tests {
             matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
             "{kind:?}"
         );
+    }
+    #[test]
+    fn a_printed_square_fills_only_an_unknown_side() {
+        let png = tiny_png();
+        let marked = crate::books::diagram::with_mark_side(&png, true);
+        // The alt already names Black. The square must not replace it.
+        let kind = shown_bytes(marked.clone(), PLACEMENT, "Black to play", &[]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // Nothing else names the side, so the square does.
+        let kind = shown_bytes(marked, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // A bottom-right marker stays in force when the wider search disagrees.
+        let both = crate::books::diagram::with_mark_side(
+            &crate::books::diagram::with_side(&png, false),
+            true,
+        );
+        let kind = shown_bytes(both, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // A caption already confirmed the side. The square does not replace it.
+        let captioned = crate::books::diagram::with_mark_side(
+            &crate::books::diagram::with_caption_side(&png, false),
+            true,
+        );
+        let kind = shown_bytes(captioned, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // Text that contradicts itself stays unread.
+        let kind = shown_bytes(
+            crate::books::diagram::with_mark_side(&png, true),
+            PLACEMENT,
+            "Black to play",
+            &["1. Ra8+"],
+        );
+        assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
     }
     #[test]
     fn a_contradicted_side_keeps_the_image_unread() {

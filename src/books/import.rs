@@ -30,6 +30,21 @@ pub trait PageSource {
 pub struct TextImporter;
 
 fn stamp_pdf_sides(path: &Path, extracted: &mut pdf::Extracted) {
+    // Squares off the bottom-right corner, on pictures that are not page crops. Page crops
+    // are stamped from the full raster, where the caption line is still visible.
+    for picture in extracted.pictures.iter_mut().flatten() {
+        if picture.rendered
+            || extracted
+                .cover
+                .as_deref()
+                .is_some_and(|cover| cover == picture.bytes.as_slice())
+        {
+            continue;
+        }
+        if let Some(stamped) = crate::books::diagram::attach_printed_mark(&picture.bytes) {
+            picture.bytes = stamped;
+        }
+    }
     pdf::stamp_pdftotext_sides(
         path,
         &extracted.pages,
@@ -660,7 +675,8 @@ fn epub(bytes: &[u8]) -> Result<Document, ImportError> {
                         {
                             doc.assets.push(Asset {
                                 path: path.clone(),
-                                bytes: bytes.clone(),
+                                bytes: crate::books::diagram::attach_printed_mark(bytes)
+                                    .unwrap_or_else(|| bytes.clone()),
                             });
                         }
                         BlockKind::Image {
