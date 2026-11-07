@@ -267,7 +267,7 @@ fn overlap(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
 /// Words on one baseline become one line, whatever order the PDF emitted them in and however
 /// it had already grouped them. A column gutter stays split, so two captions on one row keep
 /// their own sides.
-fn lines_of(mut words: Vec<TextBox>) -> Vec<TextBox> {
+pub(super) fn lines_of(mut words: Vec<TextBox>) -> Vec<TextBox> {
     words.sort_by(|a, b| {
         midpoint_y(&b.rect)
             .total_cmp(&midpoint_y(&a.rect))
@@ -482,7 +482,7 @@ pub(super) fn parse_bbox(html: &str) -> Vec<Vec<TextBox>> {
     pages
 }
 
-fn glyph_boxes(lines: &[super::pdf::Line]) -> Vec<TextBox> {
+pub(super) fn glyph_boxes(lines: &[super::pdf::Line]) -> Vec<TextBox> {
     lines
         .iter()
         .filter(|line| !line.text.trim().is_empty())
@@ -506,7 +506,7 @@ fn glyph_boxes(lines: &[super::pdf::Line]) -> Vec<TextBox> {
         .collect()
 }
 
-fn bbox_document(pdf: &Path) -> Option<Vec<Vec<TextBox>>> {
+pub(super) fn bbox_document(pdf: &Path) -> Option<Vec<Vec<TextBox>>> {
     let path = pdf.to_str().filter(|path| !path.is_empty())?;
     let output = std::process::Command::new("pdftotext")
         .args(["-bbox", "-q", path, "-"])

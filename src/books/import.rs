@@ -9,6 +9,7 @@ use std::{
 use thiserror::Error;
 mod caption;
 mod fontboard;
+mod key;
 mod pdf;
 mod picture;
 mod raster;
@@ -57,6 +58,13 @@ fn stamp_pdf_sides(path: &Path, extracted: &mut pdf::Extracted) {
     // Geometry captions fill sides the text cascade still leaves unknown. A printed
     // marker stamped above is left untouched.
     caption::stamp_geometry_captions(
+        path,
+        &extracted.pages,
+        &mut extracted.pictures,
+        extracted.cover.as_deref(),
+    );
+    // Numbered solutions are weaker still: they fill only what the caption pass left open.
+    key::stamp_answer_keys(
         path,
         &extracted.pages,
         &mut extracted.pictures,
