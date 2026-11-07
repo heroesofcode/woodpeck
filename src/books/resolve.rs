@@ -350,12 +350,14 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
         }
     }
     // Each channel is applied later only while the side is still unknown. A caption outranks a
-    // square, a square outranks a triangle, and a numbered solution key comes last.
+    // square, a square outranks a triangle, a numbered solution key comes after those, and an
+    // OCR turn caption from the page pixels is last.
     let markers = sides_named(&assets, super::diagram::stated_side);
     let caption_sides = sides_named(&assets, super::diagram::stated_caption_side);
     let printed_marks = sides_named(&assets, super::diagram::stated_mark_side);
     let triangle_sides = sides_named(&assets, super::diagram::stated_triangle_side);
     let key_sides = sides_named(&assets, super::diagram::stated_key_side);
+    let scan_sides = sides_named(&assets, super::diagram::stated_scan_side);
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let mut best = None;
     for (name, alphabet) in notation::ALPHABETS {
@@ -370,6 +372,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             &printed_marks,
             &triangle_sides,
             &key_sides,
+            &scan_sides,
         );
         if best
             .as_ref()
@@ -394,6 +397,7 @@ fn resolve_with(
     printed_marks: &HashMap<String, bool>,
     triangle_sides: &HashMap<String, bool>,
     key_sides: &HashMap<String, bool>,
+    scan_sides: &HashMap<String, bool>,
 ) -> Book {
     let (recognized, unconfirmed) = recognized_positions(
         &document,
@@ -404,6 +408,7 @@ fn resolve_with(
         printed_marks,
         triangle_sides,
         key_sides,
+        scan_sides,
     );
     let mut book = Book {
         version: 1,
@@ -1026,7 +1031,11 @@ fn differences(reading: &str, pos: &Chess) -> Option<usize> {
 /// otherwise the image stays unrecognized rather than seeding a doubtful position.
 /// Images whose board passed the gates but whose side to move nothing confirms come second,
 /// with their placement only.
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::type_complexity
+)]
 fn recognized_positions(
     document: &Document,
     alphabet: &str,
@@ -1036,6 +1045,7 @@ fn recognized_positions(
     printed_marks: &HashMap<String, bool>,
     triangle_sides: &HashMap<String, bool>,
     key_sides: &HashMap<String, bool>,
+    scan_sides: &HashMap<String, bool>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
@@ -1076,6 +1086,10 @@ fn recognized_positions(
                 BlockKind::Image { path, .. } => key_sides.get(path).copied(),
                 _ => None,
             };
+            let scan = match &block.kind {
+                BlockKind::Image { path, .. } => scan_sides.get(path).copied(),
+                _ => None,
+            };
             let before = before_image(page, b);
             let mut turn = image_position(
                 page.blocks[b + 1..]
@@ -1107,8 +1121,8 @@ fn recognized_positions(
             // elsewhere. Each fills a side nothing else named. None of them demotes a marker, a
             // move, or a check. A caption wins over a square, and a square wins over a triangle.
             // Under a "mate in N" heading the triangle is kept only when that side has the mate.
-            // A numbered solution is weaker than all of those: it fills a side only when they
-            // are silent too.
+            // A numbered solution is weaker than all of those. An OCR turn caption is weaker
+            // still: it fills a side only when the key is silent too.
             turn = with_marker(turn, marker, &placement);
             let triangle = triangle
                 .filter(|&white| triangle_under_mate(white, &placement, before.heading_mate));
@@ -1127,6 +1141,19 @@ fn recognized_positions(
                 && printed.is_none()
                 && triangle.is_none()
                 && let Some(white) = key
+            {
+                let side = if white { Color::White } else { Color::Black };
+                if let Some(pos) = placed(&placement, side) {
+                    turn = Turn::Confirmed(pos);
+                }
+            }
+            if matches!(turn, Turn::Unknown)
+                && marker.is_none()
+                && caption.is_none()
+                && printed.is_none()
+                && triangle.is_none()
+                && key.is_none()
+                && let Some(white) = scan
             {
                 let side = if white { Color::White } else { Color::Black };
                 if let Some(pos) = placed(&placement, side) {
@@ -2516,6 +2543,57 @@ mod image_tests {
         // Text that contradicts itself stays unread. The key does not rescue it.
         let kind = shown_bytes(
             crate::books::diagram::with_key_side(&png, true),
+            PLACEMENT,
+            "Black to play",
+            &["1. Ra8+"],
+        );
+        assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
+    }
+    #[test]
+    fn a_scan_caption_fills_only_an_unknown_side() {
+        let png = tiny_png();
+        let scanned = crate::books::diagram::with_scan_side(&png, false);
+        // The alt already names White. The scan caption must not replace it.
+        let kind = shown_bytes(scanned.clone(), PLACEMENT, "White to play", &[]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // Nothing else names the side, so the OCR caption does.
+        let kind = shown_bytes(scanned, PLACEMENT, "", &["A quiet position."]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // Every stronger channel stays in force when the scan caption disagrees.
+        for prior in [
+            crate::books::diagram::with_side(&png, true),
+            crate::books::diagram::with_caption_side(&png, true),
+            crate::books::diagram::with_mark_side(&png, true),
+            crate::books::diagram::with_triangle_side(&png, true),
+            crate::books::diagram::with_key_side(&png, true),
+        ] {
+            let marked = crate::books::diagram::with_scan_side(&prior, false);
+            let kind = shown_bytes(marked, PLACEMENT, "", &["A quiet position."]);
+            assert!(
+                matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+                "{kind:?}"
+            );
+        }
+        // Check already names Black. A White scan caption must not replace it.
+        let kind = shown_bytes(
+            crate::books::diagram::with_scan_side(&png, true),
+            "4k3/8/8/8/8/8/8/K3R3",
+            "",
+            &[],
+        );
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{kind:?}"
+        );
+        // Text that contradicts itself stays unread. The scan caption does not rescue it.
+        let kind = shown_bytes(
+            crate::books::diagram::with_scan_side(&png, true),
             PLACEMENT,
             "Black to play",
             &["1. Ra8+"],

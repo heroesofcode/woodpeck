@@ -13,6 +13,9 @@ mod key;
 mod pdf;
 mod picture;
 mod raster;
+mod scan_caption;
+#[cfg(not(target_arch = "wasm32"))]
+mod scan_ocr;
 
 #[derive(Debug, Error)]
 pub enum ImportError {
@@ -70,6 +73,8 @@ fn stamp_pdf_sides(path: &Path, extracted: &mut pdf::Extracted) {
         &mut extracted.pictures,
         extracted.cover.as_deref(),
     );
+    // An OCR turn caption is last: it fills only a side every earlier pass left unknown.
+    scan_caption::apply_pending_scan_sides(&mut extracted.pictures, extracted.cover.as_deref());
 }
 
 impl PageSource for TextImporter {

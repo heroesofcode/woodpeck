@@ -16,6 +16,8 @@ pub(super) struct Placed {
     pub bytes: Vec<u8>,
     /// Cropped from a rendered page rather than embedded as a picture.
     pub rendered: bool,
+    /// Side from an OCR turn caption, applied only after every stronger pass stays silent.
+    pub scan_side: Option<bool>,
 }
 /// Smallest side, in pixels, of a picture worth keeping (icons and rules are skipped).
 const MIN_SIDE: i64 = 120;
@@ -88,6 +90,7 @@ pub(super) fn pictures(doc: &Document, page: ObjectId) -> Vec<Placed> {
                         area,
                         bytes,
                         rendered: false,
+                        scan_side: None,
                     });
                 }
             }

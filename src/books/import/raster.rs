@@ -87,9 +87,11 @@ impl Renderer {
         let Some(gray) = Gray::from_luma(w, h, &luma) else {
             return Vec::new();
         };
+        let detected = diagram::page_boards(&gray);
         let mut out = Vec::new();
         let mut boards = Vec::new();
-        for frame in diagram::page_boards(&gray) {
+        for frame in &detected {
+            let frame = *frame;
             let Some(crop) = gray.crop(frame) else {
                 continue;
             };
@@ -140,12 +142,63 @@ impl Renderer {
                 area: side * side,
                 bytes,
                 rendered: true,
+                scan_side: None,
             });
         }
         // Squares and triangles are decided with every board in view, so a mark shared by two
         // diagrams abstains.
         stamp_boards(&gray, &boards, &mut out);
+        attach_scan_captions(&gray, index, pw, ph, origin, bottom, &detected, &mut out);
         out
+    }
+}
+
+/// OCR turn captions for this render. A dropped detector frame abstains the whole page.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::similar_names,
+    clippy::too_many_arguments
+)]
+fn attach_scan_captions(
+    gray: &Gray,
+    index: usize,
+    pdf_width: f32,
+    pdf_height: f32,
+    crop_x0: f64,
+    crop_y0: f64,
+    detected: &[diagram::Frame],
+    placed: &mut [Placed],
+) {
+    if detected.is_empty() || detected.len() != placed.len() {
+        return;
+    }
+    let Ok(page_index) = u32::try_from(index) else {
+        return;
+    };
+    let width = gray.width as f64;
+    if !(pdf_width > 1.0 && width.is_finite()) {
+        return;
+    }
+    let facts = super::scan_caption::RenderFacts {
+        page_index,
+        pdf_width: f64::from(pdf_width),
+        pdf_height: f64::from(pdf_height),
+        scale: width / f64::from(pdf_width),
+        crop_x0,
+        crop_y0,
+    };
+    let targets: Vec<_> = placed
+        .iter()
+        .map(|picture| super::scan_caption::ScanTarget {
+            confirmed: super::scan_caption::stronger_side_present(&picture.bytes),
+            eligible: true,
+        })
+        .collect();
+    let Some(sides) = super::scan_caption::pending_sides(gray, facts, detected, &targets) else {
+        return;
+    };
+    for (picture, side) in placed.iter_mut().zip(sides) {
+        picture.scan_side = side;
     }
 }
 
