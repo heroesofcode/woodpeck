@@ -1,7 +1,9 @@
 //! Bind a printed exercise number to the side named by its solution.
 //!
 //! Puzzle books often print a bare number above a diagram and the moves later, in a
-//! numbered key: `12 - 1. Nf3` is White to move and `12 - 1... c5` is Black. The number
+//! numbered key: `12 - 1. Nf3` is White to move and `12 - 1... c5` is Black. A space
+//! before that dot, or between the dots of an ellipsis (`1 .`, `1 . . .`), is the same
+//! mark: reconstructed text often splits them. The number
 //! on the diagram is matched to that key. The side is stored apart from captions and
 //! printed marks; the resolver applies it only while every stronger signal left the
 //! side unknown.
@@ -311,6 +313,10 @@ fn move_or_note(word: &str) -> bool {
     if bare.is_empty() || looks_like_move(bare) {
         return true;
     }
+    // A reconstructed ellipsis is often one dot per word (`1 . . . c5`).
+    if bare.chars().all(|c| c == '.' || c == '…') {
+        return true;
+    }
     let core = bare.trim_matches(|c: char| c == '.' || c == '…');
     if !core.is_empty()
         && core
@@ -330,12 +336,8 @@ fn match_entry(s: &str, allow_dot: bool) -> Option<Hit> {
     if s[i..].starts_with('(') {
         i += 1;
     }
-    let digits_at = i;
-    i = take_digits(s, i);
-    if i == digits_at || i - digits_at > 4 {
-        return None;
-    }
-    let number: u32 = s[digits_at..i].parse().ok()?;
+    // At most four digits, with spaces allowed between them (`1 3 6` is 136).
+    let (mut i, number) = take_spaced_digits(s, i, 4)?;
     if number == 0 {
         return None;
     }
@@ -389,51 +391,40 @@ fn continues_ellipsis(s: &str) -> bool {
     s.starts_with('.') || s.starts_with('…')
 }
 
-/// `Some(true)` is a single dot (White). `Some(false)` is an ellipsis (Black).
-/// `None` inside `Some` is `..`, which does not name a side.
-fn read_dots(s: &str, mut i: usize) -> Option<(Option<bool>, usize)> {
-    if s[i..].starts_with('…') {
-        i += '…'.len_utf8();
-        return Some((Some(false), skip_extra_dots(s, i)));
-    }
-    if !s[i..].starts_with('.') {
-        return None;
-    }
-    let mut count = 0;
-    while s[i..].starts_with('.') {
-        count += 1;
-        i += 1;
-    }
-    if count >= 3 {
-        return Some((Some(false), i));
-    }
-    if count == 2 {
-        return Some((None, i));
-    }
-    let j = skip_ws(s, i);
-    if s[j..].starts_with('…') {
-        return Some((Some(false), skip_extra_dots(s, j + '…'.len_utf8())));
-    }
-    if s[j..].starts_with("...") {
-        return Some((Some(false), j + 3));
-    }
-    Some((Some(true), i))
-}
-
-fn skip_extra_dots(s: &str, mut i: usize) -> usize {
+/// `Some(true)` is one dot (White). `Some(false)` is an ellipsis (Black). `None` inside
+/// `Some` is exactly two dots, which does not name a side.
+///
+/// Spaces may sit before the first dot and between dots (`1 . Nf3`, `1 . . . c5`).
+/// Those dots are one mark: a spaced ellipsis is Black, not a White dot plus leftovers.
+fn read_dots(s: &str, i: usize) -> Option<(Option<bool>, usize)> {
+    let mut i = skip_ws(s, i);
+    let mut count = 0usize;
     loop {
-        let j = skip_ws(s, i);
-        if s[j..].starts_with('…') {
-            i = j + '…'.len_utf8();
-        } else if s[j..].starts_with('.') {
-            i = j;
+        if s[i..].starts_with('…') {
+            count += 3;
+            i += '…'.len_utf8();
+        } else if s[i..].starts_with('.') {
             while s[i..].starts_with('.') {
+                count += 1;
                 i += 1;
             }
         } else {
-            return i;
+            break;
+        }
+        let j = skip_ws(s, i);
+        if s[j..].starts_with('.') || s[j..].starts_with('…') {
+            i = j;
+        } else {
+            break;
         }
     }
+    let side = match count {
+        1 => Some(true),
+        2 => None,
+        n if n >= 3 => Some(false),
+        _ => return None,
+    };
+    Some((side, i))
 }
 
 fn label_len(s: &str) -> usize {
@@ -486,6 +477,37 @@ fn take_digits(s: &str, i: usize) -> usize {
         .char_indices()
         .find(|(_, c)| !c.is_ascii_digit())
         .map_or(s.len(), |(k, _)| i + k)
+}
+
+/// One number of at most `max` digits. Spaces between those digits stay inside the number
+/// (`1 3 6`). A longer run is not a key number.
+fn take_spaced_digits(s: &str, mut i: usize, max: usize) -> Option<(usize, u32)> {
+    let mut digits = 0usize;
+    let mut value = 0u32;
+    while let Some(c) = s[i..].chars().next() {
+        if c.is_ascii_digit() {
+            digits += 1;
+            if digits > max {
+                return None;
+            }
+            value = value * 10 + c.to_digit(10)?;
+            i += c.len_utf8();
+            continue;
+        }
+        if digits > 0 && c.is_whitespace() {
+            let j = skip_ws(s, i);
+            if s[j..]
+                .chars()
+                .next()
+                .is_some_and(|next| next.is_ascii_digit())
+            {
+                i = j;
+                continue;
+            }
+        }
+        break;
+    }
+    (digits > 0).then_some((i, value))
 }
 
 fn take_token(s: &str, i: usize) -> usize {
@@ -623,6 +645,41 @@ No. 22 - 1. e4
         assert_eq!(side(text, 20), Some(false));
         assert_eq!(side(text, 21), Some(false));
         assert_eq!(side(text, 22), Some(true));
+    }
+
+    #[test]
+    fn spaces_around_the_move_dots_keep_white_and_black_apart() {
+        // Reconstructed lines split the dot from the move number, and an ellipsis into dots.
+        let text = "\
+12 - 1 . Nf3
+13 - 1 . . . c5
+14 - 1  .  .  .  e5
+15 - 1. Nf3
+16 - 1... c5
+17 - 1 . ... Nf6
+18 - 1.\u{00a0}.\u{00a0}. c5
+1 3 6 - 1 . e4
+1 3 7 - 1 . . . c5
+";
+        assert_eq!(side(text, 12), Some(true));
+        assert_eq!(side(text, 13), Some(false));
+        assert_eq!(side(text, 14), Some(false));
+        assert_eq!(side(text, 15), Some(true));
+        assert_eq!(side(text, 16), Some(false));
+        assert_eq!(side(text, 17), Some(false));
+        assert_eq!(side(text, 18), Some(false));
+        assert_eq!(side(text, 136), Some(true));
+        assert_eq!(side(text, 137), Some(false));
+        // Two dots still name neither side, spaced or compact.
+        assert_eq!(solution_sides("8 - 1 . . e4").get(&8).copied(), Some(None));
+        assert_eq!(solution_sides("8 - 1.. e4").get(&8).copied(), Some(None));
+        // The space stays inside the exercise number. It does not swallow the move number.
+        assert_eq!(side("12 - 1 . e4", 12), Some(true));
+        assert!(!solution_sides("12 - 1 . e4").contains_key(&121));
+        assert!(solution_sides("12345 - 1 . Nf3").is_empty());
+        // A spaced ellipsis on the line after the dash is still Black.
+        assert_eq!(side("40 -\n1 . Nc3\n", 40), Some(true));
+        assert_eq!(side("41 -\n1 . . . c5\n", 41), Some(false));
     }
 
     #[test]
