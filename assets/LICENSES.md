@@ -44,3 +44,19 @@ notice accompanies the fonts. These assets are independent of Cargo dependencies
 ## Chess pieces
 
 See [pieces/LICENSE](pieces/LICENSE) for the cburnett set.
+
+## OCR models
+
+`ocr/text-detection.onnx` (2,499,479 bytes) and `ocr/text-recognition.onnx`
+(9,713,177 bytes) are the unmodified ocrs text detection and recognition models
+by Robert Knight, published at <https://huggingface.co/robertknight/ocrs> and
+<https://ocrs-models.s3-accelerate.amazonaws.com/>. They were trained on HierText
+and synthetic data. The model author treats the weights as
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The weights stay
+under that license; they are not relicensed as GPL-3.0-or-later with the
+application code. No model file was modified.
+
+SHA-256:
+
+- `text-detection.onnx`: `a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe`
+- `text-recognition.onnx`: `86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5`

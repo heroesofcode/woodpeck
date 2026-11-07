@@ -48,6 +48,9 @@ zstd = "0.14.3"
 # System file chooser: XDG portal over libdbus loaded at runtime (zenity fallback), native on macOS/Windows.
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 pollster = "0.4"
+# Pure-Rust OCR for explicit turn captions on scanned pages. Weights are bundled separately.
+ocrs-cjk = { version = "0.1.0", default-features = false, features = ["onnx"] }
+rten = { version = "0.24.0", default-features = false, features = ["onnx_format"] }
 
 # Browser clock for chrono::Utc::now on wasm32.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -65,6 +68,7 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Navigator", "StorageManager", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlElement", "Node", "Blob", "BlobPropertyBag", "Url", "Element", "console", "Storage", "IdbFactory", "IdbDatabase", "DomStringList", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "IdbObjectStore", "IdbVersionChangeEvent", "Event", "EventTarget", "DomException", "VisibilityState"] }
 
 [dev-dependencies]
+ab_glyph = "0.2.32"
 tempfile = "3"
 criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
 

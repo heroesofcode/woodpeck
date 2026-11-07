@@ -19,8 +19,11 @@ a repeated wide gutter separates two text columns while short White/Black tables
 remain row-major. More complicated layouts, rotated text and marginal notes still
 need evaluation. PDFs with fewer than eight alphanumeric characters on a majority of
 pages return the typed `NoTextLayer` error. A future OCR page source can produce the
-same document without changing the resolver or storage API. OCR, PDF rasterization
-and DRM handling are outside this implementation.
+same document without changing the resolver or storage API. Scanned pages may still
+fill an unknown side from one OCR'd explicit turn caption when the render certificate,
+the full detector census and a unique below-board line all agree; anything doubtful
+stays unknown. That pass does not build an OCR text layer. DRM handling is outside
+this implementation.
 
 `diagram` reads diagram images on the CPU. It locates the board from the square
 alternation, resamples each square to 32x32, and compares compact features with
