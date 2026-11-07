@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.9.0](https://github.com/heroesofcode/woodpeck/compare/v0.8.0...v0.9.0) (2026-11-07)
+
+
+### Features
+
+* **books:** bind side-to-move captions to diagrams by page geometry ([339dc23](https://github.com/heroesofcode/woodpeck/commit/339dc23823528b7ffba755aa13ef46c051e4c6ea))
+* **books:** fill unknown sides from numbered solution keys ([11b8022](https://github.com/heroesofcode/woodpeck/commit/11b802211a4afa54a0749e79ecc4a5a378232143))
+* **books:** fill unknown sides from scan-caption OCR ([899f2d6](https://github.com/heroesofcode/woodpeck/commit/899f2d69449a5a4e1c34d8a4b395571924ab4703))
+* **books:** read side triangles anywhere and wider side captions ([988af14](https://github.com/heroesofcode/woodpeck/commit/988af14cf2bee460af1fbc174cc874bea5bb0ddc))
+* **books:** search side-to-move marks on all sides of the board ([3ce9aed](https://github.com/heroesofcode/woodpeck/commit/3ce9aedcbc6f547f2ccd248708a2be76b96032bb))
+
+
+### Bug fixes
+
+* **books:** keep caption baselines within half a line ([c6f9f00](https://github.com/heroesofcode/woodpeck/commit/c6f9f00eeeb1c6b8558be8b387373923e2eeadeb))
+* **books:** keep the scan-caption window on the located board ([ed0719a](https://github.com/heroesofcode/woodpeck/commit/ed0719a16fc0b0611dac420bec7dc5d4c2caa6d9))
+* **books:** measure scan captions from the board, not its crop padding ([b4704ac](https://github.com/heroesofcode/woodpeck/commit/b4704ac3c63acfced7206fec61b911b1a263f409))
+* **books:** read spaced dots in numbered solution keys ([5a589dd](https://github.com/heroesofcode/woodpeck/commit/5a589dd62293041e9e9a63284807473825b4e035))
+
 ## [0.8.0](https://github.com/heroesofcode/woodpeck/compare/v0.7.0...v0.8.0) (2026-11-06)
 
 
