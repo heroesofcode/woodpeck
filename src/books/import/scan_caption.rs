@@ -150,9 +150,9 @@ pub(super) fn apply_pending_scan_sides(
     cover: Option<&[u8]>,
 ) {
     for picture in pictures.iter_mut().flatten() {
-        let Some(white) = picture.scan_side else {
+        if picture.scan_side.is_none() && picture.scan_move.is_none() {
             continue;
-        };
+        }
         if cover.is_some_and(|bytes| bytes == picture.bytes.as_slice()) {
             continue;
         }
@@ -162,18 +162,27 @@ pub(super) fn apply_pending_scan_sides(
         let Some(png) = super::pdf::diagram_png(&picture.bytes) else {
             continue;
         };
-        picture.bytes = diagram::with_scan_side(&png, white);
+        picture.bytes = match (picture.scan_side, &picture.scan_move) {
+            (Some(white), _) => diagram::with_scan_side(&png, white),
+            (None, Some((white, destination))) => {
+                diagram::with_scan_move(&png, *white, destination)
+            }
+            (None, None) => png,
+        };
     }
 }
 
-/// Sides for `claimed`, or `None` when the page certificate does not hold.
-/// `Some(true)` is White. `None` inside the vector abstains for that board.
+/// One board's printed move: the mover and its destination.
+pub(super) type PrintedMove = Option<(bool, String)>;
+
+/// Caption sides and printed moves for `claimed`, or `None` when the page certificate does not
+/// hold. `Some(true)` is White. `None` inside a vector abstains for that board.
 pub(super) fn pending_sides(
     gray: &Gray,
     facts: RenderFacts,
     claimed: &[Frame],
     targets: &[ScanTarget],
-) -> Option<Vec<Option<bool>>> {
+) -> Option<(Vec<Option<bool>>, Vec<PrintedMove>)> {
     let lines = recognize_page(gray)?;
     let (cert, payload) = certify(gray, facts, &lines)?;
     bind(&cert, gray, &payload, claimed, targets)
@@ -230,7 +239,7 @@ fn bind(
     payload: &OcrPayload,
     claimed: &[Frame],
     targets: &[ScanTarget],
-) -> Option<Vec<Option<bool>>> {
+) -> Option<(Vec<Option<bool>>, Vec<PrintedMove>)> {
     let width = usize::try_from(cert.width).ok()?;
     let height = usize::try_from(cert.height).ok()?;
     if gray.width != width || gray.height != height {
@@ -264,7 +273,10 @@ fn bind(
     // Census identity stays on the padded detector crops. The caption window uses the
     // board `locate` finds inside each crop, so that padding is not part of the gap.
     let boards = located_boards(gray, &frames)?;
-    Some(assign_edges(&frames, &boards, &payload.lines, targets))
+    Some((
+        assign_edges(&frames, &boards, &payload.lines, targets),
+        assign_moves(&frames, &boards, &payload.lines, targets),
+    ))
 }
 
 /// Board edges inside each detector crop, in page pixels. `None` when a crop has no board.
@@ -445,6 +457,141 @@ fn assign_edges(
         .collect()
 }
 
+/// The first text line under each board, when it opens with a numbered move (`12.` for White,
+/// `12...` for Black) and names a destination. Only the nearest board may own it, and a board
+/// another signal already named is skipped. The resolver later checks the destination against
+/// the recognized placement.
+fn assign_moves(
+    frames: &[Frame],
+    boards: &[Frame],
+    lines: &[OcrLine],
+    targets: &[ScanTarget],
+) -> Vec<PrintedMove> {
+    if frames.len() != boards.len() || frames.len() != targets.len() {
+        return vec![None; frames.len()];
+    }
+    boards
+        .iter()
+        .enumerate()
+        .map(|(index, board)| {
+            let target = targets[index];
+            if target.confirmed || !target.eligible {
+                return None;
+            }
+            let line = first_line_under(*board, lines)?;
+            if !confident_move(line) {
+                return None;
+            }
+            let own = frame_distance(frames[index], line);
+            let vetoed = frames.iter().enumerate().any(|(other, neighbour)| {
+                other != index
+                    && frame_distance(*neighbour, line)
+                        <= own.mul_add(NEIGHBOUR_DISTANCE_FACTOR, NEIGHBOUR_SLACK_PX)
+            });
+            if vetoed {
+                return None;
+            }
+            printed_move(&line.text)
+        })
+        .collect()
+}
+
+/// Top of the first line under the board, at most this many board-widths below its bottom edge.
+const MOVE_GAP_MAX: f64 = 0.3;
+/// The line may start or end this many board-widths beyond the board's sides (text columns are
+/// wider than centred diagrams).
+const MOVE_MARGIN: f64 = 1.1;
+/// Minimum mean confidence of a printed-move line. Figurines lower it, so it is below the
+/// caption threshold, but the destination check in the resolver still has to pass.
+const MOVE_CONFIDENCE_MIN: f32 = 0.5;
+
+fn confident_move(line: &OcrLine) -> bool {
+    line.confidence.is_finite() && (MOVE_CONFIDENCE_MIN..=1.0).contains(&line.confidence)
+}
+
+/// The leftmost fragment of the highest line starting under `board`, or `None` when that
+/// line is missing or not in the board's column.
+#[allow(clippy::cast_precision_loss)]
+fn first_line_under(board: Frame, lines: &[OcrLine]) -> Option<&OcrLine> {
+    let width = (board[2] - board[0]) as f64;
+    if width < 1.0 {
+        return None;
+    }
+    let bottom = board[3] as f64;
+    let column = |line: &OcrLine| {
+        line.right > board[0] as f64 - MOVE_MARGIN * width
+            && line.left < board[2] as f64 + MOVE_MARGIN * width
+    };
+    let under: Vec<&OcrLine> = lines
+        .iter()
+        .filter(|line| line_box_ok(line) && line.top >= bottom && column(line))
+        .collect();
+    let first = under.iter().min_by(|a, b| a.top.total_cmp(&b.top))?;
+    let (top, height) = (first.top, first.bottom - first.top);
+    if top - bottom > MOVE_GAP_MAX * width {
+        return None;
+    }
+    under
+        .into_iter()
+        .filter(|line| (line.top - top).abs() < height * 0.5)
+        .min_by(|a, b| a.left.total_cmp(&b.left))
+}
+
+/// Mover and destination of a line such as `12.Nf3`, `12...Qc7`, `8…dxe4` or `15.0-0`.
+/// The figurine may be misread; only the move number, the dots and the target are used.
+fn printed_move(text: &str) -> Option<(bool, String)> {
+    let text = text.trim_start();
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 || digits > 3 || text.starts_with('0') {
+        return None;
+    }
+    let mut dots = 0;
+    let mut rest = &text[digits..];
+    loop {
+        let trimmed = rest.trim_start_matches(' ');
+        if let Some(after) = trimmed.strip_prefix('.') {
+            dots += 1;
+            rest = after;
+        } else if let Some(after) = trimmed.strip_prefix('\u{2026}') {
+            dots += 3;
+            rest = after;
+        } else {
+            rest = trimmed;
+            break;
+        }
+    }
+    let white = match dots {
+        1 => true,
+        2..=4 => false,
+        _ => return None,
+    };
+    let compact: String = rest
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .take(8)
+        .collect();
+    for castle in ["O-O-O", "0-0-0", "O-O", "0-0"] {
+        if compact.starts_with(castle) {
+            let long = castle.len() == 5;
+            return Some((white, if long { "O-O-O" } else { "O-O" }.to_owned()));
+        }
+    }
+    let bytes: Vec<char> = compact.chars().collect();
+    // Skip at most one misread figurine and a piece letter before the move proper.
+    let start = bytes
+        .iter()
+        .position(|c| c.is_ascii_lowercase() || c.is_ascii_uppercase())?;
+    if start > 1 {
+        return None;
+    }
+    for pair in bytes[start..].windows(2).take(4) {
+        if ('a'..='h').contains(&pair[0]) && ('1'..='8').contains(&pair[1]) {
+            return Some((white, pair.iter().collect()));
+        }
+    }
+    None
+}
+
 fn sole_owner(frames: &[Frame], boards: &[Frame], line: &OcrLine) -> Option<usize> {
     let mut owner = None;
     for (index, frame) in frames.iter().enumerate() {
@@ -557,8 +704,8 @@ fn crowds(a: &OcrLine, b: &OcrLine) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CAPTION_GAP_MIN, OCR_CONFIDENCE_MIN, OcrLine, RenderFacts, ScanTarget, assign, bind,
-        certify, explicit_turn_line, page_identity,
+        CAPTION_GAP_MIN, OCR_CONFIDENCE_MIN, OcrLine, RenderFacts, ScanTarget, assign,
+        assign_moves, bind, certify, explicit_turn_line, page_identity, printed_move,
     };
     use crate::books::diagram::{Frame, Gray};
 
@@ -753,13 +900,17 @@ mod tests {
         let line = caption("White to move", board, gap, 0.0, 0.08 * width, 0.96);
         let (cert, payload) = sealed(&gray, &[line]);
         assert_eq!(
-            bind(&cert, &gray, &payload, &cert.frames, &open(1)).expect("bound"),
+            bind(&cert, &gray, &payload, &cert.frames, &open(1))
+                .expect("bound")
+                .0,
             vec![Some(true)]
         );
         let tucked = caption("White to move", board, 1.0, 0.0, 0.08 * width, 0.96);
         let (cert, payload) = sealed(&gray, &[tucked]);
         assert_eq!(
-            bind(&cert, &gray, &payload, &cert.frames, &open(1)).expect("bound"),
+            bind(&cert, &gray, &payload, &cert.frames, &open(1))
+                .expect("bound")
+                .0,
             vec![None]
         );
     }
@@ -878,7 +1029,9 @@ mod tests {
             0.96,
         );
         let (cert, payload) = sealed(&gray, &[line]);
-        let sides = bind(&cert, &gray, &payload, &cert.frames, &open(1)).expect("bound");
+        let sides = bind(&cert, &gray, &payload, &cert.frames, &open(1))
+            .expect("bound")
+            .0;
         assert_eq!(sides, vec![Some(true)]);
     }
 
@@ -966,7 +1119,9 @@ mod tests {
         );
         let (cert, payload) = sealed(&gray, &[line]);
         assert_eq!(
-            bind(&cert, &gray, &payload, &cert.frames, &open(1)).expect("bound"),
+            bind(&cert, &gray, &payload, &cert.frames, &open(1))
+                .expect("bound")
+                .0,
             vec![Some(false)]
         );
 
@@ -1000,5 +1155,53 @@ mod tests {
         };
         tampered.px[20] = 0.0;
         assert!(bind(&cert, &tampered, &payload, &cert.frames, &open(1)).is_none());
+    }
+
+    #[test]
+    fn a_printed_move_names_its_mover_and_destination() {
+        let mv = |white: bool, to: &str| Some((white, to.to_owned()));
+        assert_eq!(printed_move("12.Nf3 Qc7 13.Rd1"), mv(true, "f3"));
+        assert_eq!(printed_move("12...Qc7"), mv(false, "c7"));
+        assert_eq!(printed_move("8\u{2026}dxe4"), mv(false, "e4"));
+        assert_eq!(printed_move("21 . . . Rae1"), mv(false, "e1"));
+        assert_eq!(printed_move("15.0-0-0"), mv(true, "O-O-O"));
+        assert_eq!(printed_move("15...O-O"), mv(false, "O-O"));
+        assert_eq!(printed_move("14.\u{2658}xe5"), mv(true, "e5"));
+        assert_eq!(printed_move("White to move"), None);
+        assert_eq!(printed_move("1958"), None);
+        assert_eq!(printed_move("12 Nf3"), None);
+        assert_eq!(printed_move("12.....Nf3"), None);
+        assert_eq!(printed_move("05.Nf3"), None);
+        assert_eq!(printed_move("12.(see page 40)"), None);
+    }
+
+    #[test]
+    fn a_printed_move_binds_only_the_board_it_sits_under() {
+        let frames = [board(40, 30, 200)];
+        assert_eq!(
+            assign_moves(&frames, &frames, &[under("17...Rf7", frames[0])], &open(1)),
+            vec![Some((false, "f7".to_owned()))]
+        );
+        let far = caption("17...Rf7", frames[0], 120.0, 0.0, 16.0, 0.95);
+        assert_eq!(assign_moves(&frames, &frames, &[far], &open(1)), vec![None]);
+        let confirmed = [ScanTarget {
+            confirmed: true,
+            eligible: true,
+        }];
+        assert_eq!(
+            assign_moves(
+                &frames,
+                &frames,
+                &[under("17...Rf7", frames[0])],
+                &confirmed
+            ),
+            vec![None]
+        );
+        let pair = [board(40, 30, 200), board(40, 262, 200)];
+        let between = under("17...Rf7", pair[0]);
+        assert_eq!(
+            assign_moves(&pair, &pair, &[between], &open(2)),
+            vec![None, None]
+        );
     }
 }

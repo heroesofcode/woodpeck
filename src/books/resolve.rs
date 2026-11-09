@@ -358,6 +358,15 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
     let triangle_sides = sides_named(&assets, super::diagram::stated_triangle_side);
     let key_sides = sides_named(&assets, super::diagram::stated_key_side);
     let scan_sides = sides_named(&assets, super::diagram::stated_scan_side);
+    let scan_moves: HashMap<String, (bool, String)> = assets
+        .iter()
+        .filter_map(|asset| {
+            Some((
+                asset.path.clone(),
+                super::diagram::stated_scan_move(&asset.bytes)?,
+            ))
+        })
+        .collect();
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let mut best = None;
     for (name, alphabet) in notation::ALPHABETS {
@@ -373,6 +382,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             &triangle_sides,
             &key_sides,
             &scan_sides,
+            &scan_moves,
         );
         if best
             .as_ref()
@@ -398,6 +408,7 @@ fn resolve_with(
     triangle_sides: &HashMap<String, bool>,
     key_sides: &HashMap<String, bool>,
     scan_sides: &HashMap<String, bool>,
+    scan_moves: &HashMap<String, (bool, String)>,
 ) -> Book {
     let (recognized, unconfirmed) = recognized_positions(
         &document,
@@ -409,6 +420,7 @@ fn resolve_with(
         triangle_sides,
         key_sides,
         scan_sides,
+        scan_moves,
     );
     let mut book = Book {
         version: 1,
@@ -1046,12 +1058,16 @@ fn recognized_positions(
     triangle_sides: &HashMap<String, bool>,
     key_sides: &HashMap<String, bool>,
     scan_sides: &HashMap<String, bool>,
+    scan_moves: &HashMap<String, (bool, String)>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
 ) {
     let mut out = HashMap::new();
     let mut unconfirmed = HashMap::new();
+    // Sides from the game table wait for the whole book: one contradiction drops them all.
+    let mut from_games = Vec::new();
+    let mut games_contradicted = false;
     for (p, page) in document.pages.iter().enumerate() {
         for (b, block) in page.blocks.iter().enumerate() {
             let (placement, alt) = match &block.kind {
@@ -1088,6 +1104,10 @@ fn recognized_positions(
             };
             let scan = match &block.kind {
                 BlockKind::Image { path, .. } => scan_sides.get(path).copied(),
+                _ => None,
+            };
+            let printed_move = match &block.kind {
+                BlockKind::Image { path, .. } => scan_moves.get(path),
                 _ => None,
             };
             let before = before_image(page, b);
@@ -1177,6 +1197,72 @@ fn recognized_positions(
                     turn = Turn::Confirmed(pos);
                 }
             }
+            // The move printed right under a scanned board, when that side can play it.
+            if matches!(turn, Turn::Unknown)
+                && marker.is_none()
+                && caption.is_none()
+                && printed.is_none()
+                && triangle.is_none()
+                && key.is_none()
+                && scan.is_none()
+                && let Some((white, destination)) = printed_move
+            {
+                let side = if *white { Color::White } else { Color::Black };
+                let other = [
+                    before.stated,
+                    before.after_move,
+                    before.past_number,
+                    before.puzzle_label,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|named| named != side)
+                    || super::game_sides::side(&placement).is_some_and(|w| w != *white);
+                if !other
+                    && let Some(pos) = placed(&placement, side)
+                    && reaches(&pos, destination)
+                {
+                    turn = Turn::Confirmed(pos);
+                }
+            }
+            // Weakest of all: the placement occurred in real games with only one side to move.
+            if matches!(turn, Turn::Unknown)
+                && printed_move.is_none()
+                && marker.is_none()
+                && caption.is_none()
+                && printed.is_none()
+                && triangle.is_none()
+                && key.is_none()
+                && scan.is_none()
+                && before.stated.is_none()
+                && before.after_move.is_none()
+                && before.past_number.is_none()
+                && before.puzzle_label.is_none()
+                && let Some(white) = super::game_sides::side(&placement)
+            {
+                let side = if white { Color::White } else { Color::Black };
+                if let Some(pos) = placed(&placement, side) {
+                    from_games.push(((p, b), pos));
+                }
+            }
+            // Self-check: a side printed in the book that the table contradicts means this
+            // book poses positions with the other side to move than real games reached them.
+            let stated = [marker, caption, printed, triangle, key, scan]
+                .into_iter()
+                .flatten()
+                .chain(
+                    [before.stated, before.puzzle_label]
+                        .into_iter()
+                        .flatten()
+                        .map(|color| color == Color::White),
+                )
+                .collect::<Vec<bool>>();
+            if !stated.is_empty()
+                && let Some(white) = super::game_sides::side(&placement)
+                && stated.iter().any(|&named| named != white)
+            {
+                games_contradicted = true;
+            }
             match turn {
                 Turn::Confirmed(pos) => {
                     out.insert((p, b), pos);
@@ -1188,7 +1274,32 @@ fn recognized_positions(
             }
         }
     }
+    if !games_contradicted {
+        for (at, pos) in from_games {
+            unconfirmed.remove(&at);
+            out.insert(at, pos);
+        }
+    }
     (out, unconfirmed)
+}
+/// `true` when the side to move in `pos` has a legal move to `destination`, or its king and
+/// rook still stand ready for the castling `destination` names (rights are not printed).
+fn reaches(pos: &Chess, destination: &str) -> bool {
+    use shakmaty::{Piece, Role, Square};
+    let side = pos.turn();
+    let back = if side == Color::White { "1" } else { "8" };
+    let at = |square: &str, role: Role| {
+        square
+            .parse::<Square>()
+            .is_ok_and(|sq| pos.board().piece_at(sq) == Some(Piece { color: side, role }))
+    };
+    match destination {
+        "O-O" => at(&format!("e{back}"), Role::King) && at(&format!("h{back}"), Role::Rook),
+        "O-O-O" => at(&format!("e{back}"), Role::King) && at(&format!("a{back}"), Role::Rook),
+        square => square
+            .parse::<shakmaty::Square>()
+            .is_ok_and(|to| pos.legal_moves().iter().any(|m| m.to() == to)),
+    }
 }
 /// A triangle read off the Quality Chess places. With no "mate in N" heading it may name the
 /// side. When a section heading states the theme, the mark is kept only if that side can force
@@ -1890,6 +2001,19 @@ mod tests {
             pages: vec![page],
             assets: vec![],
         })
+    }
+    #[test]
+    fn a_printed_move_needs_a_legal_destination() {
+        let start = |side| placed("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", side).unwrap();
+        assert!(reaches(&start(Color::White), "f3"));
+        assert!(!reaches(&start(Color::White), "e5"));
+        assert!(reaches(&start(Color::Black), "e5"));
+        let castle = |side| placed("r3k2r/8/8/8/8/8/8/R3K2R", side).unwrap();
+        assert!(reaches(&castle(Color::Black), "O-O-O"));
+        assert!(!reaches(
+            &placed("4k3/8/8/8/8/8/8/R3K3", Color::White).unwrap(),
+            "O-O"
+        ));
     }
     #[test]
     fn a_diagram_without_moves_counts_as_a_position() {

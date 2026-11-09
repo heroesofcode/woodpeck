@@ -143,6 +143,7 @@ impl Renderer {
                 bytes,
                 rendered: true,
                 scan_side: None,
+                scan_move: None,
             });
         }
         // Squares and triangles are decided with every board in view, so a mark shared by two
@@ -194,11 +195,15 @@ fn attach_scan_captions(
             eligible: true,
         })
         .collect();
-    let Some(sides) = super::scan_caption::pending_sides(gray, facts, detected, &targets) else {
+    let Some((sides, moves)) = super::scan_caption::pending_sides(gray, facts, detected, &targets)
+    else {
         return;
     };
-    for (picture, side) in placed.iter_mut().zip(sides) {
+    for ((picture, side), printed) in placed.iter_mut().zip(sides).zip(moves) {
         picture.scan_side = side;
+        if side.is_none() {
+            picture.scan_move = printed;
+        }
     }
 }
 

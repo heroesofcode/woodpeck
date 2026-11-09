@@ -18,6 +18,9 @@ pub(super) struct Placed {
     pub rendered: bool,
     /// Side from an OCR turn caption, applied only after every stronger pass stays silent.
     pub scan_side: Option<bool>,
+    /// Mover and destination of the move printed right under the board, applied after
+    /// `scan_side` and only when the board allows it.
+    pub scan_move: Option<(bool, String)>,
 }
 /// Smallest side, in pixels, of a picture worth keeping (icons and rules are skipped).
 const MIN_SIDE: i64 = 120;
@@ -91,6 +94,7 @@ pub(super) fn pictures(doc: &Document, page: ObjectId) -> Vec<Placed> {
                         bytes,
                         rendered: false,
                         scan_side: None,
+                        scan_move: None,
                     });
                 }
             }
