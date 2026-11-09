@@ -60,3 +60,11 @@ SHA-256:
 
 - `text-detection.onnx`: `a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe`
 - `text-recognition.onnx`: `86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5`
+
+## Game-database side table
+
+`src/books/game_sides.bin` holds 47-bit hashes of board placements, each with a side-to-move
+bit, from 1,281,634 lichess.org games (Lichess Elite Database months 2020-06, 2020-09 and
+2020-12, filtered from <https://database.lichess.org/>). Lichess database exports are released
+under [CC0](https://creativecommons.org/publicdomain/zero/1.0/). No book content is included;
+see `tools/game_sides/README.md` to rebuild it.

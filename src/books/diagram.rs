@@ -662,6 +662,33 @@ pub fn stated_scan_side(bytes: &[u8]) -> Option<bool> {
     }
 }
 
+/// Key of the PNG text chunk holding the first move printed under a scanned board.
+const SCAN_MOVE_KEY: &[u8] = b"woodpeck-scan-move";
+
+/// A PNG with the mover and the destination (`e4`, `O-O` or `O-O-O`) of the move printed right
+/// under the board. Weakest pixel signal: the resolver uses it only while everything else is
+/// silent, and only when that side can play to that destination.
+pub fn with_scan_move(png: &[u8], white: bool, destination: &str) -> Vec<u8> {
+    let value = format!("{}{destination}", if white { 'w' } else { 'b' });
+    with_text(png, SCAN_MOVE_KEY, &value)
+}
+
+/// The move stored by [`with_scan_move`]: `(true, "e4")` when White plays to e4.
+pub fn stated_scan_move(bytes: &[u8]) -> Option<(bool, String)> {
+    let text = String::from_utf8(text_chunk(bytes, SCAN_MOVE_KEY)?).ok()?;
+    let white = match text.as_bytes().first()? {
+        b'w' => true,
+        b'b' => false,
+        _ => return None,
+    };
+    let destination = &text[1..];
+    let square = destination.len() == 2
+        && matches!(destination.as_bytes()[0], b'a'..=b'h')
+        && matches!(destination.as_bytes()[1], b'1'..=b'8');
+    (square || destination == "O-O" || destination == "O-O-O")
+        .then(|| (white, destination.to_owned()))
+}
+
 fn with_text(png: &[u8], key: &[u8], value: &str) -> Vec<u8> {
     const HEADER: usize = 8 + 25;
     if png.len() < HEADER || !png.starts_with(b"\x89PNG\r\n\x1a\n") || &png[12..16] != b"IHDR" {
