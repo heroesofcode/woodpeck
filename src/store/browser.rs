@@ -13,7 +13,7 @@ impl Store {
         Self::from_connection(connection)
     }
     /// A complete, self-contained copy of the database for saving in the browser.
-    pub fn image(&self) -> Result<Vec<u8>> {
+    pub fn image(&mut self) -> Result<Vec<u8>> {
         Ok(self.connection.serialize(MAIN_DB)?.to_vec())
     }
     /// Grows on every committed row change; the shell saves when it differs from the last save.
