@@ -1091,7 +1091,7 @@ fn recognized_positions(
                 _ => None,
             };
             let before = before_image(page, b);
-            let mut turn = image_position(
+            let (mut turn, mut nearby) = image_position(
                 page.blocks[b + 1..]
                         .iter()
                         .map(|block| (page, block))
@@ -1116,6 +1116,7 @@ fn recognized_positions(
                     .or(before.puzzle_label)
             {
                 turn = placed(&placement, side).map_or(Turn::Unknown, Turn::Confirmed);
+                nearby = true;
             }
             // A printed caption, then a side square off the bottom-right corner, then a triangle
             // elsewhere. Each fills a side nothing else named. None of them demotes a marker, a
@@ -1126,6 +1127,22 @@ fn recognized_positions(
             turn = with_marker(turn, marker, &placement);
             let triangle = triangle
                 .filter(|&white| triangle_under_mate(white, &placement, before.heading_mate));
+            // A side read only from moves printed near the board may belong to a neighbouring
+            // diagram or to a threat. When the board's own caption, mark, key or OCR caption
+            // names the other side, the board stays unconfirmed and none of them fills it.
+            if nearby
+                && marker.is_none()
+                && let Turn::Confirmed(pos) = &turn
+                && [caption, printed, triangle, key, scan]
+                    .into_iter()
+                    .flatten()
+                    .any(|white| white != (pos.turn() == Color::White))
+            {
+                if image {
+                    unconfirmed.insert((p, b), placement);
+                }
+                continue;
+            }
             if matches!(turn, Turn::Unknown)
                 && marker.is_none()
                 && let Some(white) = caption.or(printed).or(triangle)
@@ -1493,14 +1510,16 @@ fn image_position<'a>(
     before: &Before,
     alphabet: &str,
     placement: &str,
-) -> Turn {
+) -> (Turn, bool) {
     let mut stated = caption_turn(alt);
     if let Some(side) = before.stated {
         if stated.is_some_and(|s| s != side) {
-            return Turn::Contradicted;
+            return (Turn::Contradicted, false);
         }
         stated = Some(side);
     }
+    // Whether the image's alt text or the caption just above it named the side.
+    let led = stated.is_some();
     let mut mate = mate_in(alt).or(before.mate);
     for (page, block) in following {
         let text = &page.text[block.span.clone()];
@@ -1553,7 +1572,7 @@ fn image_position<'a>(
             }
             if legal(side.other()).is_some() {
                 // The numbering names one side but only the other can play the move.
-                return Turn::Contradicted;
+                return (Turn::Contradicted, false);
             }
         }
         let prose = found
@@ -1569,7 +1588,7 @@ fn image_position<'a>(
         };
         if let Some(side) = turn {
             if stated.is_some_and(|s| s != side) {
-                return Turn::Contradicted;
+                return (Turn::Contradicted, false);
             }
             stated = Some(side);
         }
@@ -1578,19 +1597,20 @@ fn image_position<'a>(
             continue;
         };
         if stated.is_some_and(|s| s != side) {
-            return Turn::Contradicted;
+            return (Turn::Contradicted, false);
         }
-        return Turn::Confirmed(pos);
+        return (Turn::Confirmed(pos), !led);
     }
     if let Some(side) = stated {
-        return placed(placement, side).map_or(Turn::Contradicted, Turn::Confirmed);
+        let turn = placed(placement, side).map_or(Turn::Contradicted, Turn::Confirmed);
+        return (turn, !led);
     }
     let sides: Vec<Chess> = [Color::White, Color::Black]
         .into_iter()
         .filter_map(|side| placed(placement, side))
         .collect();
     // The side not to move can never be in check, so a check names the side to move.
-    match sides.as_slice() {
+    let turn = match sides.as_slice() {
         [] => Turn::Contradicted,
         [pos] => Turn::Confirmed(pos.clone()),
         both if mate.is_some() => {
@@ -1603,7 +1623,8 @@ fn image_position<'a>(
             }
         }
         _ => Turn::Unknown,
-    }
+    };
+    (turn, false)
 }
 /// Whether the side to move can force checkmate within `n` of its moves.
 fn mates_within(pos: &Chess, n: u8) -> bool {
@@ -2548,6 +2569,98 @@ mod image_tests {
             &["1. Ra8+"],
         );
         assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
+    }
+    #[test]
+    fn a_nearby_move_abstains_when_the_board_names_the_other_side() {
+        use crate::books::diagram::{
+            with_caption_side, with_key_side, with_mark_side, with_scan_side, with_side,
+            with_triangle_side,
+        };
+        let png = tiny_png();
+        // The next printed move is White's, but the board's own caption, mark, key or OCR
+        // caption names Black: the move may belong to a neighbour, so the side stays open.
+        for marked in [
+            with_caption_side(&png, false),
+            with_mark_side(&png, false),
+            with_triangle_side(&png, false),
+            with_key_side(&png, false),
+            with_scan_side(&png, false),
+        ] {
+            let kind = shown_bytes(marked, PLACEMENT, "", &["1. Ra8+"]);
+            assert!(
+                matches!(kind, BlockKind::UnconfirmedDiagram { .. }),
+                "{kind:?}"
+            );
+        }
+        // When they agree, the move confirms the side.
+        let kind = shown_bytes(with_caption_side(&png, true), PLACEMENT, "", &["1. Ra8+"]);
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // A side named by the board's own lead-in is not a neighbour's move.
+        let kind = shown_bytes(
+            with_caption_side(&png, false),
+            PLACEMENT,
+            "White to play",
+            &["1. Ra8+"],
+        );
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // A printed side marker that agrees with the move keeps it.
+        let kind = shown_bytes(
+            with_caption_side(&with_side(&png, true), false),
+            PLACEMENT,
+            "",
+            &["1. Ra8+"],
+        );
+        assert!(
+            matches!(&kind, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" w - - 0 1")),
+            "{kind:?}"
+        );
+        // A trailing ply above the board names Black; a White caption leaves it open.
+        let mut page = Page::default();
+        page.push("After 12. Ra8 the position is:", BlockKind::Paragraph);
+        page.push("12. Ra8", BlockKind::Paragraph);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let document = |bytes: Vec<u8>| Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page.clone()],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes,
+            }],
+        };
+        let kind = |bytes| {
+            resolve_using(document(bytes), Some(&Fixed(PLACEMENT)))
+                .document
+                .pages[0]
+                .blocks[2]
+                .kind
+                .clone()
+        };
+        let open = kind(with_caption_side(&png, true));
+        assert!(
+            matches!(open, BlockKind::UnconfirmedDiagram { .. }),
+            "{open:?}"
+        );
+        let agreed = kind(with_caption_side(&png, false));
+        assert!(
+            matches!(&agreed, BlockKind::RecognizedDiagram { fen, .. } if fen.ends_with(" b - - 0 1")),
+            "{agreed:?}"
+        );
     }
     #[test]
     fn a_scan_caption_fills_only_an_unknown_side() {
