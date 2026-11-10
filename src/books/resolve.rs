@@ -414,9 +414,22 @@ fn certify_near_reads(
             .find(|a| a.path == path)
             .map(|a| a.bytes.as_slice())
     };
+    // Boards the first pass already shows (for example, an ungated reading the replayed moves
+    // confirmed) keep what they have; only boards still shown as plain images are candidates.
+    let shown: std::collections::HashSet<&str> = book
+        .document
+        .pages
+        .iter()
+        .flat_map(|p| &p.blocks)
+        .filter_map(|block| match &block.kind {
+            BlockKind::RecognizedDiagram { path, .. }
+            | BlockKind::UnconfirmedDiagram { path, .. } => Some(path.as_str()),
+            _ => None,
+        })
+        .collect();
     let mut near: Vec<String> = placements
         .iter()
-        .filter(|(_, placement)| placement.is_none())
+        .filter(|(path, placement)| placement.is_none() && !shown.contains(path.as_str()))
         .map(|(path, _)| path.clone())
         .collect();
     near.sort();
