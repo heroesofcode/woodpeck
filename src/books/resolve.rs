@@ -1210,6 +1210,16 @@ fn recognized_positions(
                 alphabet,
                 &placement,
             );
+            // Commentary after a group of boards may be about an earlier one: a board second in
+            // the group that it contradicts is left open rather than dropped.
+            if matches!(turn, Turn::Contradicted | Turn::Disputed(_))
+                && follows_a_board(page, b)
+                && placed(&placement, Color::White).is_some()
+                && placed(&placement, Color::Black).is_some()
+            {
+                turn = Turn::Unknown;
+                nearby = false;
+            }
             // Moves that dispute the caption may narrate the move that reached the board or a
             // line from before it. Only when every printed mark on the board backs the caption is
             // the board kept, without a side; with nothing printed to back it, it stays unread.
@@ -1531,6 +1541,31 @@ struct Before {
     heading_mate: Option<u8>,
 }
 /// Reads the caption right above block `b` and the "mate in N" theme heading its page.
+/// `true` when the board at `b` comes right after another one, with only short labels
+/// ("Position 2", "White to move") between them. Commentary after such a group usually takes
+/// the boards in order, so what follows the second one may be about the first.
+fn follows_a_board(page: &Page, b: usize) -> bool {
+    for block in page.blocks[..b].iter().rev() {
+        match &block.kind {
+            BlockKind::Image { .. } => return true,
+            BlockKind::Paragraph | BlockKind::Heading => {
+                let text = page.text[block.span.clone()].trim();
+                if text.is_empty() {
+                    continue;
+                }
+                let numbered = text
+                    .as_bytes()
+                    .windows(2)
+                    .any(|w| w[0].is_ascii_digit() && w[1] == b'.');
+                if numbered || text.split_whitespace().count() > 3 {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
 fn before_image(page: &Page, b: usize) -> Before {
     let mut before = Before::default();
     // Captions and trailing plies stop at the previous image so they cannot leak onto the
@@ -3062,6 +3097,47 @@ mod image_tests {
             "",
             &texts,
         );
+        assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
+    }
+    #[test]
+    fn commentary_after_a_group_of_boards_cannot_drop_the_second_one() {
+        let image = |path: &str| BlockKind::Image {
+            path: path.into(),
+            alt: String::new(),
+        };
+        let mut page = Page::default();
+        page.push("", image("images/a.png"));
+        page.push("Position 1", BlockKind::Paragraph);
+        page.push("", image("images/b.png"));
+        page.push("Position 2", BlockKind::Paragraph);
+        page.push(
+            "In the first one, Black to play. 1. Ra8+",
+            BlockKind::Paragraph,
+        );
+        let assets = ["images/a.png", "images/b.png"]
+            .map(|path| Asset {
+                path: path.into(),
+                bytes: vec![0],
+            })
+            .to_vec();
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets,
+        };
+        let book = resolve_using(document, Some(&Fixed(PLACEMENT)));
+        let blocks = &book.document.pages[0].blocks;
+        assert!(
+            matches!(blocks[2].kind, BlockKind::UnconfirmedDiagram { .. }),
+            "{:?}",
+            blocks[2].kind
+        );
+        // A lone board the same text contradicts stays unread.
+        let (kind, _) = shown(PLACEMENT, "", &["In the first one, Black to play. 1. Ra8+"]);
         assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
     }
     #[test]
