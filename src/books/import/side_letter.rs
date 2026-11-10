@@ -157,9 +157,30 @@ fn text_below(diagram: Rect, diagrams: &[Rect], texts: &[TextBox]) -> String {
         .join(" ")
 }
 
-/// One side per diagram from a lone letter beside it. A letter next to two diagrams, two
-/// different letters, or a question naming the other side abstains.
-pub(super) fn bind_side_letters(diagrams: &[Rect], texts: &[TextBox]) -> Vec<Option<bool>> {
+/// What the letters beside one diagram say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Letter {
+    /// No side letter beside the board.
+    Absent,
+    /// One letter: `true` is White.
+    Side(bool),
+    /// Two different letters, or a question naming the other side: one of them is misread,
+    /// so no signal on this board may fill the side.
+    Conflict,
+}
+
+impl Letter {
+    pub(super) fn side(self) -> Option<bool> {
+        match self {
+            Letter::Side(white) => Some(white),
+            Letter::Absent | Letter::Conflict => None,
+        }
+    }
+}
+
+/// One verdict per diagram from a lone letter beside it. A letter next to two diagrams is
+/// ignored; two different letters, or a question naming the other side, are a conflict.
+pub(super) fn bind_side_letters(diagrams: &[Rect], texts: &[TextBox]) -> Vec<Letter> {
     let mut owned: Vec<Vec<bool>> = vec![Vec::new(); diagrams.len()];
     for word in texts {
         let Some(white) = letter_side(&word.text) else {
@@ -184,13 +205,13 @@ pub(super) fn bind_side_letters(diagrams: &[Rect], texts: &[TextBox]) -> Vec<Opt
         .map(|(index, mut sides)| {
             sides.sort_unstable();
             sides.dedup();
-            let [white] = sides.as_slice() else {
-                return None;
-            };
-            let question = acting_side(&text_below(diagrams[index], diagrams, texts));
-            match question {
-                Some(named) if named != *white => None,
-                _ => Some(*white),
+            match sides.as_slice() {
+                [] => Letter::Absent,
+                [white] => match acting_side(&text_below(diagrams[index], diagrams, texts)) {
+                    Some(named) if named != *white => Letter::Conflict,
+                    _ => Letter::Side(*white),
+                },
+                _ => Letter::Conflict,
             }
         })
         .collect()
@@ -198,7 +219,14 @@ pub(super) fn bind_side_letters(diagrams: &[Rect], texts: &[TextBox]) -> Vec<Opt
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, TextBox, acting_side, bind_side_letters};
+    use super::{Letter, Rect, TextBox, acting_side};
+
+    fn bind_side_letters(diagrams: &[Rect], texts: &[TextBox]) -> Vec<Option<bool>> {
+        super::bind_side_letters(diagrams, texts)
+            .into_iter()
+            .map(Letter::side)
+            .collect()
+    }
 
     fn rect(left: f64, bottom: f64, right: f64, top: f64) -> Rect {
         Rect {
@@ -270,7 +298,10 @@ mod tests {
             text("W", 46.0, 530.0, 53.0, 540.0),
             text("B", 46.0, 500.0, 52.0, 510.0),
         ];
-        assert_eq!(bind_side_letters(&diagrams, &both), vec![None]);
+        assert_eq!(
+            super::bind_side_letters(&diagrams, &both),
+            vec![Letter::Conflict]
+        );
         // Same letter twice is one answer.
         let twice = [
             text("W", 46.0, 530.0, 53.0, 540.0),
@@ -297,6 +328,10 @@ mod tests {
             text("did Black strike first?", 60.0, 368.0, 180.0, 378.0),
         ];
         assert_eq!(bind_side_letters(&diagrams, &other), vec![None]);
+        assert_eq!(
+            super::bind_side_letters(&diagrams, &other),
+            vec![Letter::Conflict]
+        );
         let same = [
             letter.clone(),
             text("How did White win?", 60.0, 380.0, 160.0, 390.0),
