@@ -264,7 +264,9 @@ pub fn normalize(text: &str, alphabet: &str) -> String {
     let text = text
         .trim()
         .trim_end_matches(['+', '#', '!', '?'])
-        .replace('0', "O");
+        .replace('0', "O")
+        // Typeset castling often joins the O's with an en or em dash.
+        .replace(['\u{2013}', '\u{2014}', '\u{2212}'], "-");
     let mut result = String::new();
     for c in text.chars().filter(|c| !c.is_whitespace()) {
         result.push(
@@ -527,6 +529,22 @@ fn descriptive(pos: &Chess, m: Move, text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn castling_joined_by_a_dash_of_any_width_parses() {
+        use shakmaty::{CastlingMode, Chess, fen::Fen};
+        let fen: Fen = "2rqkb1r/pp2pppp/nn6/2p1P3/2PP2b1/1PN1BN2/P3B1PP/R2QK2R w KQ - 0 12"
+            .parse()
+            .expect("fen");
+        let pos: Chess = fen.into_position(CastlingMode::Standard).expect("pos");
+        for text in ["0-0", "O-O", "0\u{2013}0", "O\u{2014}O"] {
+            let m = super::parse(&pos, text, "KQRBN").expect(text);
+            assert!(m.is_castle(), "{text}");
+        }
+        let text = "12.0\u{2013}0 Bxf3 13.Bxf3";
+        let words: Vec<&str> = tokens(text).iter().map(|t| &text[t.span.clone()]).collect();
+        assert_eq!(words, ["12.", "0\u{2013}0", "Bxf3", "13.", "Bxf3"]);
+    }
+
     use super::*;
     #[test]
     fn a_spaced_figurine_joins_the_move_it_starts() {
