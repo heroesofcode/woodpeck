@@ -1197,6 +1197,7 @@ fn recognized_positions(
             };
             let before = before_image(page, b);
             let (mut turn, mut nearby) = image_position(
+                page,
                 page.blocks[b + 1..]
                         .iter()
                         .map(|block| (page, block))
@@ -1352,10 +1353,10 @@ fn recognized_positions(
                 Turn::Confirmed(pos) => {
                     out.insert((p, b), pos);
                 }
-                Turn::Unknown if image => {
+                Turn::Unknown | Turn::Disputed if image => {
                     unconfirmed.insert((p, b), placement);
                 }
-                Turn::Unknown | Turn::Contradicted => {}
+                Turn::Unknown | Turn::Disputed | Turn::Contradicted => {}
             }
         }
     }
@@ -1439,6 +1440,7 @@ fn with_marker(turn: Turn, marker: Option<bool>, placement: &str) -> Turn {
         Turn::Confirmed(_) => Turn::Unknown,
         Turn::Unknown => placed(placement, side).map_or(Turn::Unknown, Turn::Confirmed),
         Turn::Contradicted => Turn::Contradicted,
+        Turn::Disputed => Turn::Disputed,
     }
 }
 /// Turns an image whose board passed the gates into a board shown without a side to move.
@@ -1458,6 +1460,9 @@ enum Turn {
     Unknown,
     /// The text contradicts itself or the board: the image stays unread.
     Contradicted,
+    /// The board's side was named, but text further on names the other one: the board is
+    /// shown without a side to move and nothing else fills it.
+    Disputed,
 }
 /// What the text just above a diagram says about it.
 #[derive(Default)]
@@ -1732,6 +1737,7 @@ pub(crate) fn caption_turn(text: &str) -> Option<Color> {
 }
 #[allow(clippy::too_many_lines)] // Captions, numbering and board rules are weighed in one pass.
 fn image_position<'a>(
+    here: &Page,
     following: impl Iterator<Item = (&'a Page, &'a Block)>,
     alt: &str,
     before: &Before,
@@ -1750,6 +1756,13 @@ fn image_position<'a>(
     let mut mate = mate_in(alt).or(before.mate);
     for (page, block) in following {
         let text = &page.text[block.span.clone()];
+        // Text on the next page may belong to another board: when it disagrees with the side
+        // already named, the board is kept unconfirmed rather than dropped.
+        let clash = if std::ptr::eq(page, here) {
+            Turn::Contradicted
+        } else {
+            Turn::Disputed
+        };
         if block.kind == BlockKind::Heading && caption(text) {
             continue;
         }
@@ -1820,7 +1833,7 @@ fn image_position<'a>(
         };
         if let Some(side) = turn {
             if stated.is_some_and(|s| s != side) {
-                return (Turn::Contradicted, false);
+                return (clash, false);
             }
             stated = Some(side);
         }
@@ -1829,7 +1842,7 @@ fn image_position<'a>(
             continue;
         };
         if stated.is_some_and(|s| s != side) {
-            return (Turn::Contradicted, false);
+            return (clash, false);
         }
         return (Turn::Confirmed(pos), !led);
     }
@@ -3615,6 +3628,43 @@ mod image_tests {
             Some(&Fixed("4k3/8/8/8/6b1/5N2/8/4K2R")),
         );
         assert_eq!(recognized(&b), Some("4k3/8/8/8/6b1/5N2/8/4K2R w - - 0 1"));
+    }
+    #[test]
+    fn a_caption_disputed_by_moves_on_the_next_page_keeps_the_board_unconfirmed() {
+        let doc = |second: &str| {
+            let mut first = Page::default();
+            first.push(
+                "",
+                BlockKind::Image {
+                    path: "images/d.png".into(),
+                    alt: String::new(),
+                },
+            );
+            first.push("White to move", BlockKind::Paragraph);
+            let mut next = Page::default();
+            next.push(second, BlockKind::Paragraph);
+            Document {
+                cover: None,
+                isbn: None,
+                title: String::new(),
+                author: String::new(),
+                format: "test".into(),
+                pages: vec![first, next],
+                assets: vec![Asset {
+                    path: "images/d.png".into(),
+                    bytes: vec![0],
+                }],
+            }
+        };
+        let board = "7R/8/8/2k4P/8/6K1/8/5r2";
+        let b = resolve_using(doc("Then 56...Rh1 57 Kg4 Kd6."), Some(&Fixed(board)));
+        assert_eq!(recognized(&b), None);
+        assert!(matches!(
+            b.document.pages[0].blocks[0].kind,
+            BlockKind::UnconfirmedDiagram { .. }
+        ));
+        let b = resolve_using(doc("Then 1 h6 Rg1+ 2 Kf4."), Some(&Fixed(board)));
+        assert_eq!(recognized(&b), Some("7R/8/8/2k4P/8/6K1/8/5r2 w - - 0 1"));
     }
     #[test]
     fn unknown_side_to_move_abstains() {
