@@ -356,7 +356,11 @@ fn unmapped_piece(pos: &Chess, text: &str) -> Vec<Move> {
     };
     // Piece letters, files and ranks are ordinary notation, which a failed parse already
     // rejected.
+    // A Unicode figurine is a mapped piece, so it names its own role.
     let ordinary = glyphs.is_empty()
+        || glyphs
+            .chars()
+            .any(|c| ('\u{2654}'..='\u{265f}').contains(&c))
         || glyphs
             .chars()
             .all(|c| "KQRBNP".contains(c) || ('a'..='h').contains(&c) || ('1'..='8').contains(&c))
@@ -634,6 +638,9 @@ mod tests {
         assert_eq!(only("lbf3extra"), Vec::<String>::new());
         // Pawns are never the hidden piece.
         assert_eq!(only("lbd4"), Vec::<String>::new());
+        // A Unicode figurine names its piece: no rook reaches e2, so no other piece stands in.
+        assert_eq!(only("\u{2656}e2"), Vec::<String>::new());
+        assert_eq!(only("\u{265c}e2"), Vec::<String>::new());
     }
     #[test]
     fn descriptive_matches_from_movers_side_and_rejects_ambiguity() {
