@@ -1367,6 +1367,23 @@ fn recognized_positions(
     }
     (out, unconfirmed)
 }
+/// `"O-O"` or `"O-O-O"` for a castling token however it is typeset (`0-0`, `O–O-O`, `0-0+`).
+fn castle_token(word: &str) -> Option<&'static str> {
+    let bare: String = word
+        .trim_end_matches(['+', '#', '!', '?'])
+        .chars()
+        .map(|c| match c {
+            '0' => 'O',
+            '\u{2013}' | '\u{2014}' | '\u{2212}' => '-',
+            c => c,
+        })
+        .collect();
+    match bare.as_str() {
+        "O-O" => Some("O-O"),
+        "O-O-O" => Some("O-O-O"),
+        _ => None,
+    }
+}
 /// `true` when the side to move in `pos` has a legal move to `destination`, or its king and
 /// rook still stand ready for the castling `destination` names (rights are not printed).
 fn reaches(pos: &Chess, destination: &str) -> bool {
@@ -1772,9 +1789,14 @@ fn image_position<'a>(
             if ts.get(i + 1).is_none_or(|t| t.kind != Kind::Word) {
                 continue;
             }
+            // A diagram prints no castling rights, so castling is checked from where the king
+            // and rook stand.
+            let castle = castle_token(&text[ts[i + 1].span.clone()]);
             let legal = |side| {
-                placed(placement, side)
-                    .filter(|pos| parse_move(pos, &ts, i + 1, text, alphabet).is_some())
+                placed(placement, side).filter(|pos| {
+                    parse_move(pos, &ts, i + 1, text, alphabet).is_some()
+                        || castle.is_some_and(|c| reaches(pos, c))
+                })
             };
             if let Some(pos) = legal(side) {
                 found = Some((n, side, pos));
@@ -3562,6 +3584,37 @@ mod image_tests {
         let b = book("White to play", &["(Ra8+) then 1. e4"]);
         assert_eq!(b.nodes.len(), 1);
         assert!(b.nodes[0].fen.ends_with(" 1"));
+    }
+    #[test]
+    fn castling_after_a_board_names_white_though_no_rights_are_printed() {
+        let mut page = Page::default();
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        page.push(
+            "Here a fun option could be 12.0\u{2013}0 Bxf3 13.Bxf3 Kd7.",
+            BlockKind::Paragraph,
+        );
+        let b = resolve_using(
+            Document {
+                cover: None,
+                isbn: None,
+                title: String::new(),
+                author: String::new(),
+                format: "test".into(),
+                pages: vec![page],
+                assets: vec![Asset {
+                    path: "images/d.png".into(),
+                    bytes: vec![0],
+                }],
+            },
+            Some(&Fixed("4k3/8/8/8/6b1/5N2/8/4K2R")),
+        );
+        assert_eq!(recognized(&b), Some("4k3/8/8/8/6b1/5N2/8/4K2R w - - 0 1"));
     }
     #[test]
     fn unknown_side_to_move_abstains() {
