@@ -1293,9 +1293,23 @@ fn reaches(pos: &Chess, destination: &str) -> bool {
             .parse::<Square>()
             .is_ok_and(|sq| pos.board().piece_at(sq) == Some(Piece { color: side, role }))
     };
+    // Castling: king and rook at home, nothing between them, and the king neither in check nor
+    // crossing or landing on an attacked square.
+    let castles = |rook: &str, empty: &[&str], safe: &[&str]| {
+        let board = pos.board();
+        let square = |file: &&str| format!("{file}{back}").parse::<Square>().ok();
+        at(&format!("e{back}"), Role::King)
+            && at(&format!("{rook}{back}"), Role::Rook)
+            && empty
+                .iter()
+                .all(|f| square(f).is_some_and(|sq| board.piece_at(sq).is_none()))
+            && safe.iter().all(|f| {
+                square(f).is_some_and(|sq| board.attacks_to(sq, !side, board.occupied()).is_empty())
+            })
+    };
     match destination {
-        "O-O" => at(&format!("e{back}"), Role::King) && at(&format!("h{back}"), Role::Rook),
-        "O-O-O" => at(&format!("e{back}"), Role::King) && at(&format!("a{back}"), Role::Rook),
+        "O-O" => castles("h", &["f", "g"], &["e", "f", "g"]),
+        "O-O-O" => castles("a", &["b", "c", "d"], &["e", "d", "c"]),
         square => square
             .parse::<shakmaty::Square>()
             .is_ok_and(|to| pos.legal_moves().iter().any(|m| m.to() == to)),
@@ -2012,6 +2026,14 @@ mod tests {
         assert!(reaches(&castle(Color::Black), "O-O-O"));
         assert!(!reaches(
             &placed("4k3/8/8/8/8/8/8/R3K3", Color::White).unwrap(),
+            "O-O"
+        ));
+        // Pieces between king and rook, or an attacked crossing square, rule castling out.
+        assert!(!reaches(&start(Color::White), "O-O"));
+        assert!(!reaches(&start(Color::Black), "O-O-O"));
+        assert!(reaches(&castle(Color::White), "O-O"));
+        assert!(!reaches(
+            &placed("r3k1r1/8/8/8/8/8/8/R3K2R", Color::White).unwrap(),
             "O-O"
         ));
     }
