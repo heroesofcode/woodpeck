@@ -5,6 +5,7 @@
 //! is attached by its place on the page, so one page may carry two diagrams of different
 //! sides. The stored side is applied later only while the resolver still has `Turn::Unknown`.
 
+use super::side_letter::Letter;
 use shakmaty::Color;
 use std::path::Path;
 
@@ -527,6 +528,17 @@ fn bounds(picture: &super::picture::Placed) -> Rect {
     }
 }
 
+/// A caption side, then a side letter. They must not disagree, and a letter in conflict
+/// (two letters, or a question naming the other side) leaves even a caption unused.
+fn merge_letter(caption: Option<bool>, letter: Letter) -> Option<bool> {
+    match (caption, letter) {
+        (_, Letter::Conflict) => None,
+        (Some(c), Letter::Side(l)) if c != l => None,
+        (Some(side), _) => Some(side),
+        (None, letter) => letter.side(),
+    }
+}
+
 /// Stamp a per-diagram caption side onto pictures that do not already carry a printed marker.
 /// The resolver reads the chunk only when every other signal left the side unknown.
 pub(super) fn stamp_geometry_captions(
@@ -554,16 +566,12 @@ pub(super) fn stamp_geometry_captions(
         let diagrams: Vec<Rect> = placed.iter().map(bounds).collect();
         let captions = bind_side_captions(&diagrams, texts);
         let letters = super::side_letter::bind_side_letters(&diagrams, texts);
-        // A caption and a side letter that disagree leave the side open.
-        let sides =
-            captions
-                .into_iter()
-                .zip(letters)
-                .map(|(caption, letter)| match (caption, letter) {
-                    (Some(c), Some(l)) if c != l => None,
-                    (Some(side), _) | (None, Some(side)) => Some(side),
-                    (None, None) => None,
-                });
+        // A caption and a side letter that disagree leave the side open, and so does a letter
+        // in conflict with itself or with the question under the board.
+        let sides = captions
+            .into_iter()
+            .zip(letters)
+            .map(|(caption, letter)| merge_letter(caption, letter));
         for (picture, side) in placed.iter_mut().zip(sides) {
             let Some(white) = side else {
                 continue;
@@ -586,7 +594,19 @@ pub(super) fn stamp_geometry_captions(
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, TextBox, bind_side_captions, parse_bbox, side_caption};
+    use super::{Rect, TextBox, bind_side_captions, merge_letter, parse_bbox, side_caption};
+    use crate::books::import::side_letter::Letter;
+
+    #[test]
+    fn a_side_letter_fills_only_what_a_caption_leaves_and_a_conflict_blocks_both() {
+        assert_eq!(merge_letter(None, Letter::Side(true)), Some(true));
+        assert_eq!(merge_letter(Some(false), Letter::Absent), Some(false));
+        assert_eq!(merge_letter(Some(false), Letter::Side(false)), Some(false));
+        assert_eq!(merge_letter(Some(false), Letter::Side(true)), None);
+        // "Black to play" under a board lettered W: the caption alone must not fill it.
+        assert_eq!(merge_letter(Some(false), Letter::Conflict), None);
+        assert_eq!(merge_letter(None, Letter::Conflict), None);
+    }
 
     fn rect(left: f64, bottom: f64, right: f64, top: f64) -> Rect {
         Rect {
