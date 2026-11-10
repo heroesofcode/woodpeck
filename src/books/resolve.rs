@@ -1846,8 +1846,10 @@ fn image_position<'a>(
                 continue;
             }
             if legal(side.other()).is_some() {
-                // The numbering names one side but only the other can play the move.
-                return (Turn::Contradicted, false);
+                // The numbering names one side but only the other can play the move. After a
+                // caption this is commentary at odds with the board, not proof of a misread.
+                let turn = stated.map_or(Turn::Contradicted, |s| Turn::Disputed(s == Color::White));
+                return (turn, false);
             }
         }
         let prose = found
