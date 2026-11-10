@@ -1211,19 +1211,19 @@ fn recognized_positions(
                 &placement,
             );
             // Commentary after a group of boards may be about an earlier one: a board second in
-            // the group that it contradicts is left open rather than dropped.
-            if matches!(turn, Turn::Contradicted | Turn::Disputed(_))
-                && follows_a_board(page, b)
+            // the group that it contradicts is shown without a side, and nothing fills one.
+            let grouped = matches!(turn, Turn::Contradicted | Turn::Disputed(_))
+                && follows_a_board(page, b, placements)
                 && placed(&placement, Color::White).is_some()
-                && placed(&placement, Color::Black).is_some()
-            {
-                turn = Turn::Unknown;
+                && placed(&placement, Color::Black).is_some();
+            if grouped {
+                turn = Turn::Disputed(true);
                 nearby = false;
             }
             // Moves that dispute the caption may narrate the move that reached the board or a
             // line from before it. Only when every printed mark on the board backs the caption is
             // the board kept, without a side; with nothing printed to back it, it stays unread.
-            if let Turn::Disputed(white) = turn {
+            if !grouped && let Turn::Disputed(white) = turn {
                 let named: Vec<bool> = [marker, caption, printed, triangle, key, scan]
                     .into_iter()
                     .flatten()
@@ -1541,13 +1541,16 @@ struct Before {
     heading_mate: Option<u8>,
 }
 /// Reads the caption right above block `b` and the "mate in N" theme heading its page.
-/// `true` when the board at `b` comes right after another one, with only short labels
+/// `true` when the board at `b` comes right after another board, with only short labels
 /// ("Position 2", "White to move") between them. Commentary after such a group usually takes
 /// the boards in order, so what follows the second one may be about the first.
-fn follows_a_board(page: &Page, b: usize) -> bool {
+fn follows_a_board(page: &Page, b: usize, placements: &HashMap<String, Option<String>>) -> bool {
     for block in page.blocks[..b].iter().rev() {
         match &block.kind {
-            BlockKind::Image { .. } => return true,
+            // Only a picture read as a board counts; a photo or figure ends the search.
+            BlockKind::Image { path, .. } => {
+                return matches!(placements.get(path), Some(Some(_)));
+            }
             BlockKind::Paragraph | BlockKind::Heading => {
                 let text = page.text[block.span.clone()].trim();
                 if text.is_empty() {
@@ -3114,12 +3117,17 @@ mod image_tests {
             "In the first one, Black to play. 1. Ra8+",
             BlockKind::Paragraph,
         );
-        let assets = ["images/a.png", "images/b.png"]
-            .map(|path| Asset {
-                path: path.into(),
+        // The second board's printed caption names Black, but it fills nothing here.
+        let assets = vec![
+            Asset {
+                path: "images/a.png".into(),
                 bytes: vec![0],
-            })
-            .to_vec();
+            },
+            Asset {
+                path: "images/b.png".into(),
+                bytes: crate::books::diagram::with_caption_side(&tiny_png(), false),
+            },
+        ];
         let document = Document {
             cover: None,
             isbn: None,
