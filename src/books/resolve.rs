@@ -368,32 +368,104 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
         })
         .collect();
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
-    let mut best = None;
-    for (name, alphabet) in notation::ALPHABETS {
-        let candidate = resolve_with(
-            document.clone(),
-            name,
-            alphabet,
-            &placements,
-            &readings,
-            &markers,
-            &caption_sides,
-            &printed_marks,
-            &triangle_sides,
-            &key_sides,
-            &scan_sides,
-            &scan_moves,
-        );
-        if best
-            .as_ref()
-            .is_none_or(|b: &Book| candidate.nodes.len() > b.nodes.len())
-        {
-            best = Some(candidate);
+    let resolve_all = |placements: &HashMap<String, Option<String>>| {
+        let mut best = None;
+        for (name, alphabet) in notation::ALPHABETS {
+            let candidate = resolve_with(
+                document.clone(),
+                name,
+                alphabet,
+                placements,
+                &readings,
+                &markers,
+                &caption_sides,
+                &printed_marks,
+                &triangle_sides,
+                &key_sides,
+                &scan_sides,
+                &scan_moves,
+            );
+            if best
+                .as_ref()
+                .is_none_or(|b: &Book| candidate.nodes.len() > b.nodes.len())
+            {
+                best = Some(candidate);
+            }
         }
+        best.expect("nonempty alphabet table")
+    };
+    let mut best = resolve_all(&placements);
+    if recognizer.is_some() && certify_near_reads(&best, &assets, &mut placements) {
+        best = resolve_all(&placements);
     }
-    let mut best = best.expect("nonempty alphabet table");
     best.document.assets = assets;
     best
+}
+/// Boards the nets nearly read get their placement when the book's own known boards certify
+/// every square (see [`super::templates`]). Returns whether any board was added.
+fn certify_near_reads(
+    book: &Book,
+    assets: &[super::document::Asset],
+    placements: &mut HashMap<String, Option<String>>,
+) -> bool {
+    let bytes_of = |path: &str| {
+        assets
+            .iter()
+            .find(|a| a.path == path)
+            .map(|a| a.bytes.as_slice())
+    };
+    let mut near: Vec<String> = placements
+        .iter()
+        .filter(|(_, placement)| placement.is_none())
+        .map(|(path, _)| path.clone())
+        .collect();
+    near.sort();
+    if near.is_empty() {
+        return false;
+    }
+    let mut templates: Vec<(&[u8], String)> = Vec::new();
+    let mut used = std::collections::HashSet::new();
+    for block in book.document.pages.iter().flat_map(|p| &p.blocks) {
+        let (path, placement) = match &block.kind {
+            BlockKind::RecognizedDiagram { path, fen, .. } => {
+                (path, fen.split(' ').next().unwrap_or_default().to_owned())
+            }
+            BlockKind::UnconfirmedDiagram {
+                path, placement, ..
+            } => (path, placement.clone()),
+            _ => continue,
+        };
+        // Only placements real games reached: the app's own reading, even with a side the
+        // moves confirmed, can miss a piece the moves never touch.
+        if !super::game_sides::seen(&placement) {
+            continue;
+        }
+        if used.insert(path.clone())
+            && let Some(bytes) = bytes_of(path)
+        {
+            templates.push((bytes, placement));
+        }
+    }
+    let templates: Vec<(&[u8], &str)> = templates.iter().map(|(b, p)| (*b, p.as_str())).collect();
+    let near: Vec<(String, &[u8])> = near
+        .into_iter()
+        .filter_map(|path| bytes_of(&path).map(|bytes| (path, bytes)))
+        .collect();
+    if near.is_empty() || templates.is_empty() {
+        return false;
+    }
+    let images: Vec<&[u8]> = near.iter().map(|(_, bytes)| *bytes).collect();
+    let mut added = false;
+    for ((path, _), certified) in near
+        .into_iter()
+        .zip(super::templates::certify(&templates, &images))
+    {
+        if let Some(placement) = certified {
+            placements.insert(path, Some(placement));
+            added = true;
+        }
+    }
+    added
 }
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One pass keeps block order, sections and seeding together.
 fn resolve_with(
