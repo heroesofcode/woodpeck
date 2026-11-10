@@ -1197,7 +1197,6 @@ fn recognized_positions(
             };
             let before = before_image(page, b);
             let (mut turn, mut nearby) = image_position(
-                page,
                 page.blocks[b + 1..]
                         .iter()
                         .map(|block| (page, block))
@@ -1481,8 +1480,8 @@ enum Turn {
     Unknown,
     /// The text contradicts itself or the board: the image stays unread.
     Contradicted,
-    /// The board's side was named, but text further on names the other one: the board is
-    /// shown without a side to move and nothing else fills it.
+    /// A caption named the side, but the moves printed after the board name the other one:
+    /// the board is shown without a side to move and nothing else fills it.
     Disputed,
 }
 /// What the text just above a diagram says about it.
@@ -1758,7 +1757,6 @@ pub(crate) fn caption_turn(text: &str) -> Option<Color> {
 }
 #[allow(clippy::too_many_lines)] // Captions, numbering and board rules are weighed in one pass.
 fn image_position<'a>(
-    here: &Page,
     following: impl Iterator<Item = (&'a Page, &'a Block)>,
     alt: &str,
     before: &Before,
@@ -1777,13 +1775,6 @@ fn image_position<'a>(
     let mut mate = mate_in(alt).or(before.mate);
     for (page, block) in following {
         let text = &page.text[block.span.clone()];
-        // Text on the next page may belong to another board: when it disagrees with the side
-        // already named, the board is kept unconfirmed rather than dropped.
-        let clash = if std::ptr::eq(page, here) {
-            Turn::Contradicted
-        } else {
-            Turn::Disputed
-        };
         if block.kind == BlockKind::Heading && caption(text) {
             continue;
         }
@@ -1858,8 +1849,10 @@ fn image_position<'a>(
             stated_turn(prose)
         };
         if let Some(side) = turn {
+            // Commentary that names the other side than the caption may narrate the move
+            // that reached the board or a line from before it: the side stays open.
             if stated.is_some_and(|s| s != side) {
-                return (clash, false);
+                return (Turn::Disputed, false);
             }
             stated = Some(side);
         }
@@ -1868,7 +1861,7 @@ fn image_position<'a>(
             continue;
         };
         if stated.is_some_and(|s| s != side) {
-            return (clash, false);
+            return (Turn::Disputed, false);
         }
         return (Turn::Confirmed(pos), !led);
     }
@@ -3656,7 +3649,7 @@ mod image_tests {
         assert_eq!(recognized(&b), Some("4k3/8/8/8/6b1/5N2/8/4K2R w - - 0 1"));
     }
     #[test]
-    fn a_caption_disputed_by_moves_on_the_next_page_keeps_the_board_unconfirmed() {
+    fn a_caption_disputed_by_the_moves_after_it_keeps_the_board_unconfirmed() {
         let doc = |second: &str| {
             let mut first = Page::default();
             first.push(
