@@ -24,6 +24,8 @@ const MAX_DOUBTFUL: usize = 3;
 const MAX_TEMPLATES: usize = 300;
 
 type Feature = Vec<f32>;
+/// One located grid of nets-sized cells.
+type Grid = Vec<Vec<f32>>;
 
 /// One template square: label, colour (0 = light), owning board, pixels.
 struct Square {
@@ -33,24 +35,44 @@ struct Square {
     feature: Feature,
 }
 
-fn features(bytes: &[u8]) -> Option<Vec<Feature>> {
-    let cells = diagram::board_cells(bytes)?;
-    Some(
-        cells
-            .iter()
-            .map(|cell| {
-                let mut out = vec![0.0; SIDE * SIDE];
-                for y in 0..SIDE {
-                    for x in 0..SIDE {
-                        let at =
-                            |dy: usize, dx: usize| cell[(2 * y + dy) * diagram::CELL + 2 * x + dx];
-                        out[y * SIDE + x] = (at(0, 0) + at(0, 1) + at(1, 0) + at(1, 1)) / 4.0;
-                    }
+/// Pooled features of one located grid.
+fn pooled(cells: &[Vec<f32>]) -> Vec<Feature> {
+    cells
+        .iter()
+        .map(|cell| {
+            let mut out = vec![0.0; SIDE * SIDE];
+            for y in 0..SIDE {
+                for x in 0..SIDE {
+                    let at = |dy: usize, dx: usize| cell[(2 * y + dy) * diagram::CELL + 2 * x + dx];
+                    out[y * SIDE + x] = (at(0, 0) + at(0, 1) + at(1, 0) + at(1, 1)) / 4.0;
                 }
-                out
-            })
-            .collect(),
-    )
+            }
+            out
+        })
+        .collect()
+}
+
+/// Features of a template board, taken from the grid (native or downscaled) on which the
+/// nets agree most with its placement, so pixels and labels come from the same locate.
+fn template_features(bytes: &[u8], labels: &[u8]) -> Option<Vec<Feature>> {
+    let scales = diagram::board_cells_scales(bytes);
+    let agreement = |cells: &Grid| {
+        cnn::builtin().map_or(0, |net| {
+            net.classify(cells)
+                .iter()
+                .zip(labels)
+                .filter(|(s, l)| s.label == **l)
+                .count()
+        })
+    };
+    let mut best: Option<(usize, &Grid)> = None;
+    for cells in &scales {
+        let score = agreement(cells);
+        if best.is_none_or(|(b, _)| score > b) {
+            best = Some((score, cells));
+        }
+    }
+    best.map(|(_, cells)| pooled(cells))
 }
 
 fn dark(index: usize) -> bool {
@@ -96,11 +118,12 @@ fn percentile(mut values: Vec<f32>, p: f32) -> f32 {
     values[low] + (values[high] - values[low]) * (rank - low as f32)
 }
 
-/// The nets' best reading of a board with one to three doubtful squares, if any.
-fn near_reading(bytes: &[u8]) -> Option<Vec<u8>> {
+/// The nets' best reading of a board with one to three doubtful squares, if any, with the
+/// features of the grid it was read from.
+fn near_reading(bytes: &[u8]) -> Option<(Vec<u8>, Vec<Feature>)> {
     let nets = [cnn::builtin(), cnn::builtin_prior(), cnn::builtin_hatch()];
     let scales = diagram::board_cells_scales(bytes);
-    let mut best: Option<(usize, Vec<u8>)> = None;
+    let mut best: Option<(usize, Vec<u8>, &Grid)> = None;
     for net in nets.into_iter().flatten() {
         for cells in &scales {
             let squares = net.classify(cells);
@@ -115,14 +138,14 @@ fn near_reading(bytes: &[u8]) -> Option<Vec<u8>> {
                     s.label == b'?' || s.probability < gate
                 })
                 .count();
-            if best.as_ref().is_none_or(|(b, _)| doubtful < *b) {
-                best = Some((doubtful, squares.iter().map(|s| s.label).collect()));
+            if best.as_ref().is_none_or(|(b, _, _)| doubtful < *b) {
+                best = Some((doubtful, squares.iter().map(|s| s.label).collect(), cells));
             }
         }
     }
-    let (doubtful, labels) = best?;
+    let (doubtful, labels, cells) = best?;
     ((1..=MAX_DOUBTFUL).contains(&doubtful) && labels.len() == 64 && !labels.contains(&b'?'))
-        .then_some(labels)
+        .then(|| (labels, pooled(cells)))
 }
 
 /// Expands a FEN placement to 64 labels, rank 8 first.
@@ -141,17 +164,18 @@ fn labels_of(placement: &str) -> Option<Vec<u8>> {
 /// Certified placements for `near` images, given template boards `(image, placement)` from
 /// the same book. Each result is `None` unless every square passes.
 pub fn certify(templates: &[(&[u8], &str)], near: &[&[u8]]) -> Vec<Option<String>> {
-    let readings: Vec<Option<(Vec<u8>, Vec<Feature>)>> = near
-        .iter()
-        .map(|bytes| Some((near_reading(bytes)?, features(bytes)?)))
-        .collect();
+    let readings: Vec<Option<(Vec<u8>, Vec<Feature>)>> =
+        near.iter().map(|bytes| near_reading(bytes)).collect();
     if readings.iter().all(Option::is_none) {
         return vec![None; near.len()];
     }
     let step = templates.len().div_ceil(MAX_TEMPLATES).max(1);
     let mut squares = Vec::new();
     for (board, (bytes, placement)) in templates.iter().step_by(step).enumerate() {
-        let (Some(labels), Some(cells)) = (labels_of(placement), features(bytes)) else {
+        let Some(labels) = labels_of(placement) else {
+            continue;
+        };
+        let Some(cells) = template_features(bytes, &labels) else {
             continue;
         };
         for (index, feature) in cells.into_iter().enumerate() {
