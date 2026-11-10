@@ -3,8 +3,10 @@
 //! A board the square nets read with one to three doubtful squares is accepted only when every
 //! one of its 64 squares matches, by nearest neighbours, squares of boards from the same book
 //! whose pieces are independently known: located boards whose exact placement occurred in
-//! real games ([`super::game_sides::seen`]). The templates
-//! never change a square: the nets' own reading is kept or the board stays unread.
+//! real games ([`super::game_sides::seen`]). A board every net reads identically at every
+//! scale is also accepted when no square's neighbours name another piece and at least half
+//! of its squares are matched outright. The templates never change a square: the nets' own
+//! reading is kept or the board stays unread.
 
 use super::{cnn, diagram};
 
@@ -20,12 +22,16 @@ const MIN_CLASS: usize = 5;
 /// Pooled side of a square feature (the nets' 32×32 cell averaged in 2×2 blocks).
 const SIDE: usize = diagram::CELL / 2;
 const MAX_DOUBTFUL: usize = 3;
+/// Fewest squares of an agreed board the templates must match outright.
+const MIN_MATCHED: usize = 32;
 /// Template boards used per book, spread evenly; bounds the quadratic cleaning step.
 const MAX_TEMPLATES: usize = 300;
 
 type Feature = Vec<f32>;
 /// One located grid of nets-sized cells.
 type Grid = Vec<Vec<f32>>;
+/// A near reading: labels, pooled square features, and whether every net agreed on all 64.
+type Near = (Vec<u8>, Vec<Feature>, bool);
 
 /// One template square: label, colour (0 = light), owning board, pixels.
 struct Square {
@@ -119,14 +125,17 @@ fn percentile(mut values: Vec<f32>, p: f32) -> f32 {
 }
 
 /// The nets' best reading of a board with one to three doubtful squares, if any, with the
-/// features of the grid it was read from.
-fn near_reading(bytes: &[u8]) -> Option<(Vec<u8>, Vec<Feature>)> {
+/// features of the grid it was read from and whether every net at every scale read exactly
+/// those 64 labels.
+fn near_reading(bytes: &[u8]) -> Option<Near> {
     let nets = [cnn::builtin(), cnn::builtin_prior(), cnn::builtin_hatch()];
     let scales = diagram::board_cells_scales(bytes);
     let mut best: Option<(usize, Vec<u8>, &Grid)> = None;
+    let mut readings: Vec<Vec<u8>> = Vec::new();
     for net in nets.into_iter().flatten() {
         for cells in &scales {
             let squares = net.classify(cells);
+            readings.push(squares.iter().map(|s| s.label).collect());
             let doubtful = squares
                 .iter()
                 .filter(|s| {
@@ -144,8 +153,9 @@ fn near_reading(bytes: &[u8]) -> Option<(Vec<u8>, Vec<Feature>)> {
         }
     }
     let (doubtful, labels, cells) = best?;
+    let agreed = readings.iter().all(|reading| *reading == labels);
     ((1..=MAX_DOUBTFUL).contains(&doubtful) && labels.len() == 64 && !labels.contains(&b'?'))
-        .then(|| (labels, pooled(cells)))
+        .then(|| (labels, pooled(cells), agreed))
 }
 
 /// Expands a FEN placement to 64 labels, rank 8 first.
@@ -164,8 +174,7 @@ fn labels_of(placement: &str) -> Option<Vec<u8>> {
 /// Certified placements for `near` images, given template boards `(image, placement)` from
 /// the same book. Each result is `None` unless every square passes.
 pub fn certify(templates: &[(&[u8], &str)], near: &[&[u8]]) -> Vec<Option<String>> {
-    let readings: Vec<Option<(Vec<u8>, Vec<Feature>)>> =
-        near.iter().map(|bytes| near_reading(bytes)).collect();
+    let readings: Vec<Option<Near>> = near.iter().map(|bytes| near_reading(bytes)).collect();
     if readings.iter().all(Option::is_none) {
         return vec![None; near.len()];
     }
@@ -223,23 +232,36 @@ pub fn certify(templates: &[(&[u8], &str)], near: &[&[u8]]) -> Vec<Option<String
     readings
         .into_iter()
         .map(|found| {
-            let (reading, cells) = found?;
+            let (reading, cells, agreed) = found?;
+            let mut matched = 0;
             for (index, feature) in cells.iter().enumerate() {
                 let pool = squares
                     .iter()
                     .enumerate()
                     .filter(|(i, s)| keep[*i] && s.dark == dark(index));
                 let neighbours = nearest(feature, pool, NEIGHBOURS);
-                let label = reading[index];
-                let limit = guard.get(&(label, dark(index)))?;
-                if neighbours.len() < NEIGHBOURS
-                    || neighbours.iter().any(|(_, n)| squares[*n].label != label)
-                    || neighbours[0].0 > *limit
-                {
-                    return None;
+                // The neighbours name a piece only when all agree and the nearest is within
+                // that piece's guard; otherwise they abstain.
+                let named = (neighbours.len() == NEIGHBOURS)
+                    .then(|| squares[neighbours[0].1].label)
+                    .filter(|voted| neighbours.iter().all(|(_, n)| squares[*n].label == *voted))
+                    .filter(|voted| {
+                        guard
+                            .get(&(*voted, dark(index)))
+                            .is_some_and(|limit| neighbours[0].0 <= *limit)
+                    });
+                match named {
+                    Some(voted) if voted == reading[index] => matched += 1,
+                    // Another piece named, or an abstention on a board the nets did not all agree on.
+                    Some(_) => return None,
+                    None if !agreed => return None,
+                    None => {}
                 }
             }
-            diagram::placement_of(&reading).filter(|p| plausible(p))
+            (matched == 64 || matched >= MIN_MATCHED)
+                .then(|| diagram::placement_of(&reading))
+                .flatten()
+                .filter(|p| plausible(p))
         })
         .collect()
 }
