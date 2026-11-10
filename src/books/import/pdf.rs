@@ -1,6 +1,7 @@
 //! Reconstruct lines from glyph coordinates rather than PDF painting order. A repeated central
 //! gutter orders two text columns top-to-bottom; short White/Black move tables stay row-major.
 use pdf_extract::{MediaBox, OutputDev, OutputError, Transform};
+use std::path::Path;
 #[derive(Default)]
 struct Layout {
     pages: Vec<Vec<Glyph>>,
@@ -79,6 +80,64 @@ pub(super) struct Extracted {
     /// Board crops found by rendering pages (scans, drawings), included in `pictures`.
     pub boards: usize,
 }
+/// Fewest letter-bearing words for a `pdftotext` page to replace a silent page.
+const MIN_FALLBACK_WORDS: usize = 8;
+
+fn has_text(lines: &[Line]) -> bool {
+    lines
+        .iter()
+        .any(|line| line.text.chars().any(char::is_alphanumeric))
+}
+
+/// Pages whose glyphs decoded to no text at all (some embedded CID fonts) take their lines
+/// from `pdftotext` word boxes instead, so moves printed around a diagram are still read.
+/// Pages that already have text, and pages `pdftotext` cannot read either (scans), are left
+/// alone. Missing `pdftotext` is a no-op.
+pub(super) fn fill_silent_pages(pdf: &Path, extracted: &mut Extracted) {
+    if extracted.pages.iter().all(|lines| has_text(lines)) {
+        return;
+    }
+    let Some(words) = super::caption::bbox_document(pdf) else {
+        return;
+    };
+    fill_from_words(&mut extracted.pages, &words);
+}
+
+fn fill_from_words(pages: &mut [Vec<Line>], words: &[Vec<super::caption::TextBox>]) {
+    for (lines, page_words) in pages.iter_mut().zip(words) {
+        if has_text(lines) {
+            continue;
+        }
+        let wordy = page_words
+            .iter()
+            .filter(|word| word.text.chars().any(char::is_alphabetic))
+            .count();
+        if wordy < MIN_FALLBACK_WORDS {
+            continue;
+        }
+        let glyphs: Vec<Glyph> = page_words
+            .iter()
+            .filter_map(|word| {
+                let height = word.rect.top - word.rect.bottom;
+                if !(height.is_finite() && height > 0.0) {
+                    return None;
+                }
+                // A word box spans descender to ascender; the baseline sits about a fifth up.
+                Some(Glyph {
+                    x: word.rect.left,
+                    y: word.rect.bottom + 0.2 * height,
+                    end: word.rect.right,
+                    size: height,
+                    text: word.text.clone(),
+                })
+            })
+            .collect();
+        if !glyphs.is_empty() {
+            *lines = order(glyphs);
+        }
+    }
+}
+
 pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
     let doc = lopdf::Document::load_mem(bytes)?;
     let mut layout = Layout::default();
@@ -607,6 +666,61 @@ fn order(mut glyphs: Vec<Glyph>) -> Vec<Line> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_silent_page_takes_its_lines_from_word_boxes() {
+        use super::super::caption::{Rect, TextBox};
+        let word = |text: &str, left: f64, bottom: f64| TextBox {
+            text: text.into(),
+            rect: Rect {
+                left,
+                bottom,
+                right: left + 6.0 * text.len() as f64,
+                top: bottom + 15.0,
+            },
+        };
+        let first = [
+            "19...gxf6",
+            "20",
+            "Ng4",
+            "Kg7",
+            "and",
+            "now",
+            "White",
+            "wins",
+        ];
+        let mut row = Vec::new();
+        let mut x = 50.0;
+        for text in first {
+            row.push(word(text, x, 700.0));
+            x += 6.0 * text.len() as f64 + 4.0;
+        }
+        row.push(word("21", 50.0, 400.0));
+        row.push(word("Nxf6", 66.0, 400.0));
+        let mut pages = vec![Vec::new(), Vec::new()];
+        let few = vec![word("12", 50.0, 700.0)];
+        fill_from_words(&mut pages, &[row, few]);
+        let texts: Vec<&str> = pages[0].iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["19...gxf6 20 Ng4 Kg7 and now White wins", "21 Nxf6"]
+        );
+        assert!(pages[0][0].y > pages[0][1].y);
+        // Too few words (a page number): the page stays empty.
+        assert!(pages[1].is_empty());
+        // A page that already has text keeps it.
+        let mut kept = vec![vec![Line {
+            text: "Chapter 1".into(),
+            size: 12.0,
+            y: 700.0,
+            x: 50.0,
+            end: 120.0,
+            cells: 1,
+        }]];
+        fill_from_words(&mut kept, &[vec![word("other", 50.0, 500.0); 9]]);
+        assert_eq!(kept[0].len(), 1);
+        assert_eq!(kept[0][0].text, "Chapter 1");
+    }
 
     #[test]
     fn page_by_page_bookmarks_are_not_chapters() {
