@@ -1382,6 +1382,25 @@ fn recognized_positions(
 /// `true` when `word` ends on a square that already holds a piece of `side` in `placement`:
 /// that side cannot move there, so the move is the one that reached the board.
 fn restates(placement: &str, side: Color, word: &str) -> bool {
+    let Ok(board) = placement.parse::<shakmaty::Board>() else {
+        return false;
+    };
+    let holds = |square: &str, role: shakmaty::Role| {
+        square
+            .parse::<shakmaty::Square>()
+            .is_ok_and(|sq| board.piece_at(sq) == Some(shakmaty::Piece { color: side, role }))
+    };
+    // Castling restated: the king and rook already stand where it puts them.
+    let back = if side == Color::White { "1" } else { "8" };
+    if let Some(castle) = castle_token(word) {
+        let (king, rook) = if castle == "O-O" {
+            ("g", "f")
+        } else {
+            ("c", "d")
+        };
+        return holds(&format!("{king}{back}"), shakmaty::Role::King)
+            && holds(&format!("{rook}{back}"), shakmaty::Role::Rook);
+    }
     let bare = word.trim_end_matches(['+', '#', '!', '?']);
     let tail: String = bare
         .chars()
@@ -1394,10 +1413,8 @@ fn restates(placement: &str, side: Color, word: &str) -> bool {
     let Ok(square) = tail.parse::<shakmaty::Square>() else {
         return false;
     };
-    placement
-        .parse::<shakmaty::Board>()
-        .ok()
-        .and_then(|board| board.piece_at(square))
+    board
+        .piece_at(square)
         .is_some_and(|piece| piece.color == side)
 }
 /// `"O-O"` or `"O-O-O"` for a castling token however it is typeset (`0-0`, `O–O-O`, `0-0+`).
@@ -3699,6 +3716,12 @@ mod image_tests {
         assert!(!restates(board, Color::White, "Bxc5"));
         assert!(!restates(board, Color::Black, "Kd4"));
         assert!(!restates(board, Color::Black, "O-O"));
+        // Castling already played: king on g1 with the rook on f1.
+        let castled = "r3k2r/8/8/8/8/8/8/R4RK1";
+        assert!(restates(castled, Color::White, "O-O"));
+        assert!(restates(castled, Color::White, "0\u{2013}0+"));
+        assert!(!restates(castled, Color::White, "O-O-O"));
+        assert!(!restates(castled, Color::Black, "O-O"));
         let mut page = Page::default();
         page.push(
             "",
