@@ -1368,6 +1368,27 @@ fn recognized_positions(
     }
     (out, unconfirmed)
 }
+/// `true` when `word` ends on a square that already holds a piece of `side` in `placement`:
+/// that side cannot move there, so the move is the one that reached the board.
+fn restates(placement: &str, side: Color, word: &str) -> bool {
+    let bare = word.trim_end_matches(['+', '#', '!', '?']);
+    let tail: String = bare
+        .chars()
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let Ok(square) = tail.parse::<shakmaty::Square>() else {
+        return false;
+    };
+    placement
+        .parse::<shakmaty::Board>()
+        .ok()
+        .and_then(|board| board.piece_at(square))
+        .is_some_and(|piece| piece.color == side)
+}
 /// `"O-O"` or `"O-O-O"` for a castling token however it is typeset (`0-0`, `O–O-O`, `0-0+`).
 fn castle_token(word: &str) -> Option<&'static str> {
     let bare: String = word
@@ -1814,6 +1835,11 @@ fn image_position<'a>(
             if let Some(pos) = legal(side) {
                 found = Some((n, side, pos));
                 break;
+            }
+            // "34...Bc5!" under a board where that side's piece already stands on c5 restates the
+            // move that reached the board; it names no side to move.
+            if restates(placement, side, &text[ts[i + 1].span.clone()]) {
+                continue;
             }
             if legal(side.other()).is_some() {
                 // The numbering names one side but only the other can play the move.
@@ -3665,6 +3691,47 @@ mod image_tests {
         ));
         let b = resolve_using(doc("Then 1 h6 Rg1+ 2 Kf4."), Some(&Fixed(board)));
         assert_eq!(recognized(&b), Some("7R/8/8/2k4P/8/6K1/8/5r2 w - - 0 1"));
+    }
+    #[test]
+    fn a_numbered_move_that_reached_the_board_names_no_side() {
+        let board = "8/5p2/p3p1p1/1pbkP2p/5P1P/1P4P1/P3KB2/8";
+        assert!(restates(board, Color::Black, "\u{2657}c5!"));
+        assert!(restates(board, Color::Black, "Bc5"));
+        assert!(!restates(board, Color::White, "Bxc5"));
+        assert!(!restates(board, Color::Black, "Kd4"));
+        assert!(!restates(board, Color::Black, "O-O"));
+        let mut page = Page::default();
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        page.push("White to move", BlockKind::Paragraph);
+        page.push(
+            "Kasparov played 34...Bc5!, then 35 Bxc5?? Kxc5.",
+            BlockKind::Paragraph,
+        );
+        let b = resolve_using(
+            Document {
+                cover: None,
+                isbn: None,
+                title: String::new(),
+                author: String::new(),
+                format: "test".into(),
+                pages: vec![page],
+                assets: vec![Asset {
+                    path: "images/d.png".into(),
+                    bytes: vec![0],
+                }],
+            },
+            Some(&Fixed(board)),
+        );
+        assert_eq!(
+            recognized(&b),
+            Some("8/5p2/p3p1p1/1pbkP2p/5P1P/1P4P1/P3KB2/8 w - - 0 1")
+        );
     }
     #[test]
     fn unknown_side_to_move_abstains() {
