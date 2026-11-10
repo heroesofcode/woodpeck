@@ -552,7 +552,18 @@ pub(super) fn stamp_geometry_captions(
             _ => &glyphs,
         };
         let diagrams: Vec<Rect> = placed.iter().map(bounds).collect();
-        let sides = bind_side_captions(&diagrams, texts);
+        let captions = bind_side_captions(&diagrams, texts);
+        let letters = super::side_letter::bind_side_letters(&diagrams, texts);
+        // A caption and a side letter that disagree leave the side open.
+        let sides =
+            captions
+                .into_iter()
+                .zip(letters)
+                .map(|(caption, letter)| match (caption, letter) {
+                    (Some(c), Some(l)) if c != l => None,
+                    (Some(side), _) | (None, Some(side)) => Some(side),
+                    (None, None) => None,
+                });
         for (picture, side) in placed.iter_mut().zip(sides) {
             let Some(white) = side else {
                 continue;

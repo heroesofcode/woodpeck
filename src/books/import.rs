@@ -16,6 +16,7 @@ mod raster;
 mod scan_caption;
 #[cfg(not(target_arch = "wasm32"))]
 mod scan_ocr;
+mod side_letter;
 
 #[derive(Debug, Error)]
 pub enum ImportError {
