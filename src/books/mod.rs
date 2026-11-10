@@ -12,5 +12,6 @@ pub mod cover;
 pub mod coverage;
 pub mod diagram;
 pub mod game_sides;
+pub mod templates;
 
 pub(crate) mod reflow;
