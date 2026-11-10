@@ -108,11 +108,11 @@ fn fill_from_words(pages: &mut [Vec<Line>], words: &[Vec<super::caption::TextBox
         if has_text(lines) {
             continue;
         }
-        let wordy = page_words
+        let fillable = page_words
             .iter()
             .filter(|word| word.text.chars().any(char::is_alphabetic))
             .count();
-        if wordy < MIN_FALLBACK_WORDS {
+        if fillable < MIN_FALLBACK_WORDS {
             continue;
         }
         let glyphs: Vec<Glyph> = page_words

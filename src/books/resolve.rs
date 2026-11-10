@@ -1210,6 +1210,18 @@ fn recognized_positions(
                 alphabet,
                 &placement,
             );
+            // Moves that dispute the caption may narrate the move that reached the board or a
+            // line from before it. Only when every printed mark on the board backs the caption is
+            // the board kept, without a side; with nothing printed to back it, it stays unread.
+            if let Turn::Disputed(white) = turn {
+                let named: Vec<bool> = [marker, caption, printed, triangle, key, scan]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                if named.is_empty() || named.iter().any(|&n| n != white) {
+                    turn = Turn::Contradicted;
+                }
+            }
             // Trailing ply or a caption above a diagram number — only when nothing else
             // (including a printed side marker) names the side, so a wrong inference cannot
             // demote a marker-confirmed board.
@@ -1352,10 +1364,10 @@ fn recognized_positions(
                 Turn::Confirmed(pos) => {
                     out.insert((p, b), pos);
                 }
-                Turn::Unknown | Turn::Disputed if image => {
+                Turn::Unknown | Turn::Disputed(_) if image => {
                     unconfirmed.insert((p, b), placement);
                 }
-                Turn::Unknown | Turn::Disputed | Turn::Contradicted => {}
+                Turn::Unknown | Turn::Disputed(_) | Turn::Contradicted => {}
             }
         }
     }
@@ -1460,7 +1472,7 @@ fn with_marker(turn: Turn, marker: Option<bool>, placement: &str) -> Turn {
         Turn::Confirmed(_) => Turn::Unknown,
         Turn::Unknown => placed(placement, side).map_or(Turn::Unknown, Turn::Confirmed),
         Turn::Contradicted => Turn::Contradicted,
-        Turn::Disputed => Turn::Disputed,
+        Turn::Disputed(white) => Turn::Disputed(white),
     }
 }
 /// Turns an image whose board passed the gates into a board shown without a side to move.
@@ -1480,9 +1492,10 @@ enum Turn {
     Unknown,
     /// The text contradicts itself or the board: the image stays unread.
     Contradicted,
-    /// A caption named the side, but the moves printed after the board name the other one:
-    /// the board is shown without a side to move and nothing else fills it.
-    Disputed,
+    /// A caption named the side (`true` for White), but the moves printed after the board
+    /// name the other one. Backed by a printed mark the board is shown without a side to move
+    /// and nothing else fills it; otherwise it stays unread.
+    Disputed(bool),
 }
 /// What the text just above a diagram says about it.
 #[derive(Default)]
@@ -1851,8 +1864,8 @@ fn image_position<'a>(
         if let Some(side) = turn {
             // Commentary that names the other side than the caption may narrate the move
             // that reached the board or a line from before it: the side stays open.
-            if stated.is_some_and(|s| s != side) {
-                return (Turn::Disputed, false);
+            if let Some(named) = stated.filter(|&s| s != side) {
+                return (Turn::Disputed(named == Color::White), false);
             }
             stated = Some(side);
         }
@@ -1860,8 +1873,8 @@ fn image_position<'a>(
         let Some((_, side, pos)) = found else {
             continue;
         };
-        if stated.is_some_and(|s| s != side) {
-            return (Turn::Disputed, false);
+        if let Some(named) = stated.filter(|&s| s != side) {
+            return (Turn::Disputed(named == Color::White), false);
         }
         return (Turn::Confirmed(pos), !led);
     }
@@ -3005,6 +3018,34 @@ mod image_tests {
         assert!(matches!(kind, BlockKind::Image { .. }));
     }
     #[test]
+    fn moves_disputing_a_caption_a_printed_mark_backs_leave_the_board_unconfirmed() {
+        // The solution names the side to move, then narrates the other side's move.
+        let board = "7R/8/8/2k4P/8/6K1/8/5r2";
+        let texts = ["White to move", "Then 56...Rh1 57 Kg4 Kd6."];
+        let png = tiny_png();
+        let kind = shown_bytes(
+            crate::books::diagram::with_caption_side(&png, true),
+            board,
+            "",
+            &texts,
+        );
+        assert!(
+            matches!(kind, BlockKind::UnconfirmedDiagram { .. }),
+            "{kind:?}"
+        );
+        // With nothing printed to back the caption the board stays unread.
+        let (kind, _) = shown(board, "", &texts);
+        assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
+        // A printed mark naming the other side does not keep it either.
+        let kind = shown_bytes(
+            crate::books::diagram::with_caption_side(&png, false),
+            board,
+            "",
+            &texts,
+        );
+        assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
+    }
+    #[test]
     fn a_check_names_the_side_to_move() {
         // The black king on e8 is attacked by the rook on e1: only Black can be to move.
         let (kind, _) = shown("4k3/8/8/8/8/8/8/K3R3", "", &[]);
@@ -3647,43 +3688,6 @@ mod image_tests {
             Some(&Fixed("4k3/8/8/8/6b1/5N2/8/4K2R")),
         );
         assert_eq!(recognized(&b), Some("4k3/8/8/8/6b1/5N2/8/4K2R w - - 0 1"));
-    }
-    #[test]
-    fn a_caption_disputed_by_the_moves_after_it_keeps_the_board_unconfirmed() {
-        let doc = |second: &str| {
-            let mut first = Page::default();
-            first.push(
-                "",
-                BlockKind::Image {
-                    path: "images/d.png".into(),
-                    alt: String::new(),
-                },
-            );
-            first.push("White to move", BlockKind::Paragraph);
-            let mut next = Page::default();
-            next.push(second, BlockKind::Paragraph);
-            Document {
-                cover: None,
-                isbn: None,
-                title: String::new(),
-                author: String::new(),
-                format: "test".into(),
-                pages: vec![first, next],
-                assets: vec![Asset {
-                    path: "images/d.png".into(),
-                    bytes: vec![0],
-                }],
-            }
-        };
-        let board = "7R/8/8/2k4P/8/6K1/8/5r2";
-        let b = resolve_using(doc("Then 56...Rh1 57 Kg4 Kd6."), Some(&Fixed(board)));
-        assert_eq!(recognized(&b), None);
-        assert!(matches!(
-            b.document.pages[0].blocks[0].kind,
-            BlockKind::UnconfirmedDiagram { .. }
-        ));
-        let b = resolve_using(doc("Then 1 h6 Rg1+ 2 Kf4."), Some(&Fixed(board)));
-        assert_eq!(recognized(&b), Some("7R/8/8/2k4P/8/6K1/8/5r2 w - - 0 1"));
     }
     #[test]
     fn a_numbered_move_that_reached_the_board_names_no_side() {
