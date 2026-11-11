@@ -47,6 +47,10 @@ struct Near {
     cells: Vec<Feature>,
     /// Labels any net at any scale named on each square.
     proposed: Vec<Vec<u8>>,
+    /// How many readings (nets at scales) named nothing on each square, out of `views`.
+    unnamed: Vec<usize>,
+    /// How many readings there were.
+    views: usize,
     /// Squares the best reading names above the gate and every net at every scale names alike.
     steady: Vec<bool>,
     /// Which squares every net named alike, when no net named any square differently.
@@ -205,6 +209,14 @@ fn near_reading(bytes: &[u8]) -> Option<Near> {
             named
         })
         .collect();
+    let unnamed = (0..64)
+        .map(|index| {
+            readings
+                .iter()
+                .filter(|reading| reading[index].label == b'?')
+                .count()
+        })
+        .collect();
     let steady = (0..64)
         .map(|index| {
             !below_gate(squares[index])
@@ -218,6 +230,8 @@ fn near_reading(bytes: &[u8]) -> Option<Near> {
         labels,
         cells: pooled(cells),
         proposed,
+        unnamed,
+        views: readings.len(),
         steady,
         firm,
     })
@@ -250,10 +264,14 @@ fn vouched(near: &Near, named: &[Option<u8>]) -> Option<Vec<u8>> {
 /// The board as settled when the templates vouch for all but a few steady squares: each
 /// doubtful square takes the piece its neighbours name if some net named it there and no net
 /// named a piece of the other colour; a square the neighbours leave unmatched (abstaining, or
-/// naming a piece no net named) keeps its reading only when it is steady.
+/// naming a piece no net named) keeps its reading only when it is steady. A doubtful square
+/// the neighbours abstain on counts as unmatched and takes the one piece every net that named
+/// it named there (never an empty square) when most readings named it, and then only if the
+/// board keeps within one set of men per side.
 fn settled(near: &Near, named: &[Option<u8>]) -> Option<Vec<u8>> {
     let mut out = near.labels.clone();
     let (mut matched, mut unmatched) = (0, 0);
+    let mut kept = false;
     for (index, voted) in named.iter().enumerate() {
         let label = near.labels[index];
         let proposed = &near.proposed[index];
@@ -271,10 +289,33 @@ fn settled(near: &Near, named: &[Option<u8>]) -> Option<Vec<u8>> {
             }
             Some(voted) if near.steady[index] && !proposed.contains(&voted) => unmatched += 1,
             None if near.steady[index] => unmatched += 1,
+            None if near.doubtful[index]
+                && proposed.len() == 1
+                && proposed[0] != b'.'
+                && 2 * near.unnamed[index] < near.views =>
+            {
+                out[index] = proposed[0];
+                unmatched += 1;
+                kept = true;
+            }
             _ => return None,
         }
     }
-    (unmatched <= MAX_UNMATCHED && matched >= MIN_MATCHED).then_some(out)
+    (unmatched <= MAX_UNMATCHED && matched >= MIN_MATCHED && (!kept || within_one_set(&out)))
+        .then_some(out)
+}
+
+/// At most one set's worth of each piece per side: a queen, two rooks, bishops or knights,
+/// eight pawns and sixteen men in all.
+fn within_one_set(labels: &[u8]) -> bool {
+    let count = |piece: u8| labels.iter().filter(|l| **l == piece).count();
+    [b"KQRBNP", b"kqrbnp"].iter().all(|side| {
+        let most = [1, 1, 2, 2, 2, 8];
+        side.iter()
+            .zip(most)
+            .all(|(piece, most)| count(*piece) <= most)
+            && side.iter().map(|piece| count(*piece)).sum::<usize>() <= 16
+    })
 }
 
 /// Expands a FEN placement to 64 labels, rank 8 first.
@@ -406,7 +447,7 @@ fn plausible(placement: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{labels_of, percentile, plausible};
+    use super::{labels_of, percentile, plausible, within_one_set};
 
     #[test]
     fn placements_expand_to_64_labels() {
@@ -422,6 +463,16 @@ mod tests {
         assert!(plausible("4k3/8/8/8/8/8/4P3/4K3"));
         assert!(!plausible("8/8/8/8/8/8/4P3/4K3"));
         assert!(!plausible("4k2P/8/8/8/8/8/8/4K3"));
+    }
+
+    #[test]
+    fn one_set_caps_each_piece_per_side() {
+        let start = labels_of("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR").unwrap();
+        assert!(within_one_set(&start));
+        let two_queens = labels_of("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKQNR").unwrap();
+        assert!(!within_one_set(&two_queens));
+        let three_knights = labels_of("4k3/8/8/8/8/8/8/NNN1K3").unwrap();
+        assert!(!within_one_set(&three_knights));
     }
 
     #[test]
