@@ -534,13 +534,21 @@ fn carried_captions(
         diagrams.iter().map(|d| vec![Vec::new(); d.len()]).collect();
     for page in 0..diagrams.len() {
         for (rect, white) in column_heads(&diagrams[page], &lines[page], &sides[page]) {
+            // The caption's column reaches as far left as the boards under it, so short text
+            // in that column does not open a column of its own, and neither does a page number.
+            let column_left = diagrams[page]
+                .iter()
+                .filter(|d| overlap(d.left, d.right, rect.left, rect.right) > 0.0)
+                .map(|d| d.left)
+                .fold(rect.left, f64::min);
             let same_page = lines[page]
                 .iter()
+                .filter(|line| !folio(&line.text))
                 .map(|line| line.rect)
                 .chain(diagrams[page].iter().copied())
-                .any(|r| r.right < rect.left);
+                .any(|r| r.right < column_left);
             let target = if same_page {
-                column_end(&diagrams[page], &lines[page], Some(rect.left))
+                column_end(&diagrams[page], &lines[page], Some(column_left))
                     .map(|index| (page, index))
             } else if page > 0 {
                 column_end(&diagrams[page - 1], &lines[page - 1], None)
@@ -926,6 +934,13 @@ mod tests {
         let carried = carried_captions(&diagrams, &lines, &sides);
         assert_eq!(carried[0], vec![None, Some(true), None, Some(true)]);
         assert_eq!(carried[1], vec![None]);
+        // A page number in the margin and short text in the caption's own column do not make
+        // a column to its left: the caption still opens the next page.
+        let mut margins = lines.clone();
+        margins[1].push(text("577", 20.0, 40.0, 36.0, 50.0));
+        margins[1].push(text("1 e4", 82.0, 520.0, 110.0, 532.0));
+        let carried = carried_captions(&diagrams, &margins, &sides);
+        assert_eq!(carried[0], vec![None, Some(true), None, Some(true)]);
         // Text under the board in its column: the head caption is not carried.
         let mut busy = lines.clone();
         busy[0].push(text("1 Qh5 wins", 82.0, 70.0, 200.0, 82.0));
