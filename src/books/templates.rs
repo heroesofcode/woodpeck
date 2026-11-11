@@ -308,7 +308,11 @@ fn settled(near: &Near, named: &[Option<u8>]) -> Option<Vec<u8>> {
 /// At most one set's worth of each piece per side: a queen, two rooks, bishops or knights,
 /// eight pawns and sixteen men in all.
 fn within_one_set(labels: &[u8]) -> bool {
-    let count = |piece: u8| labels.iter().filter(|l| **l == piece).count();
+    let count = |piece: u8| {
+        labels
+            .iter()
+            .fold(0usize, |n, &label| n + usize::from(label == piece))
+    };
     [b"KQRBNP", b"kqrbnp"].iter().all(|side| {
         let most = [1, 1, 2, 2, 2, 8];
         side.iter()
