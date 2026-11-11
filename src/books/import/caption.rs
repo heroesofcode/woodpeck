@@ -90,6 +90,10 @@ const RESIDUE: &[&str] = &[
     "and", "win", "draw", "mate", "diagram", "fig", "figure", "no", "nr",
 ];
 
+/// After "White mates" / "Black mates" only: the count of a problem's moves, as in
+/// "White mates in 3 moves". The mating side moves first.
+const MATE_COUNT: &[&str] = &["in", "move", "moves"];
+
 /// `Some(true)` is White to move. Only a short line that is a side caption counts.
 pub(super) fn side_caption(text: &str) -> Option<bool> {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -166,7 +170,29 @@ fn wider_side(text: &str) -> Option<bool> {
         rest.replace_range(at..at + phrase.len(), " ");
     }
     let white = found?;
-    words_are_residue(&rest).then_some(white)
+    let mates = lower.contains("white mates") || lower.contains("black mates");
+    let counted = mates && mate_count(&rest);
+    (words_are_residue(&rest) || counted).then_some(white)
+}
+
+/// "in 3 moves", "in 2": one count of moves and nothing else.
+fn mate_count(rest: &str) -> bool {
+    let words: Vec<&str> = rest
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let numbers = words
+        .iter()
+        .filter(|word| word.chars().all(|c| c.is_ascii_digit()))
+        .count();
+    let counted =
+        matches!(words.as_slice(), ["in", n, ..] if n.chars().all(|c| c.is_ascii_digit()));
+    counted
+        && numbers == 1
+        && words.len() <= 3
+        && words
+            .iter()
+            .all(|word| word.chars().all(|c| c.is_ascii_digit()) || MATE_COUNT.contains(word))
 }
 
 /// Index of `phrase` bounded by non-letters, so "white wins" is not part of a longer word.
@@ -432,6 +458,116 @@ pub(super) fn bind_side_captions(diagrams: &[Rect], texts: &[TextBox]) -> Vec<Op
         .collect()
 }
 
+/// Side captions no diagram on the page owns that head their column: no line and no diagram
+/// above them in it, and the next board down, if any, already has a caption of its own. In a
+/// book that prints captions under the boards, such a line belongs to the board that ended the
+/// column read before it.
+fn column_heads(diagrams: &[Rect], lines: &[TextBox], sides: &[Option<bool>]) -> Vec<(Rect, bool)> {
+    let mut heads = Vec::new();
+    for line in lines {
+        let Some(white) = side_caption(&line.text) else {
+            continue;
+        };
+        if nearest_diagram(diagrams, line.rect).is_some() {
+            continue;
+        }
+        let column =
+            |other: Rect| overlap(other.left, other.right, line.rect.left, line.rect.right) > 0.0;
+        if lines
+            .iter()
+            .any(|other| column(other.rect) && other.rect.bottom > line.rect.top)
+            || diagrams
+                .iter()
+                .any(|d| column(*d) && d.bottom > line.rect.bottom)
+        {
+            continue;
+        }
+        let next = diagrams
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| column(**d) && d.top <= line.rect.bottom)
+            .max_by(|a, b| a.1.top.total_cmp(&b.1.top));
+        if next.is_some_and(|(index, _)| sides[index].is_none()) {
+            continue;
+        }
+        heads.push((line.rect, white));
+    }
+    heads
+}
+
+/// Digits only, as a page number.
+fn folio(text: &str) -> bool {
+    text.chars()
+        .all(|c| c.is_ascii_digit() || c.is_whitespace())
+}
+
+/// The board that ends the last column of `diagrams`, or of the part of the page left of `before`
+/// when that is given. `None` unless only a page number follows it in its column.
+fn column_end(diagrams: &[Rect], lines: &[TextBox], before: Option<f64>) -> Option<usize> {
+    let left = |r: Rect| before.is_none_or(|x| r.right < x);
+    let last = diagrams
+        .iter()
+        .filter(|d| left(**d))
+        .max_by(|a, b| a.right.total_cmp(&b.right))?;
+    let column = |r: Rect| overlap(r.left, r.right, last.left, last.right) > 0.0;
+    let (index, end) = diagrams
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| left(**d) && column(**d))
+        .min_by(|a, b| a.1.bottom.total_cmp(&b.1.bottom))?;
+    let trailing = lines.iter().any(|line| {
+        overlap(line.rect.left, line.rect.right, end.left, end.right) > 0.0
+            && line.rect.top < end.bottom
+            && !folio(&line.text)
+    });
+    (!trailing).then_some(index)
+}
+
+/// Where a column-head caption of page `page` lands: the board ending the column to its left
+/// on the same page, or the one ending the previous page. One caption per board.
+fn carried_captions(
+    diagrams: &[Vec<Rect>],
+    lines: &[Vec<TextBox>],
+    sides: &[Vec<Option<bool>>],
+) -> Vec<Vec<Option<bool>>> {
+    let mut carried: Vec<Vec<Vec<bool>>> =
+        diagrams.iter().map(|d| vec![Vec::new(); d.len()]).collect();
+    for page in 0..diagrams.len() {
+        for (rect, white) in column_heads(&diagrams[page], &lines[page], &sides[page]) {
+            let same_page = lines[page]
+                .iter()
+                .map(|line| line.rect)
+                .chain(diagrams[page].iter().copied())
+                .any(|r| r.right < rect.left);
+            let target = if same_page {
+                column_end(&diagrams[page], &lines[page], Some(rect.left))
+                    .map(|index| (page, index))
+            } else if page > 0 {
+                column_end(&diagrams[page - 1], &lines[page - 1], None)
+                    .map(|index| (page - 1, index))
+            } else {
+                None
+            };
+            if let Some((p, index)) = target
+                && sides[p][index].is_none()
+            {
+                carried[p][index].push(white);
+            }
+        }
+    }
+    carried
+        .into_iter()
+        .map(|page| {
+            page.into_iter()
+                .map(|sides| match sides.as_slice() {
+                    [side] => Some(*side),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect()
+}
+
 fn attr(el: &scraper::ElementRef<'_>, name: &str) -> Option<f64> {
     el.value()
         .attrs()
@@ -551,10 +687,11 @@ pub(super) fn stamp_geometry_captions(
         return;
     }
     let poppler = bbox_document(pdf);
-    for (i, placed) in pictures.iter_mut().enumerate() {
-        if placed.is_empty() {
-            continue;
-        }
+    let mut diagrams = Vec::new();
+    let mut lines = Vec::new();
+    let mut captions = Vec::new();
+    let mut letters = Vec::new();
+    for (i, placed) in pictures.iter().enumerate() {
         let glyphs = pages
             .get(i)
             .map(|lines| glyph_boxes(lines))
@@ -563,15 +700,46 @@ pub(super) fn stamp_geometry_captions(
             Some(words) if !words.is_empty() => words,
             _ => &glyphs,
         };
-        let diagrams: Vec<Rect> = placed.iter().map(bounds).collect();
-        let captions = bind_side_captions(&diagrams, texts);
-        let letters = super::side_letter::bind_side_letters(&diagrams, texts);
+        let rects: Vec<Rect> = placed.iter().map(bounds).collect();
+        if placed.is_empty() {
+            captions.push(Vec::new());
+            letters.push(Vec::new());
+        } else {
+            captions.push(bind_side_captions(&rects, texts));
+            letters.push(super::side_letter::bind_side_letters(&rects, texts));
+        }
+        lines.push(lines_of(texts.to_vec()));
+        diagrams.push(rects);
+    }
+    // A caption the page break carried to the head of the next column fills only a board with
+    // no caption and no side letter of its own.
+    let open: Vec<Vec<Option<bool>>> = captions
+        .iter()
+        .zip(&letters)
+        .map(|(captions, letters)| {
+            captions
+                .iter()
+                .zip(letters)
+                .map(|(caption, letter)| match (caption, letter) {
+                    (None, super::side_letter::Letter::Absent) => None,
+                    _ => Some(true),
+                })
+                .collect()
+        })
+        .collect();
+    let carried = carried_captions(&diagrams, &lines, &open);
+    for (i, placed) in pictures.iter_mut().enumerate() {
+        if placed.is_empty() {
+            continue;
+        }
         // A caption and a side letter that disagree leave the side open, and so does a letter
         // in conflict with itself or with the question under the board.
-        let sides = captions
-            .into_iter()
-            .zip(letters)
-            .map(|(caption, letter)| merge_letter(caption, letter));
+        let sides: Vec<Option<bool>> = captions[i]
+            .iter()
+            .zip(&carried[i])
+            .zip(&letters[i])
+            .map(|((caption, carried), letter)| merge_letter(caption.or(*carried), *letter))
+            .collect();
         for (picture, side) in placed.iter_mut().zip(sides) {
             let Some(white) = side else {
                 continue;
@@ -594,7 +762,9 @@ pub(super) fn stamp_geometry_captions(
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, TextBox, bind_side_captions, merge_letter, parse_bbox, side_caption};
+    use super::{
+        Rect, TextBox, bind_side_captions, carried_captions, merge_letter, parse_bbox, side_caption,
+    };
     use crate::books::import::side_letter::Letter;
 
     #[test]
@@ -638,7 +808,7 @@ mod tests {
         assert_eq!(side_caption("24) White moves"), Some(true));
         assert_eq!(side_caption("1. e4 e5 2. Nf3"), None);
         assert_eq!(side_caption("White to move the knight"), None);
-        assert_eq!(side_caption("White mates in 2"), None);
+        assert_eq!(side_caption("White mates in 2"), Some(true));
     }
 
     #[test]
@@ -653,7 +823,7 @@ mod tests {
         assert_eq!(side_caption("5c: Black has the move"), Some(false));
         // The same verbs inside a sentence are not a caption.
         assert_eq!(side_caption("White wins the exchange"), None);
-        assert_eq!(side_caption("Black mates in 2"), None);
+        assert_eq!(side_caption("Black mates the king in 2"), None);
         assert_eq!(side_caption("12ab) White wins"), None);
         assert_eq!(side_caption("See how Black draws the game"), None);
     }
@@ -712,6 +882,67 @@ mod tests {
         // 0.4h is inside the old half-height window, so the pair is one caption.
         let together = [line("Black", 42.0, 0.0), line("wins", 96.0, 0.4 * h)];
         assert_eq!(bind_side_captions(&diagrams, &together), vec![Some(false)]);
+    }
+
+    #[test]
+    fn a_problem_caption_counts_its_moves() {
+        assert_eq!(side_caption("White mates in 3 moves"), Some(true));
+        assert_eq!(side_caption("Black mates in 1 move"), Some(false));
+        assert_eq!(side_caption("12. White mates in 4"), Some(true));
+        assert_eq!(side_caption("White mates in 3 or 4 moves"), None);
+        assert_eq!(side_caption("White wins in 3 moves"), None);
+        assert_eq!(side_caption("White mates in moves"), None);
+    }
+
+    #[test]
+    fn a_caption_at_the_head_of_a_column_belongs_to_the_board_ending_the_last_one() {
+        // A spread of two columns. Captions sit under the boards; the bottom-left board's
+        // caption opens the right column, and the bottom-right board's opens the next page.
+        let page = [
+            rect(80.0, 560.0, 230.0, 710.0),
+            rect(80.0, 100.0, 230.0, 250.0),
+            rect(360.0, 560.0, 510.0, 710.0),
+            rect(360.0, 100.0, 510.0, 250.0),
+        ];
+        let lines = vec![
+            text("Black to move", 128.0, 530.0, 186.0, 542.0),
+            text("White to move", 407.0, 770.0, 468.0, 782.0),
+            text("Black to move", 407.0, 530.0, 468.0, 542.0),
+            text("576", 140.0, 40.0, 160.0, 50.0),
+        ];
+        let next_page = [rect(80.0, 560.0, 230.0, 710.0)];
+        let next_lines = vec![
+            text("White to move", 128.0, 770.0, 186.0, 782.0),
+            text("Black to move", 128.0, 530.0, 186.0, 542.0),
+        ];
+        let diagrams = vec![page.to_vec(), next_page.to_vec()];
+        let lines = vec![lines, next_lines];
+        let sides: Vec<Vec<Option<bool>>> = diagrams
+            .iter()
+            .zip(&lines)
+            .map(|(d, l)| bind_side_captions(d, l))
+            .collect();
+        assert_eq!(sides[0], vec![Some(false), None, Some(false), None]);
+        let carried = carried_captions(&diagrams, &lines, &sides);
+        assert_eq!(carried[0], vec![None, Some(true), None, Some(true)]);
+        assert_eq!(carried[1], vec![None]);
+        // Text under the board in its column: the head caption is not carried.
+        let mut busy = lines.clone();
+        busy[0].push(text("1 Qh5 wins", 82.0, 70.0, 200.0, 82.0));
+        let carried = carried_captions(&diagrams, &busy, &sides);
+        assert_eq!(carried[0], vec![None, None, None, Some(true)]);
+        // The board under a head caption has no caption of its own: it may be that board's.
+        let mut above = lines.clone();
+        above[1].remove(1);
+        let sides_above: Vec<Vec<Option<bool>>> = diagrams
+            .iter()
+            .zip(&above)
+            .map(|(d, l)| bind_side_captions(d, l))
+            .collect();
+        assert_eq!(
+            carried_captions(&diagrams, &above, &sides_above)[0][3],
+            None
+        );
     }
 
     #[test]
