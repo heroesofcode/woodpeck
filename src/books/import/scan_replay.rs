@@ -195,6 +195,17 @@ fn tokens(text: &str) -> Vec<Token> {
     let mut out = Vec::new();
     for word in flat.split_whitespace() {
         let mut rest = word;
+        // "2. ... Nf6": an ellipsis set apart from its move number makes it Black's.
+        let after_dots = rest.trim_start_matches(['.', '\u{2026}']);
+        let dots = rest.len() - after_dots.len();
+        if let Some(Token::Number(number, false)) = out.last()
+            && (rest.starts_with('\u{2026}') || dots >= 2)
+        {
+            let number = *number;
+            out.pop();
+            out.push(Token::Number(number, true));
+            rest = after_dots;
+        }
         while !rest.is_empty() {
             if let Some((number, black, after)) = move_number(rest) {
                 out.push(Token::Number(number, black));
@@ -506,6 +517,24 @@ mod tests {
         let lines = [line("1.e4 e5 2.Nf3", 50.0, 100.0, 400.0)];
         let found = replayed_placements(&lines, &[[0, 0, 500, 500]], 1000);
         assert_eq!(found, Vec::new());
+    }
+
+    #[test]
+    fn an_ellipsis_set_apart_from_its_number_is_black() {
+        let spaced = tokens("1.e4 e5 2.Nf3 2. ... Nc6 3. \u{2026}Bb4");
+        assert_eq!(spaced[5], Token::Number(2, true));
+        assert_eq!(spaced[6], Token::Move("Nc6".to_owned()));
+        assert_eq!(spaced[7], Token::Number(3, true));
+        assert_eq!(spaced[8], Token::Move("Bb4".to_owned()));
+        let found = replay(&tokens("1.e4 e5 2.Nf3 2. ... Nc6 3.Bb5"));
+        assert_eq!(found.len(), 5);
+        assert_eq!(
+            side_of(
+                &found,
+                "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R"
+            ),
+            Some(false)
+        );
     }
 
     #[test]
