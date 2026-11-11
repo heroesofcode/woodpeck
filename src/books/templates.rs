@@ -366,9 +366,7 @@ pub fn certify(templates: &[(&[u8], &str)], near: &[&[u8]]) -> Vec<Option<String
                     // that piece's guard; otherwise they abstain.
                     (neighbours.len() == NEIGHBOURS)
                         .then(|| squares[neighbours[0].1].label)
-                        .filter(|voted| {
-                            neighbours.iter().all(|(_, n)| squares[*n].label == *voted)
-                        })
+                        .filter(|voted| neighbours.iter().all(|(_, n)| squares[*n].label == *voted))
                         .filter(|voted| {
                             guard
                                 .get(&(*voted, dark(index)))
