@@ -6,8 +6,12 @@
 //! real games ([`super::game_sides::seen`]). A board no net at any scale reads differently
 //! (a net may only fail to name a square) is also accepted when no square's neighbours name
 //! another piece, every square some net failed to name is matched outright, and at least half
-//! of its squares are matched outright. The templates never change a square: the nets' own
-//! reading is kept or the board stays unread.
+//! of its squares are matched outright. Failing both, a board is still accepted when every
+//! doubtful square is matched or its neighbours name a piece some net named there (never one
+//! of the other colour), at most a few squares go unmatched, and each of those is named confidently
+//! by the best reading and alike by every net at every scale, its neighbours naming
+//! no piece any net named. The templates choose only among the nets' own labels: a board is
+//! read as the nets proposed or stays unread.
 
 use super::{cnn, diagram};
 
@@ -27,13 +31,27 @@ const MAX_DOUBTFUL: usize = 3;
 const MIN_MATCHED: usize = 32;
 /// Template boards used per book, spread evenly; bounds the quadratic cleaning step.
 const MAX_TEMPLATES: usize = 300;
+/// Most squares of a settled board the templates may leave unmatched.
+const MAX_UNMATCHED: usize = 4;
 
 type Feature = Vec<f32>;
 /// One located grid of nets-sized cells.
 type Grid = Vec<Vec<f32>>;
-/// A near reading: labels, pooled square features, and, when no net at any scale named a
-/// square differently, which squares every net named alike.
-type Near = (Vec<u8>, Vec<Feature>, Option<Vec<bool>>);
+/// A near reading of one board.
+struct Near {
+    /// The best reading's labels; `?` where its net named nothing.
+    labels: Vec<u8>,
+    /// Squares the best reading is unsure of (unnamed or below the probability gate).
+    doubtful: Vec<bool>,
+    /// Pooled features of the grid the best reading came from.
+    cells: Vec<Feature>,
+    /// Labels any net at any scale named on each square.
+    proposed: Vec<Vec<u8>>,
+    /// Squares the best reading names above the gate and every net at every scale names alike.
+    steady: Vec<bool>,
+    /// Which squares every net named alike, when no net named any square differently.
+    firm: Option<Vec<bool>>,
+}
 
 /// One template square: label, colour (0 = light), owning board, pixels.
 struct Square {
@@ -126,53 +144,137 @@ fn percentile(mut values: Vec<f32>, p: f32) -> f32 {
     values[low] + (values[high] - values[low]) * (rank - low as f32)
 }
 
+fn below_gate(square: cnn::Square) -> bool {
+    let gate = if matches!(square.label, b'K' | b'Q' | b'k' | b'q') {
+        cnn::MIN_ROYAL_PROBABILITY
+    } else {
+        cnn::MIN_PROBABILITY
+    };
+    square.label == b'?' || square.probability < gate
+}
+
 /// The nets' best reading of a board with one to three doubtful squares, if any, with the
-/// features of the grid it was read from and whether every net at every scale read exactly
-/// those 64 labels.
+/// features of the grid it was read from and what every net at every scale read.
 fn near_reading(bytes: &[u8]) -> Option<Near> {
     let nets = [cnn::builtin(), cnn::builtin_prior(), cnn::builtin_hatch()];
     let scales = diagram::board_cells_scales(bytes);
-    let mut best: Option<(usize, Vec<u8>, &Grid)> = None;
-    let mut readings: Vec<Vec<u8>> = Vec::new();
+    let mut best: Option<(usize, Vec<cnn::Square>, &Grid)> = None;
+    let mut readings: Vec<Vec<cnn::Square>> = Vec::new();
     for net in nets.into_iter().flatten() {
         for cells in &scales {
             let squares = net.classify(cells);
-            readings.push(squares.iter().map(|s| s.label).collect());
-            let doubtful = squares
-                .iter()
-                .filter(|s| {
-                    let gate = if matches!(s.label, b'K' | b'Q' | b'k' | b'q') {
-                        cnn::MIN_ROYAL_PROBABILITY
-                    } else {
-                        cnn::MIN_PROBABILITY
-                    };
-                    s.label == b'?' || s.probability < gate
-                })
-                .count();
+            let doubtful = squares.iter().filter(|s| below_gate(**s)).count();
             if best.as_ref().is_none_or(|(b, _, _)| doubtful < *b) {
-                best = Some((doubtful, squares.iter().map(|s| s.label).collect(), cells));
+                best = Some((doubtful, squares.clone(), cells));
             }
+            readings.push(squares);
         }
     }
-    let (doubtful, labels, cells) = best?;
+    let (doubtful, squares, cells) = best?;
+    if !(1..=MAX_DOUBTFUL).contains(&doubtful)
+        || squares.len() != 64
+        || readings.iter().any(|reading| reading.len() != 64)
+    {
+        return None;
+    }
+    let labels: Vec<u8> = squares.iter().map(|s| s.label).collect();
     let consistent = readings.iter().all(|reading| {
-        reading.len() == labels.len()
-            && reading
-                .iter()
-                .zip(&labels)
-                .all(|(read, label)| read == label || *read == b'?')
+        reading
+            .iter()
+            .zip(&labels)
+            .all(|(read, label)| read.label == *label || read.label == b'?')
     });
     let firm = consistent.then(|| {
-        (0..labels.len())
+        (0..64)
             .map(|index| {
                 readings
                     .iter()
-                    .all(|reading| reading[index] == labels[index])
+                    .all(|reading| reading[index].label == labels[index])
             })
             .collect()
     });
-    ((1..=MAX_DOUBTFUL).contains(&doubtful) && labels.len() == 64 && !labels.contains(&b'?'))
-        .then(|| (labels, pooled(cells), firm))
+    let proposed = (0..64)
+        .map(|index| {
+            let mut named: Vec<u8> = readings
+                .iter()
+                .map(|reading| reading[index].label)
+                .filter(|label| *label != b'?')
+                .collect();
+            named.sort_unstable();
+            named.dedup();
+            named
+        })
+        .collect();
+    let steady = (0..64)
+        .map(|index| {
+            !below_gate(squares[index])
+                && readings
+                    .iter()
+                    .all(|reading| reading[index].label == labels[index])
+        })
+        .collect();
+    Some(Near {
+        doubtful: squares.iter().map(|s| below_gate(*s)).collect(),
+        labels,
+        cells: pooled(cells),
+        proposed,
+        steady,
+        firm,
+    })
+}
+
+/// White, black, or no piece.
+fn colour(label: u8) -> Option<bool> {
+    (label != b'.').then(|| label.is_ascii_uppercase())
+}
+
+/// The board as read when the templates vouch for every square: the neighbours name each
+/// square's reading, or abstain where every net named it alike (only when no net named any
+/// square differently, and never on a square some net failed to name).
+fn vouched(near: &Near, named: &[Option<u8>]) -> Option<Vec<u8>> {
+    if near.labels.contains(&b'?') {
+        return None;
+    }
+    let mut matched = 0;
+    for (index, voted) in named.iter().enumerate() {
+        match voted {
+            Some(voted) if *voted == near.labels[index] => matched += 1,
+            Some(_) => return None,
+            None if !near.firm.as_ref().is_some_and(|firm| firm[index]) => return None,
+            None => {}
+        }
+    }
+    (matched == 64 || matched >= MIN_MATCHED).then(|| near.labels.clone())
+}
+
+/// The board as settled when the templates vouch for all but a few steady squares: each
+/// doubtful square takes the piece its neighbours name if some net named it there and no net
+/// named a piece of the other colour; a square the neighbours leave unmatched (abstaining, or
+/// naming a piece no net named) keeps its reading only when it is steady.
+fn settled(near: &Near, named: &[Option<u8>]) -> Option<Vec<u8>> {
+    let mut out = near.labels.clone();
+    let (mut matched, mut unmatched) = (0, 0);
+    for (index, voted) in named.iter().enumerate() {
+        let label = near.labels[index];
+        let proposed = &near.proposed[index];
+        match *voted {
+            Some(voted) if voted == label => matched += 1,
+            Some(voted)
+                if near.doubtful[index]
+                    && proposed.contains(&voted)
+                    && proposed
+                        .iter()
+                        .all(|p| colour(*p).is_none() || colour(*p) == colour(voted)) =>
+            {
+                out[index] = voted;
+                matched += 1;
+            }
+            Some(voted) if near.steady[index] && !proposed.contains(&voted) => unmatched += 1,
+            None if near.steady[index] => unmatched += 1,
+            _ => return None,
+        }
+    }
+    (unmatched <= MAX_UNMATCHED && matched >= MIN_MATCHED).then_some(out)
 }
 
 /// Expands a FEN placement to 64 labels, rank 8 first.
@@ -249,37 +351,35 @@ pub fn certify(templates: &[(&[u8], &str)], near: &[&[u8]]) -> Vec<Option<String
     readings
         .into_iter()
         .map(|found| {
-            let (reading, cells, firm) = found?;
-            let mut matched = 0;
-            for (index, feature) in cells.iter().enumerate() {
-                let pool = squares
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, s)| keep[*i] && s.dark == dark(index));
-                let neighbours = nearest(feature, pool, NEIGHBOURS);
-                // The neighbours name a piece only when all agree and the nearest is within
-                // that piece's guard; otherwise they abstain.
-                let named = (neighbours.len() == NEIGHBOURS)
-                    .then(|| squares[neighbours[0].1].label)
-                    .filter(|voted| neighbours.iter().all(|(_, n)| squares[*n].label == *voted))
-                    .filter(|voted| {
-                        guard
-                            .get(&(*voted, dark(index)))
-                            .is_some_and(|limit| neighbours[0].0 <= *limit)
-                    });
-                match named {
-                    Some(voted) if voted == reading[index] => matched += 1,
-                    // Another piece named, or an abstention on a square some net failed to name
-                    // or on a board the nets read differently.
-                    Some(_) => return None,
-                    None if !firm.as_ref().is_some_and(|firm| firm[index]) => return None,
-                    None => {}
-                }
-            }
-            (matched == 64 || matched >= MIN_MATCHED)
-                .then(|| diagram::placement_of(&reading))
+            let near = found?;
+            let named: Vec<Option<u8>> = near
+                .cells
+                .iter()
+                .enumerate()
+                .map(|(index, feature)| {
+                    let pool = squares
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, s)| keep[*i] && s.dark == dark(index));
+                    let neighbours = nearest(feature, pool, NEIGHBOURS);
+                    // The neighbours name a piece only when all agree and the nearest is within
+                    // that piece's guard; otherwise they abstain.
+                    (neighbours.len() == NEIGHBOURS)
+                        .then(|| squares[neighbours[0].1].label)
+                        .filter(|voted| {
+                            neighbours.iter().all(|(_, n)| squares[*n].label == *voted)
+                        })
+                        .filter(|voted| {
+                            guard
+                                .get(&(*voted, dark(index)))
+                                .is_some_and(|limit| neighbours[0].0 <= *limit)
+                        })
+                })
+                .collect();
+            [vouched(&near, &named), settled(&near, &named)]
+                .into_iter()
                 .flatten()
-                .filter(|p| plausible(p))
+                .find_map(|labels| diagram::placement_of(&labels).filter(|p| plausible(p)))
         })
         .collect()
 }
