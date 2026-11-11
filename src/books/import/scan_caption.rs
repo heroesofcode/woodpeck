@@ -150,7 +150,10 @@ pub(super) fn apply_pending_scan_sides(
     cover: Option<&[u8]>,
 ) {
     for picture in pictures.iter_mut().flatten() {
-        if picture.scan_side.is_none() && picture.scan_move.is_none() {
+        if picture.scan_side.is_none()
+            && picture.scan_move.is_none()
+            && picture.scan_replay.is_empty()
+        {
             continue;
         }
         if cover.is_some_and(|bytes| bytes == picture.bytes.as_slice()) {
@@ -162,12 +165,17 @@ pub(super) fn apply_pending_scan_sides(
         let Some(png) = super::pdf::diagram_png(&picture.bytes) else {
             continue;
         };
-        picture.bytes = match (picture.scan_side, &picture.scan_move) {
+        let png = match (picture.scan_side, &picture.scan_move) {
             (Some(white), _) => diagram::with_scan_side(&png, white),
             (None, Some((white, destination))) => {
                 diagram::with_scan_move(&png, *white, destination)
             }
             (None, None) => png,
+        };
+        picture.bytes = if picture.scan_replay.is_empty() {
+            png
+        } else {
+            diagram::with_scan_replay(&png, &picture.scan_replay)
         };
     }
 }
@@ -175,17 +183,34 @@ pub(super) fn apply_pending_scan_sides(
 /// One board's printed move: the mover and its destination.
 pub(super) type PrintedMove = Option<(bool, String)>;
 
-/// Caption sides and printed moves for `claimed`, or `None` when the page certificate does not
-/// hold. `Some(true)` is White. `None` inside a vector abstains for that board.
+/// Sides certified for a scanned page, all from one certified OCR pass.
+pub(super) struct PendingSides {
+    /// Caption side per board. `Some(true)` is White; `None` abstains for that board.
+    pub sides: Vec<Option<bool>>,
+    /// Printed move per board.
+    pub moves: Vec<PrintedMove>,
+    /// Placements reached by game text replayed from move 1 on this page, with the side to move.
+    pub replayed: Vec<(String, bool)>,
+}
+
+/// Caption sides, printed moves and replayed placements for `claimed`, or `None` when the page
+/// certificate does not hold.
 pub(super) fn pending_sides(
     gray: &Gray,
     facts: RenderFacts,
     claimed: &[Frame],
     targets: &[ScanTarget],
-) -> Option<(Vec<Option<bool>>, Vec<PrintedMove>)> {
+) -> Option<PendingSides> {
     let lines = recognize_page(gray)?;
     let (cert, payload) = certify(gray, facts, &lines)?;
-    bind(&cert, gray, &payload, claimed, targets)
+    let (sides, moves) = bind(&cert, gray, &payload, claimed, targets)?;
+    let replayed =
+        super::scan_replay::replayed_placements(&payload.lines, &cert.frames, gray.width);
+    Some(PendingSides {
+        sides,
+        moves,
+        replayed,
+    })
 }
 
 fn recognize_page(gray: &Gray) -> Option<Vec<OcrLine>> {
