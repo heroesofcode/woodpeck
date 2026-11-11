@@ -3,8 +3,9 @@
 //! A board the square nets read with one to three doubtful squares is accepted only when every
 //! one of its 64 squares matches, by nearest neighbours, squares of boards from the same book
 //! whose pieces are independently known: located boards whose exact placement occurred in
-//! real games ([`super::game_sides::seen`]). A board every net reads identically at every
-//! scale is also accepted when no square's neighbours name another piece and at least half
+//! real games ([`super::game_sides::seen`]). A board no net at any scale reads differently
+//! (a net may only fail to name a square) is also accepted when no square's neighbours name
+//! another piece, every square some net failed to name is matched outright, and at least half
 //! of its squares are matched outright. The templates never change a square: the nets' own
 //! reading is kept or the board stays unread.
 
@@ -22,7 +23,7 @@ const MIN_CLASS: usize = 5;
 /// Pooled side of a square feature (the nets' 32×32 cell averaged in 2×2 blocks).
 const SIDE: usize = diagram::CELL / 2;
 const MAX_DOUBTFUL: usize = 3;
-/// Fewest squares of an agreed board the templates must match outright.
+/// Fewest squares of a consistent board the templates must match outright.
 const MIN_MATCHED: usize = 32;
 /// Template boards used per book, spread evenly; bounds the quadratic cleaning step.
 const MAX_TEMPLATES: usize = 300;
@@ -30,8 +31,9 @@ const MAX_TEMPLATES: usize = 300;
 type Feature = Vec<f32>;
 /// One located grid of nets-sized cells.
 type Grid = Vec<Vec<f32>>;
-/// A near reading: labels, pooled square features, and whether every net agreed on all 64.
-type Near = (Vec<u8>, Vec<Feature>, bool);
+/// A near reading: labels, pooled square features, and, when no net at any scale named a
+/// square differently, which squares every net named alike.
+type Near = (Vec<u8>, Vec<Feature>, Option<Vec<bool>>);
 
 /// One template square: label, colour (0 = light), owning board, pixels.
 struct Square {
@@ -153,9 +155,24 @@ fn near_reading(bytes: &[u8]) -> Option<Near> {
         }
     }
     let (doubtful, labels, cells) = best?;
-    let agreed = readings.iter().all(|reading| *reading == labels);
+    let consistent = readings.iter().all(|reading| {
+        reading.len() == labels.len()
+            && reading
+                .iter()
+                .zip(&labels)
+                .all(|(read, label)| read == label || *read == b'?')
+    });
+    let firm = consistent.then(|| {
+        (0..labels.len())
+            .map(|index| {
+                readings
+                    .iter()
+                    .all(|reading| reading[index] == labels[index])
+            })
+            .collect()
+    });
     ((1..=MAX_DOUBTFUL).contains(&doubtful) && labels.len() == 64 && !labels.contains(&b'?'))
-        .then(|| (labels, pooled(cells), agreed))
+        .then(|| (labels, pooled(cells), firm))
 }
 
 /// Expands a FEN placement to 64 labels, rank 8 first.
@@ -232,7 +249,7 @@ pub fn certify(templates: &[(&[u8], &str)], near: &[&[u8]]) -> Vec<Option<String
     readings
         .into_iter()
         .map(|found| {
-            let (reading, cells, agreed) = found?;
+            let (reading, cells, firm) = found?;
             let mut matched = 0;
             for (index, feature) in cells.iter().enumerate() {
                 let pool = squares
@@ -252,9 +269,10 @@ pub fn certify(templates: &[(&[u8], &str)], near: &[&[u8]]) -> Vec<Option<String
                     });
                 match named {
                     Some(voted) if voted == reading[index] => matched += 1,
-                    // Another piece named, or an abstention on a board the nets did not all agree on.
+                    // Another piece named, or an abstention on a square some net failed to name
+                    // or on a board the nets read differently.
                     Some(_) => return None,
-                    None if !agreed => return None,
+                    None if !firm.as_ref().is_some_and(|firm| firm[index]) => return None,
                     None => {}
                 }
             }
