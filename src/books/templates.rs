@@ -267,11 +267,16 @@ fn vouched(near: &Near, named: &[Option<u8>]) -> Option<Vec<u8>> {
 /// naming a piece no net named) keeps its reading only when it is steady. A doubtful square
 /// the neighbours abstain on counts as unmatched and takes the one piece every net that named
 /// it named there (never an empty square) when most readings named it, and then only if the
-/// board keeps within one set of men per side.
+/// board keeps within one set of men per side. Likewise a square read above the gate as a
+/// piece, which every reading that named it named alike, keeps that piece when the neighbours
+/// abstain and most readings named it. A doubtful square the neighbours name as the nets' one
+/// piece in the other colour keeps the nets' colour, and only when the neighbours' colour would
+/// give that side more than one set of men.
 fn settled(near: &Near, named: &[Option<u8>]) -> Option<Vec<u8>> {
     let mut out = near.labels.clone();
     let (mut matched, mut unmatched) = (0, 0);
     let mut kept = false;
+    let mut flipped = Vec::new();
     for (index, voted) in named.iter().enumerate() {
         let label = near.labels[index];
         let proposed = &near.proposed[index];
@@ -298,10 +303,45 @@ fn settled(near: &Near, named: &[Option<u8>]) -> Option<Vec<u8>> {
                 unmatched += 1;
                 kept = true;
             }
+            None if !near.doubtful[index]
+                && label != b'.'
+                && proposed.as_slice() == [label]
+                && 2 * near.unnamed[index] < near.views =>
+            {
+                unmatched += 1;
+                kept = true;
+            }
+            Some(voted)
+                if near.doubtful[index]
+                    && proposed.len() == 1
+                    && proposed[0] != b'.'
+                    && proposed[0] != voted
+                    && proposed[0].eq_ignore_ascii_case(&voted)
+                    && 2 * near.unnamed[index] < near.views =>
+            {
+                out[index] = proposed[0];
+                unmatched += 1;
+                kept = true;
+                flipped.push((index, voted));
+            }
             _ => return None,
         }
     }
-    (unmatched <= MAX_UNMATCHED && matched >= MIN_MATCHED && (!kept || within_one_set(&out)))
+    // Every way of giving any of those squares back the neighbours' colour must overfill a side;
+    // two queens read the other way round (a swap) stay unsettled.
+    let other_colour_full = (1..1usize << flipped.len()).all(|subset| {
+        let mut other = out.clone();
+        for (bit, &(index, voted)) in flipped.iter().enumerate() {
+            if subset & (1 << bit) != 0 {
+                other[index] = voted;
+            }
+        }
+        !within_one_set(&other)
+    });
+    (unmatched <= MAX_UNMATCHED
+        && matched >= MIN_MATCHED
+        && (!kept || within_one_set(&out))
+        && other_colour_full)
         .then_some(out)
 }
 
@@ -451,7 +491,7 @@ fn plausible(placement: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{labels_of, percentile, plausible, within_one_set};
+    use super::{Near, labels_of, percentile, plausible, settled, within_one_set};
 
     #[test]
     fn placements_expand_to_64_labels() {
@@ -467,6 +507,65 @@ mod tests {
         assert!(plausible("4k3/8/8/8/8/8/4P3/4K3"));
         assert!(!plausible("8/8/8/8/8/8/4P3/4K3"));
         assert!(!plausible("4k2P/8/8/8/8/8/8/4K3"));
+    }
+
+    /// A near reading where every net at every scale named each square as `placement` does.
+    fn near_of(placement: &str) -> Near {
+        let labels = labels_of(placement).unwrap();
+        Near {
+            doubtful: vec![false; 64],
+            cells: Vec::new(),
+            proposed: labels.iter().map(|label| vec![*label]).collect(),
+            unnamed: vec![0; 64],
+            views: 3,
+            steady: vec![true; 64],
+            firm: None,
+            labels,
+        }
+    }
+
+    #[test]
+    fn a_piece_some_readings_left_unnamed_survives_an_abstaining_template() {
+        let mut near = near_of("4k3/8/8/8/8/8/8/R3K3");
+        let a1 = 56;
+        near.steady[a1] = false;
+        near.unnamed[a1] = 1;
+        let mut named: Vec<Option<u8>> = near.labels.iter().copied().map(Some).collect();
+        named[a1] = None;
+        assert_eq!(settled(&near, &named).unwrap()[a1], b'R');
+        // An empty square some readings left unnamed may hide a piece: it does not settle.
+        let b1 = 57;
+        near.steady[b1] = false;
+        near.unnamed[b1] = 1;
+        named[b1] = None;
+        assert!(settled(&near, &named).is_none());
+    }
+
+    #[test]
+    fn the_nets_colour_stands_only_when_the_templates_colour_overfills_a_side() {
+        let mut near = near_of("3qk3/8/8/8/8/8/8/3QK3");
+        let d8 = 3;
+        near.doubtful[d8] = true;
+        near.steady[d8] = false;
+        let mut named: Vec<Option<u8>> = near.labels.iter().copied().map(Some).collect();
+        named[d8] = Some(b'Q');
+        assert_eq!(settled(&near, &named).unwrap()[d8], b'q');
+        // Both queens read against the neighbours could as well be the other way round.
+        let mut swap = near_of("3qk3/8/8/8/8/8/8/3QK3");
+        let d1 = 59;
+        for index in [d8, d1] {
+            swap.doubtful[index] = true;
+            swap.steady[index] = false;
+        }
+        let mut swapped: Vec<Option<u8>> = swap.labels.iter().copied().map(Some).collect();
+        swapped[d8] = Some(b'Q');
+        swapped[d1] = Some(b'q');
+        assert!(settled(&swap, &swapped).is_none());
+        // Without White's queen on d1 the templates' white queen is possible: no settle.
+        near.labels[d1] = b'.';
+        near.proposed[d1] = vec![b'.'];
+        named[d1] = Some(b'.');
+        assert!(settled(&near, &named).is_none());
     }
 
     #[test]
