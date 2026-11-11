@@ -283,6 +283,18 @@ fn reading_of_placement(placement: &str) -> Option<String> {
             .collect(),
     )
 }
+/// Replayed placements stored beside scanned diagram pixels, keyed by asset path.
+fn replays_named(assets: &[super::document::Asset]) -> HashMap<String, Vec<(String, bool)>> {
+    assets
+        .iter()
+        .filter_map(|asset| {
+            Some((
+                asset.path.clone(),
+                super::diagram::stated_scan_replay(&asset.bytes)?,
+            ))
+        })
+        .collect()
+}
 /// Sides stored beside diagram pixels, keyed by asset path.
 fn sides_named(
     assets: &[super::document::Asset],
@@ -367,6 +379,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
             ))
         })
         .collect();
+    let scan_replays = replays_named(&assets);
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let resolve_all = |placements: &HashMap<String, Option<String>>| {
         let mut best = None;
@@ -384,6 +397,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
                 &key_sides,
                 &scan_sides,
                 &scan_moves,
+                &scan_replays,
             );
             if best
                 .as_ref()
@@ -494,6 +508,7 @@ fn resolve_with(
     key_sides: &HashMap<String, bool>,
     scan_sides: &HashMap<String, bool>,
     scan_moves: &HashMap<String, (bool, String)>,
+    scan_replays: &HashMap<String, Vec<(String, bool)>>,
 ) -> Book {
     let (recognized, unconfirmed) = recognized_positions(
         &document,
@@ -506,6 +521,7 @@ fn resolve_with(
         key_sides,
         scan_sides,
         scan_moves,
+        scan_replays,
     );
     let mut book = Book {
         version: 1,
@@ -1144,6 +1160,7 @@ fn recognized_positions(
     key_sides: &HashMap<String, bool>,
     scan_sides: &HashMap<String, bool>,
     scan_moves: &HashMap<String, (bool, String)>,
+    scan_replays: &HashMap<String, Vec<(String, bool)>>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
@@ -1329,6 +1346,42 @@ fn recognized_positions(
                     && let Some(pos) = placed(&placement, side)
                     && reaches(&pos, destination)
                 {
+                    turn = Turn::Confirmed(pos);
+                }
+            }
+            // Game text on the scanned page, replayed from move 1, reaches this exact placement
+            // with one side to move. It fills only a side nothing else named, and abstains when
+            // any other reading of the board, including the game table, names the other side.
+            if matches!(turn, Turn::Unknown)
+                && marker.is_none()
+                && let BlockKind::Image { path, .. } = &block.kind
+                && let Some(white) = scan_replays
+                    .get(path)
+                    .and_then(|replayed| replayed_side(replayed, &placement))
+            {
+                let side = if white { Color::White } else { Color::Black };
+                let other = [
+                    caption,
+                    printed,
+                    triangle,
+                    key,
+                    scan,
+                    printed_move.map(|m| m.0),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|named| named != white)
+                    || [
+                        before.stated,
+                        before.after_move,
+                        before.past_number,
+                        before.puzzle_label,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(|named| named != side)
+                    || super::game_sides::side(&placement).is_some_and(|w| w != white);
+                if !other && let Some(pos) = placed(&placement, side) {
                     turn = Turn::Confirmed(pos);
                 }
             }
@@ -2121,6 +2174,15 @@ fn grid_cell(cell: &str, alphabet: &str) -> Option<Cell> {
     } else {
         role.to_ascii_lowercase()
     }))
+}
+/// The side the replayed game text gives `placement`, when every replay that reached it agrees.
+fn replayed_side(replayed: &[(String, bool)], placement: &str) -> Option<bool> {
+    let mut sides = replayed
+        .iter()
+        .filter(|(reached, _)| reached == placement)
+        .map(|&(_, white)| white);
+    let first = sides.next()?;
+    sides.all(|white| white == first).then_some(first)
 }
 fn placed(placement: &str, side: Color) -> Option<Chess> {
     position(&format!("{placement} {} - - 0 1", side.char()))

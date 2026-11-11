@@ -689,6 +689,37 @@ pub fn stated_scan_move(bytes: &[u8]) -> Option<(bool, String)> {
         .then(|| (white, destination.to_owned()))
 }
 
+/// Key of the PNG text chunk holding placements reached by game text replayed on a scan.
+const SCAN_REPLAY_KEY: &[u8] = b"woodpeck-scan-replay";
+
+/// A PNG with the placements (first FEN field) that the page's game text reaches when replayed
+/// from move 1, each with its side to move. Weaker than every other pixel signal: the resolver
+/// uses one only when the board's whole placement equals it and nothing else named a side.
+pub fn with_scan_replay(png: &[u8], replayed: &[(String, bool)]) -> Vec<u8> {
+    let value: Vec<String> = replayed
+        .iter()
+        .map(|(placement, white)| format!("{placement} {}", if *white { 'w' } else { 'b' }))
+        .collect();
+    with_text(png, SCAN_REPLAY_KEY, &value.join(";"))
+}
+
+/// The placements stored by [`with_scan_replay`], each with `true` for White to move. A
+/// malformed entry drops the whole list.
+pub fn stated_scan_replay(bytes: &[u8]) -> Option<Vec<(String, bool)>> {
+    let text = String::from_utf8(text_chunk(bytes, SCAN_REPLAY_KEY)?).ok()?;
+    text.split(';')
+        .map(|entry| {
+            let (placement, side) = entry.split_once(' ')?;
+            let white = match side {
+                "w" => true,
+                "b" => false,
+                _ => return None,
+            };
+            Some((placement.to_owned(), white))
+        })
+        .collect()
+}
+
 fn with_text(png: &[u8], key: &[u8], value: &str) -> Vec<u8> {
     const HEADER: usize = 8 + 25;
     if png.len() < HEADER || !png.starts_with(b"\x89PNG\r\n\x1a\n") || &png[12..16] != b"IHDR" {

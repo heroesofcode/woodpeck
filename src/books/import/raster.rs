@@ -40,7 +40,8 @@ impl Renderer {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        clippy::cast_precision_loss
+        clippy::cast_precision_loss,
+        clippy::too_many_lines
     )]
     /// A board also read from diagram-font glyphs is stored with that placement, which
     /// then takes precedence over reading its pixels.
@@ -144,6 +145,7 @@ impl Renderer {
                 rendered: true,
                 scan_side: None,
                 scan_move: None,
+                scan_replay: Vec::new(),
             });
         }
         // Squares and triangles are decided with every board in view, so a mark shared by two
@@ -195,15 +197,15 @@ fn attach_scan_captions(
             eligible: true,
         })
         .collect();
-    let Some((sides, moves)) = super::scan_caption::pending_sides(gray, facts, detected, &targets)
-    else {
+    let Some(pending) = super::scan_caption::pending_sides(gray, facts, detected, &targets) else {
         return;
     };
-    for ((picture, side), printed) in placed.iter_mut().zip(sides).zip(moves) {
+    for ((picture, side), printed) in placed.iter_mut().zip(pending.sides).zip(pending.moves) {
         picture.scan_side = side;
         if side.is_none() {
             picture.scan_move = printed;
         }
+        picture.scan_replay.clone_from(&pending.replayed);
     }
 }
 

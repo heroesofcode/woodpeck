@@ -21,6 +21,9 @@ pub(super) struct Placed {
     /// Mover and destination of the move printed right under the board, applied after
     /// `scan_side` and only when the board allows it.
     pub scan_move: Option<(bool, String)>,
+    /// Placements the page's game text reaches when replayed from move 1, with the side to
+    /// move. The resolver uses one only when the board's own placement equals it.
+    pub scan_replay: Vec<(String, bool)>,
 }
 /// Smallest side, in pixels, of a picture worth keeping (icons and rules are skipped).
 const MIN_SIDE: i64 = 120;
@@ -95,6 +98,7 @@ pub(super) fn pictures(doc: &Document, page: ObjectId) -> Vec<Placed> {
                         rendered: false,
                         scan_side: None,
                         scan_move: None,
+                        scan_replay: Vec::new(),
                     });
                 }
             }
