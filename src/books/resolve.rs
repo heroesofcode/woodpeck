@@ -450,29 +450,10 @@ fn certify_near_reads(
     if near.is_empty() {
         return false;
     }
-    let mut templates: Vec<(&[u8], String)> = Vec::new();
-    let mut used = std::collections::HashSet::new();
-    for block in book.document.pages.iter().flat_map(|p| &p.blocks) {
-        let (path, placement) = match &block.kind {
-            BlockKind::RecognizedDiagram { path, fen, .. } => {
-                (path, fen.split(' ').next().unwrap_or_default().to_owned())
-            }
-            BlockKind::UnconfirmedDiagram {
-                path, placement, ..
-            } => (path, placement.clone()),
-            _ => continue,
-        };
-        // Only placements real games reached: the app's own reading, even with a side the
-        // moves confirmed, can miss a piece the moves never touch.
-        if !super::game_sides::seen(&placement) {
-            continue;
-        }
-        if used.insert(path.clone())
-            && let Some(bytes) = bytes_of(path)
-        {
-            templates.push((bytes, placement));
-        }
-    }
+    let templates: Vec<(&[u8], String)> = template_pool(&book.document)
+        .into_iter()
+        .filter_map(|(path, placement)| bytes_of(path).map(|bytes| (bytes, placement)))
+        .collect();
     let templates: Vec<(&[u8], &str)> = templates.iter().map(|(b, p)| (*b, p.as_str())).collect();
     let near: Vec<(String, &[u8])> = near
         .into_iter()
@@ -493,6 +474,36 @@ fn certify_near_reads(
         }
     }
     added
+}
+/// Shown boards whose placement can certify a near read. Only placements real games reached: the
+/// app's own reading, even with a side the moves confirmed, can miss a piece the moves never
+/// touch. A book with no such board (endgames, studies) falls back to its boards read in full
+/// with a side the moves confirmed.
+fn template_pool(document: &Document) -> Vec<(&str, String)> {
+    let mut seen = Vec::new();
+    let mut confirmed = Vec::new();
+    let mut used = std::collections::HashSet::new();
+    for block in document.pages.iter().flat_map(|p| &p.blocks) {
+        let (path, placement, read) = match &block.kind {
+            BlockKind::RecognizedDiagram { path, fen, .. } => (
+                path.as_str(),
+                fen.split(' ').next().unwrap_or_default().to_owned(),
+                true,
+            ),
+            BlockKind::UnconfirmedDiagram {
+                path, placement, ..
+            } => (path.as_str(), placement.clone(), false),
+            _ => continue,
+        };
+        if super::game_sides::seen(&placement) {
+            if used.insert(path) {
+                seen.push((path, placement));
+            }
+        } else if read && !confirmed.iter().any(|(p, _)| *p == path) {
+            confirmed.push((path, placement));
+        }
+    }
+    if seen.is_empty() { confirmed } else { seen }
 }
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One pass keeps block order, sections and seeding together.
 fn resolve_with(
@@ -4166,5 +4177,45 @@ mod safety_tests {
         assert_eq!(runs.iter().filter(|r| r.node_id.is_some()).count(), 3);
         assert_eq!(book.nodes[0].nags, ["!"]);
         assert_eq!(book.nodes[1].comment, "central advance");
+    }
+    #[test]
+    fn template_pool_falls_back_to_confirmed_reads_only_without_game_boards() {
+        const START: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+        const ENDGAME: &str = "8/8/4k3/8/8/4K3/4P3/8";
+        let document = |boards: &[(&str, &str, bool)]| {
+            let mut page = Page::default();
+            for (path, placement, confirmed) in boards {
+                let kind = if *confirmed {
+                    BlockKind::RecognizedDiagram {
+                        path: (*path).into(),
+                        alt: String::new(),
+                        fen: format!("{placement} w - - 0 1"),
+                    }
+                } else {
+                    BlockKind::UnconfirmedDiagram {
+                        path: (*path).into(),
+                        alt: String::new(),
+                        placement: (*placement).into(),
+                    }
+                };
+                page.push("", kind);
+            }
+            Document {
+                cover: None,
+                isbn: None,
+                title: String::new(),
+                author: String::new(),
+                format: "test".into(),
+                pages: vec![page],
+                assets: vec![],
+            }
+        };
+        assert!(crate::books::game_sides::seen(START) && !crate::books::game_sides::seen(ENDGAME));
+        // No board real games reached: boards read with a confirmed side are the pool.
+        let study = document(&[("a.png", ENDGAME, true), ("b.png", ENDGAME, false)]);
+        assert_eq!(template_pool(&study), vec![("a.png", ENDGAME.to_owned())]);
+        // Any such board keeps the pool to game-reached placements.
+        let games = document(&[("a.png", ENDGAME, true), ("c.png", START, false)]);
+        assert_eq!(template_pool(&games), vec![("c.png", START.to_owned())]);
     }
 }
