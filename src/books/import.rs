@@ -18,6 +18,7 @@ mod scan_caption;
 mod scan_ocr;
 mod scan_replay;
 mod side_letter;
+mod solution_line;
 
 #[derive(Debug, Error)]
 pub enum ImportError {
@@ -75,6 +76,9 @@ fn stamp_pdf_sides(path: &Path, extracted: &mut pdf::Extracted) {
         &mut extracted.pictures,
         extracted.cover.as_deref(),
     );
+    // The first move printed under a board in its own column. The resolver uses it only when
+    // every other signal left the side unknown and the move is legal for that side alone.
+    solution_line::stamp_solution_lines(path, &mut extracted.pictures, extracted.cover.as_deref());
     // An OCR turn caption is last: it fills only a side every earlier pass left unknown.
     scan_caption::apply_pending_scan_sides(&mut extracted.pictures, extracted.cover.as_deref());
 }

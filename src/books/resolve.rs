@@ -295,6 +295,16 @@ fn replays_named(assets: &[super::document::Asset]) -> HashMap<String, Vec<(Stri
         })
         .collect()
 }
+/// Printed moves (mover and move) stored beside diagram pixels, keyed by asset path.
+fn moves_named(
+    assets: &[super::document::Asset],
+    stated: fn(&[u8]) -> Option<(bool, String)>,
+) -> HashMap<String, (bool, String)> {
+    assets
+        .iter()
+        .filter_map(|asset| Some((asset.path.clone(), stated(&asset.bytes)?)))
+        .collect()
+}
 /// Sides stored beside diagram pixels, keyed by asset path.
 fn sides_named(
     assets: &[super::document::Asset],
@@ -371,16 +381,9 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
     let triangle_sides = sides_named(&assets, super::diagram::stated_triangle_side);
     let key_sides = sides_named(&assets, super::diagram::stated_key_side);
     let scan_sides = sides_named(&assets, super::diagram::stated_scan_side);
-    let scan_moves: HashMap<String, (bool, String)> = assets
-        .iter()
-        .filter_map(|asset| {
-            Some((
-                asset.path.clone(),
-                super::diagram::stated_scan_move(&asset.bytes)?,
-            ))
-        })
-        .collect();
+    let scan_moves = moves_named(&assets, super::diagram::stated_scan_move);
     let scan_replays = replays_named(&assets);
+    let solution_moves = moves_named(&assets, super::diagram::stated_solution_move);
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let resolve_all = |placements: &HashMap<String, Option<String>>| {
         let mut best = None;
@@ -399,6 +402,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
                 &scan_sides,
                 &scan_moves,
                 &scan_replays,
+                &solution_moves,
             );
             if best
                 .as_ref()
@@ -552,6 +556,7 @@ fn resolve_with(
     scan_sides: &HashMap<String, bool>,
     scan_moves: &HashMap<String, (bool, String)>,
     scan_replays: &HashMap<String, Vec<(String, bool)>>,
+    solution_moves: &HashMap<String, (bool, String)>,
 ) -> Book {
     let (recognized, unconfirmed) = recognized_positions(
         &document,
@@ -565,6 +570,7 @@ fn resolve_with(
         scan_sides,
         scan_moves,
         scan_replays,
+        solution_moves,
     );
     let mut book = Book {
         version: 1,
@@ -1204,6 +1210,7 @@ fn recognized_positions(
     scan_sides: &HashMap<String, bool>,
     scan_moves: &HashMap<String, (bool, String)>,
     scan_replays: &HashMap<String, Vec<(String, bool)>>,
+    solution_moves: &HashMap<String, (bool, String)>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
@@ -1428,6 +1435,44 @@ fn recognized_positions(
                     turn = Turn::Confirmed(pos);
                 }
             }
+            // The solution printed right under the board opens with move 1 for one side. It
+            // fills only a side nothing else named, abstains when any other reading names the
+            // other side, and holds only when the move is legal for that side and not the other.
+            if matches!(turn, Turn::Unknown)
+                && marker.is_none()
+                && caption.is_none()
+                && printed.is_none()
+                && triangle.is_none()
+                && key.is_none()
+                && scan.is_none()
+                && printed_move.is_none()
+                && let BlockKind::Image { path, .. } = &block.kind
+                && let Some((white, san)) = solution_moves.get(path)
+            {
+                let side = if *white { Color::White } else { Color::Black };
+                let other = [
+                    before.stated,
+                    before.after_move,
+                    before.past_number,
+                    before.puzzle_label,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|named| named != side)
+                    || scan_replays
+                        .get(path)
+                        .and_then(|replayed| replayed_side(replayed, &placement))
+                        .is_some_and(|w| w != *white)
+                    || super::game_sides::side(&placement).is_some_and(|w| w != *white);
+                let theirs = placed(&placement, side.other()).is_some_and(|pos| plays(&pos, san));
+                if !other
+                    && !theirs
+                    && let Some(pos) = placed(&placement, side)
+                    && plays(&pos, san)
+                {
+                    turn = Turn::Confirmed(pos);
+                }
+            }
             // Weakest of all: the placement occurred in real games with only one side to move.
             if matches!(turn, Turn::Unknown)
                 && printed_move.is_none()
@@ -1522,6 +1567,20 @@ fn restates(placement: &str, side: Color, word: &str) -> bool {
     board
         .piece_at(square)
         .is_some_and(|piece| piece.color == side)
+}
+/// `true` when the side to move in `pos` has a legal move written `san` (check marks and the
+/// capture sign are not compared; castling rights are not printed, so castling never counts).
+fn plays(pos: &Chess, san: &str) -> bool {
+    let bare = |text: &str| -> String {
+        text.chars()
+            .filter(|c| !matches!(c, '+' | '#' | 'x'))
+            .collect()
+    };
+    let wanted = bare(san);
+    pos.legal_moves().iter().any(|mv| {
+        let printed = shakmaty::san::San::from_move(pos, *mv).to_string();
+        bare(&printed) == wanted
+    })
 }
 /// `"O-O"` or `"O-O-O"` for a castling token however it is typeset (`0-0`, `O–O-O`, `0-0+`).
 fn castle_token(word: &str) -> Option<&'static str> {
