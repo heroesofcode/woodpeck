@@ -415,22 +415,26 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
     }
     // Last, boards whose usual frame runs past the image edge get one from inside the image.
     // They come after the templates so they never vouch for other boards.
-    if recognizer.is_some_and(|r| place_inside_frames(r, &assets, &mut placements)) {
+    if recognizer.is_some_and(|r| place_inside_frames(r, &best, &assets, &mut placements)) {
         best = resolve_all(&placements);
     }
     best.document.assets = assets;
     best
 }
-/// Boards still without a placement get one from a frame kept inside the image, when the
-/// recognizer offers it. Placed boards are never touched. Returns whether any board was added.
+/// Boards still shown as plain images get a placement from a frame kept inside the image, when
+/// the recognizer offers it. Boards with a placement, or shown from an ungated reading, are
+/// never touched. Returns whether any board was added.
 fn place_inside_frames(
     recognizer: &dyn DiagramRecognizer,
+    book: &Book,
     assets: &[super::document::Asset],
     placements: &mut HashMap<String, Option<String>>,
 ) -> bool {
+    let shown = shown_paths(book);
     let mut added = false;
     for (path, placement) in placements.iter_mut() {
         if placement.is_none()
+            && !shown.contains(path.as_str())
             && let Some(asset) = assets.iter().find(|a| &a.path == path)
             && let Some(inside) = recognizer.placement_inside(&asset.bytes)
         {
@@ -439,6 +443,19 @@ fn place_inside_frames(
         }
     }
     added
+}
+/// Paths of the boards a resolved book shows as read, side confirmed or not.
+fn shown_paths(book: &Book) -> std::collections::HashSet<&str> {
+    book.document
+        .pages
+        .iter()
+        .flat_map(|p| &p.blocks)
+        .filter_map(|block| match &block.kind {
+            BlockKind::RecognizedDiagram { path, .. }
+            | BlockKind::UnconfirmedDiagram { path, .. } => Some(path.as_str()),
+            _ => None,
+        })
+        .collect()
 }
 /// Boards the nets nearly read get their placement when the book's own known boards certify
 /// every square (see [`super::templates`]). Returns whether any board was added.
@@ -455,17 +472,7 @@ fn certify_near_reads(
     };
     // Boards the first pass already shows (for example, an ungated reading the replayed moves
     // confirmed) keep what they have; only boards still shown as plain images are candidates.
-    let shown: std::collections::HashSet<&str> = book
-        .document
-        .pages
-        .iter()
-        .flat_map(|p| &p.blocks)
-        .filter_map(|block| match &block.kind {
-            BlockKind::RecognizedDiagram { path, .. }
-            | BlockKind::UnconfirmedDiagram { path, .. } => Some(path.as_str()),
-            _ => None,
-        })
-        .collect();
+    let shown = shown_paths(book);
     let mut near: Vec<String> = placements
         .iter()
         .filter(|(path, placement)| placement.is_none() && !shown.contains(path.as_str()))
@@ -3764,6 +3771,36 @@ mod image_tests {
             Some("rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2")
         );
         assert_eq!(b.nodes.len(), 4);
+    }
+    /// Like [`Reads`], but also offers an unrelated inside-frame placement for every image.
+    struct ReadsWithInside(String);
+    impl DiagramRecognizer for ReadsWithInside {
+        fn placement(&self, _: &[u8]) -> Option<String> {
+            None
+        }
+        fn reading(&self, _: &[u8]) -> Option<String> {
+            Some(self.0.clone())
+        }
+        fn placement_inside(&self, _: &[u8]) -> Option<String> {
+            Some("4k3/8/8/8/8/8/8/4K3".to_owned())
+        }
+    }
+    #[test]
+    fn an_inside_frame_never_replaces_a_board_shown_from_its_reading() {
+        let b = around_image("1. e4 e5 2. Nf3", reading_of(AFTER_NF3, &[4]), "2... Nc6");
+        let mut document = b.document;
+        document.pages[0].blocks[1].kind = BlockKind::Image {
+            path: "images/d.png".into(),
+            alt: String::new(),
+        };
+        let b = resolve_using(
+            document,
+            Some(&ReadsWithInside(reading_of(AFTER_NF3, &[4]))),
+        );
+        assert_eq!(
+            recognized(&b),
+            Some("rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2")
+        );
     }
     #[test]
     fn captions_keep_confirmed_and_resume_positions_without_renumbering() {
