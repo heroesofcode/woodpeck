@@ -722,6 +722,32 @@ pub fn stated_scan_move(bytes: &[u8]) -> Option<(bool, String)> {
         .then(|| (white, destination.to_owned()))
 }
 
+/// Key of the PNG text chunk holding the first move printed under a board on a text page.
+const SOLUTION_MOVE_KEY: &[u8] = b"woodpeck-solution-move";
+
+/// A PNG with the mover and the move (SAN without check marks) that open the solution printed
+/// right under the board. The resolver uses it only while every other signal is silent, and
+/// only when the move is legal for that side and not for the other.
+pub fn with_solution_move(png: &[u8], white: bool, san: &str) -> Vec<u8> {
+    let value = format!("{}{san}", if white { 'w' } else { 'b' });
+    with_text(png, SOLUTION_MOVE_KEY, &value)
+}
+
+/// The move stored by [`with_solution_move`]: `(false, "Qb1")` when Black plays Qb1.
+pub fn stated_solution_move(bytes: &[u8]) -> Option<(bool, String)> {
+    let text = String::from_utf8(text_chunk(bytes, SOLUTION_MOVE_KEY)?).ok()?;
+    let white = match text.as_bytes().first()? {
+        b'w' => true,
+        b'b' => false,
+        _ => return None,
+    };
+    let san = &text[1..];
+    (!san.is_empty()
+        && san.len() <= 8
+        && san.chars().all(|c| "KQRBNabcdefgh12345678xO-=".contains(c)))
+    .then(|| (white, san.to_owned()))
+}
+
 /// Key of the PNG text chunk holding placements reached by game text replayed on a scan.
 const SCAN_REPLAY_KEY: &[u8] = b"woodpeck-scan-replay";
 
