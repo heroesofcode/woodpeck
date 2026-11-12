@@ -2309,10 +2309,28 @@ pub fn board_cells_scales(bytes: &[u8]) -> Vec<Vec<Vec<f32>>> {
 }
 
 /// Square images of a board whose usual frame runs past the image edge, from a frame kept
-/// inside the image instead. A last resort for boards no usual grid reads.
-pub fn board_cells_inside(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
-    let g = Gray::decode(bytes)?;
-    cells(&g, locate_inside_with_light_rim(&g)?)
+/// inside the image instead. A last resort for boards no usual grid reads. Like
+/// [`board_cells_scales`], the native grid comes first, then a [`MAX_BOARD_SIDE`] downscale
+/// when the crop is larger, so large `ClearScan` crops do not alias.
+pub fn board_cells_inside_scales(bytes: &[u8]) -> Vec<Vec<Vec<f32>>> {
+    let Some(g0) = Gray::decode(bytes) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(2);
+    if let Some(frame) = locate_inside_with_light_rim(&g0)
+        && let Some(c) = cells(&g0, frame)
+    {
+        out.push(c);
+    }
+    if g0.width.max(g0.height) > MAX_BOARD_SIDE {
+        let g = g0.fit_max_side(MAX_BOARD_SIDE);
+        if let Some(frame) = locate_inside_with_light_rim(&g)
+            && let Some(c) = cells(&g, frame)
+        {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Per-square feature rows for each grid from [`board_cells_scales`].
