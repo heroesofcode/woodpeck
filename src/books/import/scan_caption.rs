@@ -395,14 +395,26 @@ fn evidence_digest(pixels: &[u8; 32], lines: &[OcrLine]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// Words a result suffix may use after a turn phrase: "White to move wins", "Black to move,
+/// draw", "Black to move, White wins", "White to move and win".
+const RESULT_WORDS: &[&str] = &[
+    "and", "win", "wins", "draw", "draws", "drawn", "still", "a", "mate", "mates", "white", "black",
+];
+/// At least one of these must be in a suffix, so "White to move and" stays incomplete.
+const RESULT_VERBS: &[&str] = &["win", "wins", "draw", "draws", "drawn", "mate", "mates"];
+
 fn explicit_turn_line(text: &str) -> Option<bool> {
     let text = normalize_line(text);
-    if text.is_empty() {
+    if text.is_empty() || text.contains('?') {
         return None;
     }
     let mut found = None;
     for (phrase, white) in TURN_PHRASES {
-        if normalize_line(phrase) != text {
+        let phrase = normalize_line(phrase);
+        let Some(rest) = text.strip_prefix(phrase.as_str()) else {
+            continue;
+        };
+        if !(rest.is_empty() || result_suffix(rest)) {
             continue;
         }
         match found {
@@ -412,6 +424,29 @@ fn explicit_turn_line(text: &str) -> Option<bool> {
         }
     }
     found
+}
+
+/// What follows a turn phrase: a separator, then only result words with at least one verb.
+fn result_suffix(rest: &str) -> bool {
+    let Some(first) = rest.chars().next() else {
+        return false;
+    };
+    if first.is_alphanumeric() {
+        return false;
+    }
+    let words: Vec<&str> = rest
+        .split(|c: char| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    ',' | '.' | ';' | ':' | '!' | '-' | '\u{2013}' | '\u{2014}'
+                )
+        })
+        .filter(|word| !word.is_empty())
+        .collect();
+    !words.is_empty()
+        && words.iter().all(|word| RESULT_WORDS.contains(word))
+        && words.iter().any(|word| RESULT_VERBS.contains(word))
 }
 
 fn normalize_line(text: &str) -> String {
@@ -437,6 +472,33 @@ fn normalize_line(text: &str) -> String {
     out
 }
 
+/// The one confident, uncrowded line right under `lines[index]` that continues it: it starts
+/// within one line height under it and shares its column. `None` when there is no such line
+/// or more than one.
+fn continuation(lines: &[OcrLine], index: usize) -> Option<usize> {
+    let line = &lines[index];
+    if !line_box_ok(line) {
+        return None;
+    }
+    let height = line.bottom - line.top;
+    let mut found = None;
+    for (other, next) in lines.iter().enumerate() {
+        if other == index || !line_box_ok(next) {
+            continue;
+        }
+        let gap = next.top - line.bottom;
+        let overlap = line.right.min(next.right) - line.left.max(next.left);
+        if !(-0.3 * height..=height).contains(&gap) || overlap <= 0.0 {
+            continue;
+        }
+        if !confident(next) || crowded(lines, other) || found.is_some() {
+            return None;
+        }
+        found = Some(other);
+    }
+    found
+}
+
 fn confident(line: &OcrLine) -> bool {
     line.confidence.is_finite() && (OCR_CONFIDENCE_MIN..=1.0).contains(&line.confidence)
 }
@@ -457,14 +519,34 @@ fn assign_edges(
     }
     let mut owned = vec![Vec::new(); frames.len()];
     for (index, line) in lines.iter().enumerate() {
-        let Some(white) = explicit_turn_line(&line.text) else {
-            continue;
-        };
         if !confident(line) || crowded(lines, index) {
             continue;
         }
-        if let Some(owner) = sole_owner(frames, boards, line) {
-            owned[owner].push(white);
+        let (white, last) = if let Some(white) = explicit_turn_line(&line.text) {
+            (white, line)
+        } else {
+            // A caption the column width broke over two lines: "Black to" / "move, draw".
+            let Some(next) = continuation(lines, index) else {
+                continue;
+            };
+            let joined = format!("{} {}", line.text, lines[next].text);
+            let Some(white) = explicit_turn_line(&joined) else {
+                continue;
+            };
+            (white, &lines[next])
+        };
+        let Some(holder) = sole_owner(frames, boards, line) else {
+            continue;
+        };
+        // The second line must not sit closer to another board than to this one.
+        let own = frame_distance(frames[holder], last);
+        let shared = frames.iter().enumerate().any(|(other, neighbour)| {
+            other != holder
+                && frame_distance(*neighbour, last)
+                    <= own.mul_add(NEIGHBOUR_DISTANCE_FACTOR, NEIGHBOUR_SLACK_PX)
+        });
+        if !shared {
+            owned[holder].push(white);
         }
     }
     owned
@@ -819,7 +901,10 @@ mod tests {
             "White",
             "White to move?",
             "It is White to move here",
-            "White to move and win",
+            "White to move and",
+            "White to move, can he win?",
+            "White to move the knight and win",
+            "Black to move, White to move",
             "12) White to move",
             "after 12...Nf6",
             "Is it Black to move",
@@ -838,13 +923,60 @@ mod tests {
     }
 
     #[test]
-    fn a_split_caption_and_an_above_board_line_abstain() {
+    fn a_turn_phrase_with_a_result_suffix_names_the_mover() {
+        let frames = [board(40, 30, 200)];
+        for (text, white) in [
+            ("White to move wins", true),
+            ("Black to move, draw", false),
+            ("Black to move, White wins", false),
+            ("White to move and win", true),
+            ("Black to move, still a draw", false),
+            ("White to play and draw.", true),
+            ("Black moves and wins", false),
+        ] {
+            assert_eq!(
+                assign(&frames, &[under(text, frames[0])], &open(1)),
+                vec![Some(white)],
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_caption_split_over_two_lines_is_joined() {
         let frames = [board(40, 30, 200)];
         let split = [
             caption("White to", frames[0], 20.0, 0.0, 16.0, 0.95),
-            caption("move", frames[0], 48.0, 0.0, 16.0, 0.95),
+            caption("move", frames[0], 38.0, 0.0, 16.0, 0.95),
         ];
-        assert_eq!(assign(&frames, &split, &open(1)), vec![None]);
+        assert_eq!(assign(&frames, &split, &open(1)), vec![Some(true)]);
+        let split = [
+            caption("Black to", frames[0], 20.0, 0.0, 16.0, 0.95),
+            caption("move, draw", frames[0], 38.0, 0.0, 16.0, 0.95),
+        ];
+        assert_eq!(assign(&frames, &split, &open(1)), vec![Some(false)]);
+        // Too far apart to be one caption, an unsure second line, or a second line that is
+        // prose: all abstain.
+        let apart = [
+            caption("White to", frames[0], 20.0, 0.0, 16.0, 0.95),
+            caption("move", frames[0], 60.0, 0.0, 16.0, 0.95),
+        ];
+        assert_eq!(assign(&frames, &apart, &open(1)), vec![None]);
+        let unsure = [
+            caption("White to", frames[0], 20.0, 0.0, 16.0, 0.95),
+            caption("move", frames[0], 38.0, 0.0, 16.0, 0.6),
+        ];
+        assert_eq!(assign(&frames, &unsure, &open(1)), vec![None]);
+        let prose = [
+            caption("White to", frames[0], 20.0, 0.0, 16.0, 0.95),
+            caption("move the rook", frames[0], 38.0, 0.0, 16.0, 0.95),
+        ];
+        assert_eq!(assign(&frames, &prose, &open(1)), vec![None]);
+    }
+
+    #[test]
+    fn an_above_board_line_abstains() {
+        let frames = [board(40, 30, 200)];
         let above = OcrLine {
             text: "White to move".into(),
             confidence: 0.95,
