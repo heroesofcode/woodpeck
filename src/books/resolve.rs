@@ -306,6 +306,7 @@ fn sides_named(
         .collect()
 }
 /// Resolves with an optional image recognizer; images it cannot read stay unrecognized.
+#[allow(clippy::too_many_lines)]
 pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramRecognizer>) -> Book {
     let assets = std::mem::take(&mut document.assets);
     let mut placements = HashMap::new();
@@ -412,8 +413,32 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
     if recognizer.is_some() && certify_near_reads(&best, &assets, &mut placements) {
         best = resolve_all(&placements);
     }
+    // Last, boards whose usual frame runs past the image edge get one from inside the image.
+    // They come after the templates so they never vouch for other boards.
+    if recognizer.is_some_and(|r| place_inside_frames(r, &assets, &mut placements)) {
+        best = resolve_all(&placements);
+    }
     best.document.assets = assets;
     best
+}
+/// Boards still without a placement get one from a frame kept inside the image, when the
+/// recognizer offers it. Placed boards are never touched. Returns whether any board was added.
+fn place_inside_frames(
+    recognizer: &dyn DiagramRecognizer,
+    assets: &[super::document::Asset],
+    placements: &mut HashMap<String, Option<String>>,
+) -> bool {
+    let mut added = false;
+    for (path, placement) in placements.iter_mut() {
+        if placement.is_none()
+            && let Some(asset) = assets.iter().find(|a| &a.path == path)
+            && let Some(inside) = recognizer.placement_inside(&asset.bytes)
+        {
+            *placement = Some(inside);
+            added = true;
+        }
+    }
+    added
 }
 /// Boards the nets nearly read get their placement when the book's own known boards certify
 /// every square (see [`super::templates`]). Returns whether any board was added.
@@ -2593,6 +2618,60 @@ mod image_tests {
     }
     // White: Ke1, Ra1, Pe2; Black: Ke8, Pe7. Pawns are still on their first squares.
     const PLACEMENT: &str = "4k3/4p3/8/8/8/8/4P3/R3K3";
+    /// Reads the image with bytes `[1]` from its usual frame; offers an inside-frame placement
+    /// for every image.
+    struct FramedInside;
+    impl DiagramRecognizer for FramedInside {
+        fn placement(&self, image: &[u8]) -> Option<String> {
+            (image == [1]).then(|| PLACEMENT.to_owned())
+        }
+        fn placement_inside(&self, _: &[u8]) -> Option<String> {
+            Some("8/8/4k3/8/8/4K3/4P3/8".to_owned())
+        }
+    }
+    #[test]
+    fn inside_frames_only_fill_boards_nothing_else_read() {
+        let mut page = Page::default();
+        for path in ["images/a.png", "images/b.png"] {
+            page.push(
+                "",
+                BlockKind::Image {
+                    path: path.into(),
+                    alt: String::new(),
+                },
+            );
+            page.push("A quiet position.", BlockKind::Paragraph);
+        }
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "test".into(),
+            pages: vec![page],
+            assets: vec![
+                Asset {
+                    path: "images/a.png".into(),
+                    bytes: vec![1],
+                },
+                Asset {
+                    path: "images/b.png".into(),
+                    bytes: vec![2],
+                },
+            ],
+        };
+        let book = resolve_using(document, Some(&FramedInside));
+        let placements: Vec<&str> = book.document.pages[0]
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.kind {
+                BlockKind::UnconfirmedDiagram { placement, .. } => Some(placement.as_str()),
+                _ => None,
+            })
+            .collect();
+        // The board the usual frame read keeps its placement; only the unread one changes.
+        assert_eq!(placements, vec![PLACEMENT, "8/8/4k3/8/8/4K3/4P3/8"]);
+    }
     fn book(alt: &str, texts: &[&str]) -> Book {
         let mut page = Page::default();
         page.push(

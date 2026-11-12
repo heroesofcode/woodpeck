@@ -371,6 +371,9 @@ impl DiagramRecognizer for Cnn {
         }
         None
     }
+    fn placement_inside(&self, image: &[u8]) -> Option<String> {
+        placement(&self.classify(&diagram::board_cells_inside(image)?))
+    }
     fn reading(&self, image: &[u8]) -> Option<String> {
         for cells in diagram::board_cells_scales(image) {
             let squares = self.classify(&cells);
