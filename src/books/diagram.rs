@@ -12,6 +12,11 @@ pub trait DiagramRecognizer: Sync {
     fn reading(&self, _image: &[u8]) -> Option<String> {
         None
     }
+    /// Placement from a frame kept inside the image, for a board whose usual frame runs past
+    /// its edge. Asked only for boards nothing else reads.
+    fn placement_inside(&self, _image: &[u8]) -> Option<String> {
+        None
+    }
 }
 
 /// Built-in nearest-prototype recognizer.
@@ -440,9 +445,20 @@ fn contrast(g: &Gray, frame: Frame) -> Option<f32> {
     Some(light - dark)
 }
 
-/// Nudges each edge to maximise square contrast, compensating for frames and margins.
+/// Whether the frame lies within the image.
+fn inside(g: &Gray, f: Frame) -> bool {
+    let (w, h) = (
+        i64::try_from(g.width).unwrap_or(i64::MAX),
+        i64::try_from(g.height).unwrap_or(i64::MAX),
+    );
+    f[0] >= 0 && f[1] >= 0 && f[2] <= w && f[3] <= h
+}
+
+/// Nudges each edge to maximise square contrast, compensating for frames and margins. With
+/// `keep_inside`, no edge moves past the image: squares cut off by its edge no longer measure
+/// the board.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn refine(g: &Gray, mut frame: Frame) -> Frame {
+fn refine(g: &Gray, mut frame: Frame, keep_inside: bool) -> Frame {
     let size = frame[2] - frame[0];
     let step = usize::try_from((size / 160).max(1)).unwrap_or(1);
     let reach = (size as f64 * 0.05) as i64;
@@ -455,7 +471,7 @@ fn refine(g: &Gray, mut frame: Frame) -> Frame {
             for d in (-reach..=reach).step_by(step) {
                 let mut f = frame;
                 f[k] += d;
-                if f[2] - f[0] < 64 || f[3] - f[1] < 64 {
+                if f[2] - f[0] < 64 || f[3] - f[1] < 64 || (keep_inside && !inside(g, f)) {
                     continue;
                 }
                 if let Some(s) = contrast(g, f)
@@ -486,7 +502,24 @@ fn locate_with_light_rim(g: &Gray) -> Option<Frame> {
     locate(g).or_else(|| locate_among(g, &inset_frames(g)))
 }
 
+/// Like [`locate_with_light_rim`], but no refined edge leaves the image; `None` unless that
+/// changes the frame of a board whose usual frame runs past the image.
+fn locate_inside_with_light_rim(g: &Gray) -> Option<Frame> {
+    let unrefined = located(g, &candidates(g)).or_else(|| located(g, &inset_frames(g)))?;
+    let usual = refine(g, unrefined, false);
+    if inside(g, usual) {
+        return None;
+    }
+    let kept = refine(g, unrefined, true);
+    (kept != usual).then_some(kept)
+}
+
 fn locate_among(g: &Gray, frames: &[Frame]) -> Option<Frame> {
+    located(g, frames).map(|frame| refine(g, frame, false))
+}
+
+/// The best board frame among `frames`, before [`refine`].
+fn located(g: &Gray, frames: &[Frame]) -> Option<Frame> {
     let mut best: Option<((usize, f32), Frame)> = None;
     let mut boards: Vec<Frame> = Vec::new();
     for &frame in frames {
@@ -515,7 +548,7 @@ fn locate_among(g: &Gray, frames: &[Frame]) -> Option<Frame> {
     if boards.iter().any(apart) {
         return None;
     }
-    Some(refine(g, frame))
+    Some(frame)
 }
 
 /// PNG text keyword carrying a placement read from a diagram font, not from pixels.
@@ -2275,6 +2308,13 @@ pub fn board_cells_scales(bytes: &[u8]) -> Vec<Vec<Vec<f32>>> {
     out
 }
 
+/// Square images of a board whose usual frame runs past the image edge, from a frame kept
+/// inside the image instead. A last resort for boards no usual grid reads.
+pub fn board_cells_inside(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
+    let g = Gray::decode(bytes)?;
+    cells(&g, locate_inside_with_light_rim(&g)?)
+}
+
 /// Per-square feature rows for each grid from [`board_cells_scales`].
 pub fn board_features_scales(bytes: &[u8]) -> Vec<Vec<Vec<f32>>> {
     board_cells_scales(bytes)
@@ -2594,6 +2634,19 @@ impl DiagramRecognizer for Agreeing<'_> {
             .reading(image)
             .or_else(|| self.first.reading(image))
     }
+    /// One recognizer's inside reading stands alone only when the other reads nothing from the
+    /// usual frame: a board the two disagree on stays unread.
+    fn placement_inside(&self, image: &[u8]) -> Option<String> {
+        match (
+            self.first.placement_inside(image),
+            self.second.placement_inside(image),
+        ) {
+            (Some(a), Some(b)) => (a == b).then_some(a),
+            (Some(a), None) => self.second.placement(image).is_none().then_some(a),
+            (None, Some(b)) => self.first.placement(image).is_none().then_some(b),
+            (None, None) => None,
+        }
+    }
 }
 
 /// Prefer the primary recognizer; only ask the fallback when the primary abstains.
@@ -2614,6 +2667,11 @@ impl DiagramRecognizer for Fallback<'_> {
         self.primary
             .reading(image)
             .or_else(|| self.fallback.reading(image))
+    }
+    fn placement_inside(&self, image: &[u8]) -> Option<String> {
+        self.primary
+            .placement_inside(image)
+            .or_else(|| self.fallback.placement_inside(image))
     }
 }
 
@@ -3327,6 +3385,73 @@ mod tests {
 
     fn read(first: &dyn DiagramRecognizer, second: &dyn DiagramRecognizer) -> Option<String> {
         Agreeing { first, second }.reading(&[])
+    }
+
+    /// Usual-frame and inside-frame placements, standing in for a recognizer with both.
+    struct Framed(Option<&'static str>, Option<&'static str>);
+    impl DiagramRecognizer for Framed {
+        fn placement(&self, _: &[u8]) -> Option<String> {
+            self.0.map(str::to_owned)
+        }
+        fn placement_inside(&self, _: &[u8]) -> Option<String> {
+            self.1.map(str::to_owned)
+        }
+    }
+
+    #[test]
+    fn agreeing_inside_placement_abstains_when_the_usual_frames_disagree() {
+        let inside = |first: &dyn DiagramRecognizer, second: &dyn DiagramRecognizer| {
+            Agreeing { first, second }.placement_inside(&[])
+        };
+        let kings = "8/8/8/8/8/8/8/K6k";
+        let reads_inside = Framed(None, Some(kings));
+        // The other recognizer reads nothing: the inside frame alone decides.
+        assert_eq!(
+            inside(&reads_inside, &Framed(None, None)).as_deref(),
+            Some(kings)
+        );
+        assert_eq!(
+            inside(&Framed(None, None), &reads_inside).as_deref(),
+            Some(kings)
+        );
+        // The other recognizer reads the usual frame differently: no placement.
+        let other = Framed(Some("8/8/8/8/8/8/8/k6K"), None);
+        assert_eq!(inside(&reads_inside, &other), None);
+        assert_eq!(inside(&other, &reads_inside), None);
+        let disagree = Framed(None, Some("8/8/8/8/8/8/8/k6K"));
+        assert_eq!(inside(&reads_inside, &disagree), None);
+    }
+
+    /// A white page of `w` x `h` with an 8x8 board of `square` px squares at (`left`, `top`),
+    /// cut off where it runs past the page.
+    #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+    fn checkered(w: usize, h: usize, left: i64, top: i64, square: i64) -> Gray {
+        let mut luma = vec![255u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let (bx, by) = (x as i64 - left, y as i64 - top);
+                if (0..8 * square).contains(&bx)
+                    && (0..8 * square).contains(&by)
+                    && (bx / square + by / square) % 2 == 1
+                {
+                    luma[y * w + x] = 60;
+                }
+            }
+        }
+        Gray::from_luma(w, h, &luma).unwrap()
+    }
+
+    #[test]
+    fn refine_never_moves_a_kept_frame_past_the_image() {
+        // A board whose top-left corner sits past the page edge.
+        let g = checkered(300, 300, -6, -6, 32);
+        let start = [0, 0, 250, 250];
+        let kept = refine(&g, start, true);
+        assert!(inside(&g, kept), "{kept:?}");
+        // A board well inside the page has no separate inside frame.
+        let g = checkered(400, 400, 72, 72, 32);
+        assert!(inside(&g, refine(&g, [72, 72, 328, 328], false)));
+        assert_eq!(locate_inside_with_light_rim(&g), None);
     }
 
     #[test]
