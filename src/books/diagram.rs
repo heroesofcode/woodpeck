@@ -748,6 +748,20 @@ pub fn stated_solution_move(bytes: &[u8]) -> Option<(bool, String)> {
     .then(|| (white, san.to_owned()))
 }
 
+/// Key of the PNG text chunk marking a solution whose lines read as that one solution.
+const SINGLE_SOLUTION_KEY: &[u8] = b"woodpeck-solution-single";
+
+/// A PNG marked as holding a solution (see [`with_solution_move`]) whose lines read as that one
+/// solution, not commentary weighing other moves.
+pub fn with_single_solution(png: &[u8]) -> Vec<u8> {
+    with_text(png, SINGLE_SOLUTION_KEY, "1")
+}
+
+/// `true` when [`with_single_solution`] marked the PNG.
+pub fn stated_single_solution(bytes: &[u8]) -> bool {
+    text_chunk(bytes, SINGLE_SOLUTION_KEY).is_some_and(|text| text == b"1")
+}
+
 /// Key of the PNG text chunk holding placements reached by game text replayed on a scan.
 const SCAN_REPLAY_KEY: &[u8] = b"woodpeck-scan-replay";
 
