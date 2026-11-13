@@ -35,48 +35,49 @@ fn window(index: usize, boards: &[Rect]) -> Rect {
 }
 
 /// The column window reaching `reach` board heights under `board` and starting `before` board
-/// widths left of it, cut at the next picture down.
+/// widths left of it, cut at the next picture down in the board's own column.
 fn window_reaching(index: usize, boards: &[Rect], reach: f64, before: f64) -> Rect {
     let board = boards[index];
     let width = (board.right - board.left).max(1.0);
     let height = (board.top - board.bottom).max(1.0);
-    let left = board.left - before * width;
+    let column = board.left - COLUMN_BEFORE * width;
     let right = board.left + COLUMN_AFTER * width;
     let top = board.bottom + BELOW_SLACK * height;
     let floor = boards
         .iter()
         .enumerate()
         .filter(|(at, other)| {
-            *at != index && other.top < top && other.right > left && other.left < right
+            *at != index && other.top < top && other.right > column && other.left < right
         })
         .map(|(_, other)| other.top)
         .fold(board.bottom - reach * height, f64::max);
     Rect {
-        left,
+        left: board.left - before * width,
         bottom: floor,
         right,
         top,
     }
 }
 
-/// The column window over `board`, cut at the next picture up in it.
+/// The window over `board`, starting [`POSED_COLUMN_BEFORE`] board widths left of it and cut at
+/// the next picture up in the board's own column.
 fn window_above(index: usize, boards: &[Rect]) -> Rect {
     let board = boards[index];
     let width = (board.right - board.left).max(1.0);
     let height = (board.top - board.bottom).max(1.0);
-    let left = board.left - POSED_COLUMN_BEFORE * width;
+    let column = board.left - COLUMN_BEFORE * width;
     let right = board.left + COLUMN_AFTER * width;
     let bottom = board.top - BELOW_SLACK * height;
     let ceiling = boards
         .iter()
         .enumerate()
         .filter(|(at, other)| {
-            *at != index && other.bottom > bottom && other.right > left && other.left < right
+            *at != index && other.bottom > bottom && other.right > column && other.left < right
         })
         .map(|(_, other)| other.bottom)
         .fold(board.top + ABOVE_MAX * height, f64::min);
     Rect {
-        left,
+        left: board.left - POSED_COLUMN_BEFORE * width,
         bottom,
         right,
         top: ceiling,
@@ -673,7 +674,7 @@ mod tests {
         assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
         // A paragraph may start left of a centred board's column.
         let mut words = line("White to play can win by 1 Ba3+.", 90.0, 470.0);
-        words.extend(line("If Black is to move he plays 1 … Bb7+.", 40.0, 400.0));
+        words.extend(line("If Black is to move he plays 1 … Bb7+.", 15.0, 400.0));
         assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
         // One side only is a solution.
         let words = line("White to play wins by 1 Ba3+.", 90.0, 470.0);
@@ -742,6 +743,18 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    #[test]
+    fn a_board_in_the_next_column_does_not_cut_the_posing_window() {
+        let boards = [
+            rect(100.0, 500.0, 250.0, 650.0),
+            // In the column to the left, its right edge inside the wider posing margin only.
+            rect(-140.0, 380.0, 40.0, 470.0),
+        ];
+        let mut words = line("White to play can win by 1 Ba3+.", 90.0, 470.0);
+        words.extend(line("If Black is to move he plays 1 … Bb7+.", 90.0, 400.0));
+        assert_eq!(bind_solution_lines(&boards, &words)[0], None);
     }
 
     #[test]
