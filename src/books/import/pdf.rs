@@ -299,17 +299,22 @@ fn rendered_board_led_moves(glyphs: &[Glyph], placed: &mut [super::picture::Plac
                 _ => runs.push(vec![glyph]),
             }
         }
-        let mut over = runs.iter().filter(|run| run.iter().any(|g| within(g)));
-        let (Some(column), None) = (over.next(), over.next()) else {
-            continue;
-        };
+        // The runs in the board's column; a justified line may leave wide spaces inside it.
+        let over: Vec<&Vec<&Glyph>> = runs
+            .iter()
+            .filter(|run| run.iter().any(|g| within(g)))
+            .collect();
         // A run reaching past the board's column is a line across the page, not its own.
-        if column.first().is_some_and(|first| first.x < from)
-            || column.last().is_some_and(|last| last.end > to)
+        if over.is_empty()
+            || over.iter().any(|run| {
+                run.first().is_some_and(|first| first.x < from)
+                    || run.last().is_some_and(|last| last.end > to)
+            })
         {
             continue;
         }
-        if let Some((white, piece, square)) = led_move(&column_text(column)) {
+        let column: Vec<&Glyph> = over.into_iter().flatten().copied().collect();
+        if let Some((white, piece, square)) = led_move(&column_text(&column)) {
             // The OCR replay of a drawn page is weaker than its own text layer: one that stops
             // short of the board says nothing against the move printed over it.
             picture.scan_replay.clear();
@@ -1081,6 +1086,12 @@ mod led_tests {
         let mut placed = vec![board_picture(50.0, 400.0, 110.0)];
         rendered_board_led_moves(&page, &mut placed);
         assert_eq!(placed[0].scan_move, None);
+        // A justified line may leave a wide space inside the board's own column.
+        let mut page = glyphs(50.0, 520.0, "Qd3 10.Re1 Bc5+");
+        page.extend(glyphs(140.0, 520.0, "11.Kf1"));
+        let mut placed = vec![board_picture(50.0, 400.0, 110.0)];
+        rendered_board_led_moves(&page, &mut placed);
+        assert_eq!(placed[0].scan_move, Some((true, "^Kf1".into())));
         // A line too far above the board is left alone.
         let page = glyphs(50.0, 600.0, "11.a3 h4 12.Kh1");
         let mut placed = vec![board_picture(50.0, 400.0, 110.0)];
