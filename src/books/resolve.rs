@@ -1263,9 +1263,15 @@ fn recognized_positions(
                 _ => None,
             };
             // A move read only through OCR repairs is weaker: it never outweighs another signal.
-            let printed_move = stored_move.filter(|(_, to)| !to.starts_with('~'));
+            let printed_move = stored_move.filter(|(_, to)| !to.starts_with(['~', '^']));
             let repaired_move =
                 stored_move.and_then(|(white, to)| Some((*white, to.strip_prefix('~')?)));
+            // The move printed right above a scanned board, which led to it.
+            let played = stored_move.and_then(|(white, to)| {
+                let mut rest = to.strip_prefix('^')?.chars();
+                let piece = rest.next()?;
+                Some((*white, piece, rest.as_str().to_owned()))
+            });
             let before = before_image(page, b);
             let (mut turn, mut nearby) = image_position(
                 page.blocks[b + 1..]
@@ -1441,6 +1447,50 @@ fn recognized_positions(
                     turn = Turn::Confirmed(pos);
                 }
             }
+            // The move that led to the board: the last ply of a move line printed right above a
+            // scanned board, or of a paragraph closed by "(D)" right before it. The other side is
+            // to move. It fills only a side nothing else named, when the mover's piece stands on
+            // the destination, and abstains when the replayed game text or the game table, or
+            // the two readings themselves, disagree.
+            if matches!(turn, Turn::Unknown)
+                && marker.is_none()
+                && caption.is_none()
+                && printed.is_none()
+                && triangle.is_none()
+                && key.is_none()
+                && scan.is_none()
+                && printed_move.is_none()
+                && repaired_move.is_none()
+                && let BlockKind::Image { path, .. } = &block.kind
+            {
+                let led: Vec<&(bool, char, String)> =
+                    played.iter().chain(before.marked.iter()).collect();
+                if let Some(&&(mover, _, _)) = led.first()
+                    && led
+                        .iter()
+                        .all(|&&(m, piece, ref to)| m == mover && stands(&placement, m, piece, to))
+                {
+                    let white = !mover;
+                    let side = if white { Color::White } else { Color::Black };
+                    let other = [
+                        before.stated,
+                        before.after_move,
+                        before.past_number,
+                        before.puzzle_label,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(|named| named != side)
+                        || scan_replays
+                            .get(path)
+                            .and_then(|replayed| replayed_side(replayed, &placement))
+                            .is_some_and(|w| w != white)
+                        || super::game_sides::side(&placement).is_some_and(|w| w != white);
+                    if !other && let Some(pos) = placed(&placement, side) {
+                        turn = Turn::Confirmed(pos);
+                    }
+                }
+            }
             // Game text on the scanned page, replayed from move 1, reaches this exact placement
             // with one side to move. It fills only a side nothing else named, and abstains when
             // any other reading of the board, including the game table, names the other side.
@@ -1459,6 +1509,7 @@ fn recognized_positions(
                     key,
                     scan,
                     printed_move.map(|m| m.0),
+                    played.as_ref().map(|m| !m.0),
                 ]
                 .into_iter()
                 .flatten()
@@ -1732,6 +1783,9 @@ struct Before {
     past_number: Option<Color>,
     /// Polgar-style puzzle label beside the board ("No. 187 xk" ⇒ White, "No. 1447 çk" ⇒ Black).
     puzzle_label: Option<Color>,
+    /// The last ply of the paragraph closed by "(D)" right above the board: mover, piece
+    /// (`P`, or `*` for a figurine the text lost) and destination.
+    marked: Option<(bool, char, String)>,
     /// The page's "mate in N" theme, if one heads the diagrams on it.
     mate: Option<u8>,
     /// The same theme when the nearest statement of it is a section heading.
@@ -1797,6 +1851,7 @@ fn before_image(page: &Page, b: usize) -> Before {
         if i == 0 {
             before.stated = lead_in_turn(text);
             before.after_move = side_after_trailing_move(text);
+            before.marked = marked_move(text);
             // A bare "64" between a caption and the image — look one more block up.
             skip_number = before.stated.is_none() && diagram_number(text);
         } else if skip_number {
@@ -1930,6 +1985,96 @@ fn side_after_trailing_move(text: &str) -> Option<Color> {
         return None;
     }
     Some(mover.other())
+}
+/// The last ply of a paragraph that ends with "(D)", the mark of a diagram showing the position
+/// after it (`11 ... Qe5 (D)`, `25.Re1 Kf7 (D)`, `8 d5 (D)`): mover, piece and destination. Figurine
+/// fonts often extract as junk (`'ibe5`), so only the square is read; a bare pawn move
+/// (`c5`, `bxc6`) is a pawn and anything else some piece (`*`). Moves inside parentheses
+/// are skipped. Abstains unless one or two plies follow the last move number.
+fn marked_move(text: &str) -> Option<(bool, char, String)> {
+    let text = text.trim_end().strip_suffix("(D)")?;
+    let mut depth = 0usize;
+    let outside: String = text
+        .chars()
+        .filter(|&c| match c {
+            '(' | '[' => {
+                depth += 1;
+                false
+            }
+            ')' | ']' => {
+                depth = depth.saturating_sub(1);
+                false
+            }
+            _ => depth == 0,
+        })
+        .collect();
+    let outside = outside.replace('\u{2026}', "...").replace('\u{2022}', ".");
+    // The last move number: up to three digits, then dots (spaces allowed between them).
+    let bytes = outside.as_bytes();
+    let mut number = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric()) {
+            let digits = bytes[i..].iter().take_while(|b| b.is_ascii_digit()).count();
+            let mut j = i + digits;
+            let mut dots = 0;
+            while j < bytes.len() && matches!(bytes[j], b'.' | b' ') {
+                dots += usize::from(bytes[j] == b'.');
+                j += 1;
+            }
+            // "12." and "12 " open a White move, "12..." a Black one.
+            let spaced = dots == 0 && bytes.get(i + digits) == Some(&b' ');
+            if digits <= 3 && (dots > 0 || spaced) {
+                number = Some((j, dots <= 1));
+            }
+            i = j.max(i + digits);
+        } else {
+            i += 1;
+        }
+    }
+    let (start, white) = number?;
+    let plies: Vec<&str> = outside[start..].split_whitespace().collect();
+    let (mover, ply) = match (white, plies.as_slice()) {
+        (true, [ply]) => (true, *ply),
+        (true, [_, ply]) | (false, [ply]) => (false, *ply),
+        _ => return None,
+    };
+    let ply = ply.trim_end_matches(['!', '?', '+', '#', '.', ',']);
+    if ply.chars().count() > 9 {
+        return None;
+    }
+    let chars: Vec<char> = ply.chars().collect();
+    let [.., file, rank] = chars.as_slice() else {
+        return None;
+    };
+    let rank = if *rank == 'l' { '1' } else { *rank };
+    if !('a'..='h').contains(file) || !('1'..='8').contains(&rank) {
+        return None;
+    }
+    let pawn = match chars.as_slice() {
+        [_, _] => true,
+        [f, 'x', _, _] => ('a'..='h').contains(f),
+        _ => false,
+    };
+    Some((mover, if pawn { 'P' } else { '*' }, format!("{file}{rank}")))
+}
+/// Whether the mover's `piece` (`*` for any piece but a pawn) stands on `destination`.
+fn stands(placement: &str, white: bool, piece: char, destination: &str) -> bool {
+    use shakmaty::{Role, Square};
+    let color = if white { Color::White } else { Color::Black };
+    let Some(pos) = placed(placement, color).or_else(|| placed(placement, color.other())) else {
+        return false;
+    };
+    let Ok(square) = destination.parse::<Square>() else {
+        return false;
+    };
+    pos.board().piece_at(square).is_some_and(|found| {
+        found.color == color
+            && match piece {
+                '*' => found.role != Role::Pawn,
+                letter => Role::from_char(letter.to_ascii_lowercase()) == Some(found.role),
+            }
+    })
 }
 /// Side to move from a Polgar 5334-style label: `No. 187 xk` (White king figurine) or
 /// `No. 1447 çk` (Black). Abstains when the line is not a short label or names both sides.
@@ -2928,6 +3073,73 @@ mod image_tests {
             shown_as("pdf", tiny_png(), placement, "", &texts),
             BlockKind::UnconfirmedDiagram { .. }
         ));
+    }
+    fn after_marked(lead: &str, placement: &'static str) -> BlockKind {
+        let mut page = Page::default();
+        page.push(lead, BlockKind::Paragraph);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "pdf".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes: tiny_png(),
+            }],
+        };
+        resolve_using(document, Some(&Fixed(placement)))
+            .document
+            .pages[0]
+            .blocks[1]
+            .kind
+            .clone()
+    }
+    #[test]
+    fn a_move_closing_a_d_marked_paragraph_led_to_the_board() {
+        let placement = "4k3/8/8/4q3/8/8/8/3K4";
+        let white = |kind: &BlockKind| matches!(kind, BlockKind::RecognizedDiagram { fen, .. } if fen.split(' ').nth(1) == Some("w"));
+        // A figurine the text lost still leaves the square: Black's piece stands on e5.
+        assert!(white(&after_marked("11 ... 'ibe5 (D)", placement)));
+        assert!(white(&after_marked("10 Kd1 \u{FFFD}e5 (D)", placement)));
+        // Nothing of the mover's on the square, a pawn move onto a piece, or more text after the
+        // mark: the board stays unconfirmed.
+        for lead in [
+            "11 ... 'ibe4 (D)",
+            "11 ... e5 (D)",
+            "11 ... 'ibe5 (D) and then",
+        ] {
+            assert!(
+                matches!(
+                    after_marked(lead, placement),
+                    BlockKind::UnconfirmedDiagram { .. }
+                ),
+                "{lead}"
+            );
+        }
+        assert_eq!(
+            marked_move("47.\u{FFFD}c6 a3 48.c5 (D)"),
+            Some((true, 'P', "c5".into()))
+        );
+        assert_eq!(
+            marked_move("21.Axc6! bxc6 (D)"),
+            Some((false, 'P', "c6".into()))
+        );
+        assert_eq!(
+            marked_move("30 \u{2022} .Ra2! (D)"),
+            Some((false, '*', "a2".into()))
+        );
+        assert_eq!(marked_move("40.h4?! (D) (53...Kg4)"), None);
+        assert_eq!(marked_move("2 lDt\"3! (D)"), None);
+        assert_eq!(marked_move("Black is better (D)"), None);
     }
     #[test]
     fn a_geometry_caption_confirms_only_an_unknown_side() {

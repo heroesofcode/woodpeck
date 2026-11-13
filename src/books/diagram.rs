@@ -707,7 +707,8 @@ pub fn with_scan_move(png: &[u8], white: bool, destination: &str) -> Vec<u8> {
 }
 
 /// The move stored by [`with_scan_move`]: `(true, "e4")` when White plays to e4. A destination
-/// read only through OCR repairs keeps its leading `~` (`(true, "~e4")`).
+/// read only through OCR repairs keeps its leading `~` (`(true, "~e4")`), and the move printed
+/// above the board, which led to it, keeps `^` and its piece (`(false, "^Bf6")`).
 pub fn stated_scan_move(bytes: &[u8]) -> Option<(bool, String)> {
     let text = String::from_utf8(text_chunk(bytes, SCAN_MOVE_KEY)?).ok()?;
     let white = match text.as_bytes().first()? {
@@ -716,7 +717,14 @@ pub fn stated_scan_move(bytes: &[u8]) -> Option<(bool, String)> {
         _ => return None,
     };
     let stored = &text[1..];
-    let destination = stored.strip_prefix('~').unwrap_or(stored);
+    // `^Kg5`: the move that led to the board, with the piece that made it.
+    let played = stored
+        .strip_prefix('^')
+        .and_then(|rest| rest.strip_prefix(['K', 'Q', 'R', 'B', 'N', 'P']));
+    if stored.starts_with('^') && played.is_none() {
+        return None;
+    }
+    let destination = played.unwrap_or_else(|| stored.strip_prefix('~').unwrap_or(stored));
     let square = destination.len() == 2
         && matches!(destination.as_bytes()[0], b'a'..=b'h')
         && matches!(destination.as_bytes()[1], b'1'..=b'8');
@@ -3404,6 +3412,13 @@ mod tests {
             Some((false, "~O-O".into()))
         );
         assert_eq!(stated_scan_move(&with_scan_move(&png, true, "~e9")), None);
+        // The move that led to the board keeps its mark and piece.
+        assert_eq!(
+            stated_scan_move(&with_scan_move(&png, false, "^Bf6")),
+            Some((false, "^Bf6".into()))
+        );
+        assert_eq!(stated_scan_move(&with_scan_move(&png, true, "^Xf6")), None);
+        assert_eq!(stated_scan_move(&with_scan_move(&png, true, "^O-O")), None);
     }
     use super::*;
 
