@@ -204,8 +204,13 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
     for (glyphs, boards) in layout.pages.iter_mut().zip(&fonts) {
         glyphs.retain(|g| !boards.iter().any(|b| b.covers(g.x, g.y, g.size)));
     }
+    let (mut pictures, drawn) = pictures(&doc, bytes, &fonts);
+    for ((glyphs, placed), drawn) in layout.pages.iter().zip(pictures.iter_mut()).zip(drawn) {
+        if drawn {
+            rendered_board_led_moves(glyphs, placed);
+        }
+    }
     let pages: Vec<_> = layout.pages.into_iter().map(order).collect();
-    let pictures = pictures(&doc, bytes, &fonts);
     Ok(Extracted {
         outline: chapters(outline, pages.len()),
         pages,
@@ -215,6 +220,142 @@ pub(super) fn extract(bytes: &[u8]) -> Result<Extracted, OutputError> {
         boards: pictures.iter().flatten().filter(|p| p.rendered).count(),
         pictures,
     })
+}
+
+/// Bottom of the move line over a rendered board, at most this many board widths above
+/// the board's top edge.
+const LED_GAP_MAX: f64 = 0.3;
+/// A gap wider than this many board widths splits a row into text columns.
+const COLUMN_GAP: f64 = 0.08;
+/// A board's own text column reaches at most this many board widths past either edge.
+const COLUMN_REACH: f64 = 0.35;
+
+/// The move that led to each board cropped from a drawn page: the last ply of the line the
+/// text layer prints right above it, in its own column, when that line holds only numbered
+/// moves (`11.a3 h4 12.Kh1`). Stored like the move read over a scan; the resolver checks that
+/// the mover's piece stands on the destination. A line nearer another board's bottom than
+/// this board's top abstains, as does a row that runs past the board's column or splits into
+/// more than one run inside it.
+fn rendered_board_led_moves(glyphs: &[Glyph], placed: &mut [super::picture::Placed]) {
+    let boards: Vec<(f64, f64, f64, f64)> = placed
+        .iter()
+        .map(|p| (p.left, p.right, p.bottom, p.top))
+        .collect();
+    for (index, picture) in placed.iter_mut().enumerate() {
+        if !picture.rendered || picture.scan_side.is_some() || picture.scan_move.is_some() {
+            continue;
+        }
+        let (left, right, _, top) = boards[index];
+        let width = right - left;
+        if width <= 0.0 {
+            continue;
+        }
+        // The board's own text column: within reach of its edges.
+        let (from, to) = (left - COLUMN_REACH * width, right + COLUMN_REACH * width);
+        let within = |g: &Glyph| (from..to).contains(&f64::midpoint(g.x, g.end));
+        // The nearest baseline above the board in that column.
+        let Some(baseline) = glyphs
+            .iter()
+            .filter(|g| {
+                g.y > top
+                    && g.y - top < LED_GAP_MAX * width
+                    && within(g)
+                    && !g.text.trim().is_empty()
+            })
+            .map(|g| g.y)
+            .min_by(f64::total_cmp)
+        else {
+            continue;
+        };
+        let near_other = boards
+            .iter()
+            .enumerate()
+            .any(|(other, &(l, r, bottom, _))| {
+                other != index
+                    && r > left
+                    && l < right
+                    && bottom > baseline
+                    && bottom - baseline <= baseline - top
+            });
+        if near_other {
+            continue;
+        }
+        let mut row: Vec<&Glyph> = glyphs
+            .iter()
+            .filter(|g| (g.y - baseline).abs() < 0.4 * g.size && !g.text.trim().is_empty())
+            .collect();
+        row.sort_by(|a, b| a.x.total_cmp(&b.x));
+        // Split the row at wide gaps and keep the one run in the board's column.
+        let mut runs: Vec<Vec<&Glyph>> = Vec::new();
+        for glyph in row {
+            match runs.last_mut() {
+                Some(run)
+                    if run
+                        .last()
+                        .is_some_and(|last| glyph.x - last.end <= COLUMN_GAP * width) =>
+                {
+                    run.push(glyph);
+                }
+                _ => runs.push(vec![glyph]),
+            }
+        }
+        let mut over = runs.iter().filter(|run| run.iter().any(|g| within(g)));
+        let (Some(column), None) = (over.next(), over.next()) else {
+            continue;
+        };
+        // A run reaching past the board's column is a line across the page, not its own.
+        if column.first().is_some_and(|first| first.x < from)
+            || column.last().is_some_and(|last| last.end > to)
+        {
+            continue;
+        }
+        if let Some((white, piece, square)) = led_move(&column_text(column)) {
+            // The OCR replay of a drawn page is weaker than its own text layer: one that stops
+            // short of the board says nothing against the move printed over it.
+            picture.scan_replay.clear();
+            picture.scan_move = Some((
+                white,
+                format!("{}{piece}{square}", super::scan_caption::PLAYED_MOVE),
+            ));
+        }
+    }
+}
+
+/// The text of one column of a row, with a space wherever the glyphs leave a gap.
+fn column_text(column: &[&Glyph]) -> String {
+    let mut text = String::new();
+    let mut end: Option<f64> = None;
+    for glyph in column {
+        if end.is_some_and(|e| glyph.x - e > 0.15 * glyph.size) {
+            text.push(' ');
+        }
+        text.push_str(&glyph.text);
+        end = Some(glyph.end);
+    }
+    text
+}
+
+/// The last ply of a line of numbered moves set with figurines (`9.N f3 Q h5 10.N ×c3`): the
+/// figurine and the capture sign are joined to their square first. A line may open with the
+/// reply to a move on the line before; that reply is skipped. Any other word abstains.
+fn led_move(text: &str) -> Option<(bool, char, String)> {
+    let text = text.replace('\u{d7}', "x");
+    let mut words: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        let glued = words.last().is_some_and(|last| {
+            let tail = last.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
+            matches!(tail, "K" | "Q" | "R" | "B" | "N") || last.ends_with(['x', '-'])
+        });
+        match words.last_mut() {
+            Some(last) if glued || word.starts_with('x') => last.push_str(word),
+            _ => words.push(word.to_owned()),
+        }
+    }
+    let first = words.iter().position(|w| {
+        let digits = w.chars().take_while(char::is_ascii_digit).count();
+        (1..=3).contains(&digits) && w[digits..].starts_with('.')
+    })?;
+    super::scan_caption::played_move(&words[first..].join(" "))
 }
 
 /// Re-encode diagram bytes as PNG so [`crate::books::diagram::with_side`] can store the turn.
@@ -310,21 +451,24 @@ pub(super) fn stamp_pdftotext_sides(
 }
 
 /// Pictures per page. A page with no picture, or whose picture is the whole page (a scan), is
-/// rendered and searched for boards; board crops found there replace the page scan.
+/// rendered and searched for boards; board crops found there replace the page scan. Each page
+/// also says whether it embeds no picture at all, so its boards are drawn and its text layer
+/// is the book's own text rather than an OCR layer over a scan.
 fn pictures(
     doc: &lopdf::Document,
     bytes: &[u8],
     fonts: &[Vec<super::fontboard::FontBoard>],
-) -> Vec<Vec<super::picture::Placed>> {
+) -> (Vec<Vec<super::picture::Placed>>, Vec<bool>) {
     let renderer = super::raster::Renderer::new(bytes);
     doc.get_pages()
         .values()
         .enumerate()
         .map(|(i, &page)| {
             let mut placed = super::picture::pictures(doc, page);
+            let drawn = placed.is_empty();
             let Some((renderer, area)) = renderer.as_ref().and_then(|r| Some((r, r.area(i)?)))
             else {
-                return placed;
+                return (placed, drawn);
             };
             let scan = |p: &super::picture::Placed| p.area >= 0.5 * area;
             let fonts = fonts.get(i).map_or(&[][..], Vec::as_slice);
@@ -343,9 +487,9 @@ fn pictures(
                     placed.sort_by(|a, b| b.top.total_cmp(&a.top));
                 }
             }
-            placed
+            (placed, drawn)
         })
-        .collect()
+        .unzip()
 }
 /// The largest image on page 1 when it is big enough to be a cover: JPEG streams as they
 /// are, 8-bit gray or RGB streams re-encoded as PNG. Other encodings are skipped.
@@ -838,5 +982,109 @@ mod stamp_tests {
             pdftotext_turn("White to move\n28\nBlack to move\n29\n"),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod led_tests {
+    use super::*;
+
+    #[test]
+    fn a_figurine_move_line_names_the_move_that_led_to_the_board() {
+        assert_eq!(
+            led_move("10.B d3 g6 11.a3 h4 12.K h1"),
+            Some((true, 'K', "h1".into()))
+        );
+        assert_eq!(
+            led_move("9.N f3 Q h5 10.N c3 N g6 11.d4 B f4 12.N e2"),
+            Some((true, 'N', "e2".into()))
+        );
+        // A line that opens with the reply to a move on the line before.
+        assert_eq!(
+            led_move("g6 12.Q h6 N \u{d7}f1 13.Q g7 K d7 14.Q \u{d7}f7+ N e7"),
+            Some((false, 'N', "e7".into()))
+        );
+        assert_eq!(
+            led_move("14.N \u{d7}e7+ N \u{d7}e7"),
+            Some((false, 'N', "e7".into()))
+        );
+        // A caption, a reply with no numbered move, or prose names nothing.
+        assert_eq!(led_move("No. 4589 Redlich \u{2013} Treumann"), None);
+        assert_eq!(led_move("K d8"), None);
+        assert_eq!(led_move("12.K h1 and Black resigned"), None);
+    }
+
+    fn board_picture(left: f64, bottom: f64, side: f64) -> super::super::picture::Placed {
+        let mut png = Vec::new();
+        image::GrayImage::new(1, 1)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        super::super::picture::Placed {
+            left,
+            bottom,
+            right: left + side,
+            top: bottom + side,
+            area: side * side,
+            bytes: crate::books::diagram::with_placement(&png, "4k3/8/8/8/8/8/8/4K3"),
+            rendered: true,
+            scan_side: None,
+            scan_move: None,
+            scan_replay: Vec::new(),
+        }
+    }
+
+    fn glyphs(x: f64, y: f64, text: &str) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .filter(|(_, c)| *c != ' ')
+            .map(|(i, c)| {
+                let x = x + 5.0 * i as f64;
+                Glyph {
+                    x,
+                    y,
+                    end: x + 4.0,
+                    size: 10.0,
+                    text: c.to_string(),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_font_board_takes_the_move_line_right_above_it_in_its_own_column() {
+        // Two columns: each board sits under the end of its own game score.
+        let mut page = glyphs(50.0, 520.0, "11.a3 h4 12.Kh1");
+        page.extend(glyphs(300.0, 520.0, "18.Bxe6 Qxe6"));
+        let mut placed = vec![
+            board_picture(50.0, 400.0, 110.0),
+            board_picture(300.0, 400.0, 110.0),
+        ];
+        rendered_board_led_moves(&page, &mut placed);
+        assert_eq!(placed[0].scan_move, Some((true, "^Kh1".into())));
+        assert_eq!(placed[1].scan_move, Some((false, "^Qe6".into())));
+        // A move line closer to the bottom of the board above it is that board's.
+        let page = glyphs(50.0, 560.0, "1.e4 e5 2.Nf3");
+        let mut placed = vec![
+            board_picture(50.0, 565.0, 110.0),
+            board_picture(50.0, 440.0, 110.0),
+        ];
+        rendered_board_led_moves(&page, &mut placed);
+        assert_eq!(placed[1].scan_move, None);
+        // A short last line set left of the board is still its column's last line.
+        let mut page = glyphs(20.0, 532.0, "8.Nxh8 Nd4");
+        page.extend(glyphs(20.0, 520.0, "9.Qd1"));
+        let mut placed = vec![board_picture(50.0, 400.0, 110.0)];
+        rendered_board_led_moves(&page, &mut placed);
+        assert_eq!(placed[0].scan_move, Some((true, "^Qd1".into())));
+        // A line running across the page is not the board's own column.
+        let page = glyphs(0.0, 520.0, "11.a3 h4 12.Kh1 Nf6 13.Kg1 Ne4 14.Kh1");
+        let mut placed = vec![board_picture(50.0, 400.0, 110.0)];
+        rendered_board_led_moves(&page, &mut placed);
+        assert_eq!(placed[0].scan_move, None);
+        // A line too far above the board is left alone.
+        let page = glyphs(50.0, 600.0, "11.a3 h4 12.Kh1");
+        let mut placed = vec![board_picture(50.0, 400.0, 110.0)];
+        rendered_board_led_moves(&page, &mut placed);
+        assert_eq!(placed[0].scan_move, None);
     }
 }

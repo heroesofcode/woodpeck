@@ -710,7 +710,7 @@ fn diagram_label(text: &str) -> bool {
 /// `K` for castling) and destination (`g1`/`c1` for castling). OCR slips common in bold move
 /// text are repaired: `l` for the rank 1, `O`/`0` for a queen before a square, `g8-Q` for a
 /// promotion. Any other word makes it prose, and the line is not read.
-fn played_move(text: &str) -> Option<(bool, char, String)> {
+pub(super) fn played_move(text: &str) -> Option<(bool, char, String)> {
     let text = text.replace('\u{2026}', "...");
     let mut side: Option<bool> = None;
     let mut last = None;
