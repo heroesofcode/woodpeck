@@ -1451,8 +1451,10 @@ fn recognized_positions(
             // scanned board, or of a paragraph closed by "(D)" right before it. The other side is
             // to move. It fills only a side nothing else named, when the mover's piece stands on
             // the destination, and abstains when the replayed game text or the game table, or
-            // the two readings themselves, disagree.
-            if matches!(turn, Turn::Unknown)
+            // the two readings themselves, disagree. A side read only from moves printed after
+            // the board is weaker: those may be a line from elsewhere, so the move that led to
+            // the board replaces it.
+            if (matches!(turn, Turn::Unknown) || (nearby && matches!(turn, Turn::Confirmed(_))))
                 && marker.is_none()
                 && caption.is_none()
                 && printed.is_none()
@@ -3085,6 +3087,9 @@ mod image_tests {
         ));
     }
     fn after_marked(lead: &str, placement: &'static str) -> BlockKind {
+        around_marked(lead, &[], placement)
+    }
+    fn around_marked(lead: &str, after: &[&str], placement: &'static str) -> BlockKind {
         let mut page = Page::default();
         page.push(lead, BlockKind::Paragraph);
         page.push(
@@ -3094,6 +3099,9 @@ mod image_tests {
                 alt: String::new(),
             },
         );
+        for text in after {
+            page.push(text, BlockKind::Paragraph);
+        }
         let document = Document {
             cover: None,
             isbn: None,
@@ -3150,6 +3158,30 @@ mod image_tests {
         assert_eq!(marked_move("40.h4?! (D) (53...Kg4)"), None);
         assert_eq!(marked_move("2 lDt\"3! (D)"), None);
         assert_eq!(marked_move("Black is better (D)"), None);
+    }
+    #[test]
+    fn a_d_marked_move_outweighs_a_side_read_from_moves_after_the_board() {
+        let placement = "4k3/8/8/4q3/8/8/8/3K4";
+        let side = |kind: &BlockKind| match kind {
+            BlockKind::RecognizedDiagram { fen, .. } => fen.split(' ').nth(1).map(str::to_owned),
+            _ => None,
+        };
+        // The move after the board alone names Black.
+        let after = ["12 ... Kd7 13 Kc2"];
+        assert_eq!(
+            side(&around_marked("Black now plays on.", &after, placement)).as_deref(),
+            Some("b")
+        );
+        // Black's queen just reached e5, so White is to move.
+        assert_eq!(
+            side(&around_marked("11 ... Qe5 (D)", &after, placement)).as_deref(),
+            Some("w")
+        );
+        // A mark the board does not show leaves the side from the moves after it.
+        assert_eq!(
+            side(&around_marked("11 ... Qe4 (D)", &after, placement)).as_deref(),
+            Some("b")
+        );
     }
     #[test]
     fn replayed_text_that_misses_the_board_marks_it_unreached() {
