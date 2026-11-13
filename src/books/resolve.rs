@@ -1514,11 +1514,11 @@ fn recognized_positions(
                 && before.stated.is_none()
                 && before.past_number.is_none()
                 && before.puzzle_label.is_none()
-                && !scan_replays
+                && scan_replays
                     .get(path)
                     .and_then(|replayed| replayed_side(replayed, &placement))
-                    .is_some_and(|w| w != solution.white)
-                && !super::game_sides::side(&placement).is_some_and(|w| w != solution.white)
+                    .is_none_or(|w| w == solution.white)
+                && super::game_sides::side(&placement).is_none_or(|w| w == solution.white)
                 && let Some(pos) = solution_side(&placement, solution)
             {
                 turn = Turn::Confirmed(pos);

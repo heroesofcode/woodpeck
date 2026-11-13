@@ -22,11 +22,18 @@ const COLUMN_AFTER: f64 = 1.25;
 const LINES: usize = 3;
 /// Words whose bottoms differ by less than this many word heights share a line.
 const SAME_LINE: f64 = 0.35;
+/// Text this many board heights under the board's bottom edge may still pose its position.
+const POSED_BELOW_MAX: f64 = 1.0;
 /// Text this many board heights above the board's top edge may still pose its position.
 const ABOVE_MAX: f64 = 0.45;
 
 /// The column window under `board`, cut at the next picture down in it.
 fn window(index: usize, boards: &[Rect]) -> Rect {
+    window_reaching(index, boards, BELOW_MAX)
+}
+
+/// The column window reaching `reach` board heights under `board`, cut at the next picture down.
+fn window_reaching(index: usize, boards: &[Rect], reach: f64) -> Rect {
     let board = boards[index];
     let width = (board.right - board.left).max(1.0);
     let height = (board.top - board.bottom).max(1.0);
@@ -40,7 +47,7 @@ fn window(index: usize, boards: &[Rect]) -> Rect {
             *at != index && other.top < top && other.right > left && other.left < right
         })
         .map(|(_, other)| other.top)
-        .fold(board.bottom - BELOW_MAX * height, f64::max);
+        .fold(board.bottom - reach * height, f64::max);
     Rect {
         left,
         bottom: floor,
@@ -139,12 +146,15 @@ fn joined(lines: &[Vec<&TextBox>]) -> String {
 
 /// One move per board, when the first line under it opens with move 1. A line that also sits
 /// under another board leaves both open, and so does text around the board that poses the
-/// position for both sides.
+/// position for both sides. Text that also sits under another board is that board's.
 pub(super) fn bind_solution_lines(
     diagrams: &[Rect],
     words: &[TextBox],
 ) -> Vec<Option<SolutionLine>> {
     let windows: Vec<Rect> = (0..diagrams.len()).map(|i| window(i, diagrams)).collect();
+    let above: Vec<Rect> = (0..diagrams.len())
+        .map(|i| window_above(i, diagrams))
+        .collect();
     windows
         .iter()
         .enumerate()
@@ -164,10 +174,21 @@ pub(super) fn bind_solution_lines(
             if number != 1 {
                 return None;
             }
+            // Text that also sits under another board is that board's, not this one's.
+            let theirs = |word: &TextBox| {
+                windows
+                    .iter()
+                    .enumerate()
+                    .any(|(other, w)| other != index && inside(*w, word))
+            };
+            let mine: Vec<TextBox> = words.iter().filter(|w| !theirs(w)).cloned().collect();
             let around = format!(
                 "{} {}",
-                joined(&lines_in(window_above(index, diagrams), words)),
-                joined(&lines_in(*own, words))
+                joined(&lines_in(above[index], &mine)),
+                joined(&lines_in(
+                    window_reaching(index, diagrams, POSED_BELOW_MAX),
+                    &mine
+                ))
             );
             if poses_both_sides(&around) {
                 return None;
@@ -638,6 +659,10 @@ mod tests {
         words.extend(line("If Black is to", 90.0, 440.0));
         words.extend(line("move he plays 1 … Bb7+.", 90.0, 425.0));
         assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
+        // The other side's paragraph may sit further down.
+        let mut words = line("White to play can win by 1 Ba3+.", 90.0, 470.0);
+        words.extend(line("If Black is to move he plays 1 … Bb7+.", 90.0, 380.0));
+        assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
         // One side only is a solution.
         let words = line("White to play wins by 1 Ba3+.", 90.0, 470.0);
         assert_eq!(
@@ -652,6 +677,32 @@ mod tests {
         assert!(poses_both_sides(
             "With Black to play 1 … Ke8. With White to move, however"
         ));
+    }
+
+    #[test]
+    fn text_under_another_board_does_not_pose_this_one() {
+        let boards = [
+            rect(100.0, 500.0, 250.0, 650.0),
+            rect(100.0, 250.0, 250.0, 400.0),
+        ];
+        // The upper board's solution sits over the lower board.
+        let mut words = line("Black to play: 1 … Qb1", 90.0, 470.0);
+        words.extend(line("White to play wins by 1 Ba3+.", 90.0, 220.0));
+        assert_eq!(
+            bind_solution_lines(&boards, &words),
+            vec![
+                Some(SolutionLine {
+                    white: false,
+                    san: "Qb1".into(),
+                    single: true,
+                }),
+                Some(SolutionLine {
+                    white: true,
+                    san: "Ba3".into(),
+                    single: true,
+                }),
+            ]
+        );
     }
 
     #[test]
