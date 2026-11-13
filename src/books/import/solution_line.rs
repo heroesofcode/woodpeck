@@ -146,7 +146,8 @@ fn joined(lines: &[Vec<&TextBox>]) -> String {
 
 /// One move per board, when the first line under it opens with move 1. A line that also sits
 /// under another board leaves both open, and so does text around the board that poses the
-/// position for both sides. Text that also sits under another board is that board's.
+/// position for both sides. Past a board's own lines, text that also sits around another board
+/// is that board's.
 pub(super) fn bind_solution_lines(
     diagrams: &[Rect],
     words: &[TextBox],
@@ -154,6 +155,9 @@ pub(super) fn bind_solution_lines(
     let windows: Vec<Rect> = (0..diagrams.len()).map(|i| window(i, diagrams)).collect();
     let above: Vec<Rect> = (0..diagrams.len())
         .map(|i| window_above(i, diagrams))
+        .collect();
+    let far: Vec<Rect> = (0..diagrams.len())
+        .map(|i| window_reaching(i, diagrams, POSED_BELOW_MAX))
         .collect();
     windows
         .iter()
@@ -174,21 +178,22 @@ pub(super) fn bind_solution_lines(
             if number != 1 {
                 return None;
             }
-            // Text that also sits under another board is that board's, not this one's.
+            // Beyond this board's own lines, text that also sits around another board is that
+            // board's, not this one's.
             let theirs = |word: &TextBox| {
-                windows
-                    .iter()
-                    .enumerate()
-                    .any(|(other, w)| other != index && inside(*w, word))
+                !inside(*own, word)
+                    && (0..diagrams.len()).any(|other| {
+                        other != index
+                            && (inside(windows[other], word)
+                                || inside(above[other], word)
+                                || inside(far[other], word))
+                    })
             };
             let mine: Vec<TextBox> = words.iter().filter(|w| !theirs(w)).cloned().collect();
             let around = format!(
                 "{} {}",
                 joined(&lines_in(above[index], &mine)),
-                joined(&lines_in(
-                    window_reaching(index, diagrams, POSED_BELOW_MAX),
-                    &mine
-                ))
+                joined(&lines_in(far[index], &mine))
             );
             if poses_both_sides(&around) {
                 return None;
@@ -699,6 +704,33 @@ mod tests {
                 Some(SolutionLine {
                     white: true,
                     san: "Ba3".into(),
+                    single: true,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_caption_over_the_next_board_does_not_pose_this_one() {
+        let boards = [
+            rect(100.0, 500.0, 250.0, 650.0),
+            rect(100.0, 250.0, 250.0, 380.0),
+        ];
+        let mut words = line("White to play wins by 1 Ba3+.", 90.0, 470.0);
+        // The lower board's caption, in the gap over it.
+        words.extend(line("Black to play.", 90.0, 395.0));
+        words.extend(line("1 … Qb1", 90.0, 220.0));
+        assert_eq!(
+            bind_solution_lines(&boards, &words),
+            vec![
+                Some(SolutionLine {
+                    white: true,
+                    san: "Ba3".into(),
+                    single: true,
+                }),
+                Some(SolutionLine {
+                    white: false,
+                    san: "Qb1".into(),
                     single: true,
                 }),
             ]
