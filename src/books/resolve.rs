@@ -1280,6 +1280,9 @@ fn recognized_positions(
                 &before,
                 alphabet,
                 &placement,
+                // PDF text interleaves columns, so a glyph it could not map there often belongs
+                // to a move beside the board's own; only reflowed books read it as a figurine.
+                document.format != "pdf",
             );
             // Commentary after a group of boards may be about an earlier one: a board second in
             // the group that it contradicts is shown without a side, and nothing fills one.
@@ -2024,6 +2027,7 @@ fn image_position<'a>(
     before: &Before,
     alphabet: &str,
     placement: &str,
+    figurines: bool,
 ) -> (Turn, bool) {
     let mut stated = caption_turn(alt);
     if let Some(side) = before.stated {
@@ -2082,7 +2086,7 @@ fn image_position<'a>(
             // A figurine printed as a picture names no piece: any piece of the side reaching
             // the square makes the move playable, even when more than one could.
             let word = &text[ts[i + 1].span.clone()];
-            let pictured = word.contains(notation::UNMAPPED_FIGURINE);
+            let pictured = figurines && word.contains(notation::UNMAPPED_FIGURINE);
             let legal = |side| {
                 placed(placement, side).filter(|pos| {
                     parse_move(pos, &ts, i + 1, text, alphabet).is_some()
@@ -2872,6 +2876,15 @@ mod image_tests {
         alt: &str,
         texts: &[&str],
     ) -> BlockKind {
+        shown_as("test", bytes, placement, alt, texts)
+    }
+    fn shown_as(
+        format: &str,
+        bytes: Vec<u8>,
+        placement: &'static str,
+        alt: &str,
+        texts: &[&str],
+    ) -> BlockKind {
         let mut page = Page::default();
         page.push(
             "",
@@ -2888,7 +2901,7 @@ mod image_tests {
             isbn: None,
             title: String::new(),
             author: String::new(),
-            format: "test".into(),
+            format: format.into(),
             pages: vec![page],
             assets: vec![Asset {
                 path: "images/d.png".into(),
@@ -2901,6 +2914,20 @@ mod image_tests {
             .blocks[0]
             .kind
             .clone()
+    }
+    #[test]
+    fn a_pictured_figurine_after_the_board_names_its_side_only_in_reflowed_books() {
+        // Knight b1 and king e1 both reach d2: the figurine names no single piece.
+        let placement = "4k3/8/8/8/8/8/8/1N2K3";
+        let texts = ["1 \u{FFFD}d2 Ke7"];
+        assert!(matches!(
+            shown_as("epub", tiny_png(), placement, "", &texts),
+            BlockKind::RecognizedDiagram { ref fen, .. } if fen.split(' ').nth(1) == Some("w")
+        ));
+        assert!(matches!(
+            shown_as("pdf", tiny_png(), placement, "", &texts),
+            BlockKind::UnconfirmedDiagram { .. }
+        ));
     }
     #[test]
     fn a_geometry_caption_confirms_only_an_unknown_side() {
