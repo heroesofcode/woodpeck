@@ -305,6 +305,25 @@ fn moves_named(
         .filter_map(|asset| Some((asset.path.clone(), stated(&asset.bytes)?)))
         .collect()
 }
+/// The solution printed under a board on a text page.
+struct Solution {
+    /// `true` when it opens with White's move 1.
+    white: bool,
+    san: String,
+    /// Its lines read as that one solution.
+    single: bool,
+}
+/// Solutions stored beside diagram pixels, keyed by asset path.
+fn solutions_named(assets: &[super::document::Asset]) -> HashMap<String, Solution> {
+    assets
+        .iter()
+        .filter_map(|asset| {
+            let (white, san) = super::diagram::stated_solution_move(&asset.bytes)?;
+            let single = super::diagram::stated_single_solution(&asset.bytes);
+            Some((asset.path.clone(), Solution { white, san, single }))
+        })
+        .collect()
+}
 /// Sides stored beside diagram pixels, keyed by asset path.
 fn sides_named(
     assets: &[super::document::Asset],
@@ -383,7 +402,7 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
     let scan_sides = sides_named(&assets, super::diagram::stated_scan_side);
     let scan_moves = moves_named(&assets, super::diagram::stated_scan_move);
     let scan_replays = replays_named(&assets);
-    let solution_moves = moves_named(&assets, super::diagram::stated_solution_move);
+    let solution_moves = solutions_named(&assets);
     // Score whole books, rather than interpreting the same ambiguous letter differently per move.
     let resolve_all = |placements: &HashMap<String, Option<String>>| {
         let mut best = None;
@@ -556,7 +575,7 @@ fn resolve_with(
     scan_sides: &HashMap<String, bool>,
     scan_moves: &HashMap<String, (bool, String)>,
     scan_replays: &HashMap<String, Vec<(String, bool)>>,
-    solution_moves: &HashMap<String, (bool, String)>,
+    solution_moves: &HashMap<String, Solution>,
 ) -> Book {
     let (recognized, unconfirmed) = recognized_positions(
         &document,
@@ -1210,7 +1229,7 @@ fn recognized_positions(
     scan_sides: &HashMap<String, bool>,
     scan_moves: &HashMap<String, (bool, String)>,
     scan_replays: &HashMap<String, Vec<(String, bool)>>,
-    solution_moves: &HashMap<String, (bool, String)>,
+    solution_moves: &HashMap<String, Solution>,
 ) -> (
     HashMap<(usize, usize), Chess>,
     HashMap<(usize, usize), String>,
@@ -1285,7 +1304,7 @@ fn recognized_positions(
                 && placed(&placement, Color::Black).is_some();
             if grouped {
                 turn = Turn::Disputed(true);
-                nearby = false;
+                nearby = Nearby::No;
             }
             // Moves that dispute the caption may narrate the move that reached the board or a
             // line from before it. Only when every printed mark on the board backs the caption is
@@ -1310,7 +1329,11 @@ fn recognized_positions(
                     .or(before.puzzle_label)
             {
                 turn = placed(&placement, side).map_or(Turn::Unknown, Turn::Confirmed);
-                nearby = true;
+                nearby = if before.after_move.is_some() {
+                    Nearby::MoveAbove
+                } else {
+                    Nearby::Prose
+                };
             }
             // A printed caption, then a side square off the bottom-right corner, then a triangle
             // elsewhere. Each fills a side nothing else named. None of them demotes a marker, a
@@ -1324,7 +1347,7 @@ fn recognized_positions(
             // A side read only from moves printed near the board may belong to a neighbouring
             // diagram or to a threat. When the board's own caption, mark, key or OCR caption
             // names the other side, the board stays unconfirmed and none of them fills it.
-            if nearby
+            if nearby != Nearby::No
                 && marker.is_none()
                 && let Turn::Confirmed(pos) = &turn
                 && [caption, printed, triangle, key, scan]
@@ -1447,7 +1470,7 @@ fn recognized_positions(
                 && scan.is_none()
                 && printed_move.is_none()
                 && let BlockKind::Image { path, .. } = &block.kind
-                && let Some((white, san)) = solution_moves.get(path)
+                && let Some(Solution { white, san, .. }) = solution_moves.get(path)
             {
                 let side = if *white { Color::White } else { Color::Black };
                 let other = [
@@ -1472,6 +1495,33 @@ fn recognized_positions(
                 {
                     turn = Turn::Confirmed(pos);
                 }
+            }
+            // A side read only from the moves printed after the board, or from the last move
+            // printed above it, may come from the neighbouring column's text. When the lines
+            // under the board read as one solution opening with the other side's move 1, that
+            // move is legal only for that side, and no caption, mark, key, scan or game names a
+            // side, the solution wins.
+            if matches!(nearby, Nearby::MoveAfter | Nearby::MoveAbove)
+                && let Turn::Confirmed(read) = &turn
+                && let BlockKind::Image { path, .. } = &block.kind
+                && let Some(solution) = solution_moves.get(path)
+                && solution.single
+                && solution.white != (read.turn() == Color::White)
+                && [marker, caption, printed, triangle, key, scan]
+                    .into_iter()
+                    .all(|named| named.is_none())
+                && printed_move.is_none()
+                && before.stated.is_none()
+                && before.past_number.is_none()
+                && before.puzzle_label.is_none()
+                && scan_replays
+                    .get(path)
+                    .and_then(|replayed| replayed_side(replayed, &placement))
+                    .is_none_or(|w| w == solution.white)
+                && super::game_sides::side(&placement).is_none_or(|w| w == solution.white)
+                && let Some(pos) = solution_side(&placement, solution)
+            {
+                turn = Turn::Confirmed(pos);
             }
             // Weakest of all: the placement occurred in real games with only one side to move.
             if matches!(turn, Turn::Unknown)
@@ -1529,6 +1579,17 @@ fn recognized_positions(
         }
     }
     (out, unconfirmed)
+}
+/// The board with the solution's side to move, when its move 1 is legal for that side only.
+fn solution_side(placement: &str, solution: &Solution) -> Option<Chess> {
+    let side = if solution.white {
+        Color::White
+    } else {
+        Color::Black
+    };
+    let pos = placed(placement, side).filter(|pos| plays(pos, &solution.san))?;
+    let theirs = placed(placement, side.other()).is_some_and(|other| plays(&other, &solution.san));
+    (!theirs).then_some(pos)
 }
 /// `true` when `word` ends on a square that already holds a piece of `side` in `placement`:
 /// that side cannot move there, so the move is the one that reached the board.
@@ -1678,6 +1739,18 @@ enum Turn {
     /// name the other one. Backed by a printed mark the board is shown without a side to move
     /// and nothing else fills it; otherwise it stays unread.
     Disputed(bool),
+}
+/// Where a side read from text near the board, rather than from its caption, came from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nearby {
+    /// From the caption, a printed mark, or the board itself.
+    No,
+    /// The first numbered move in the text after the board.
+    MoveAfter,
+    /// The last move printed right above the board.
+    MoveAbove,
+    /// A turn named in commentary near the board.
+    Prose,
 }
 /// What the text just above a diagram says about it.
 #[derive(Default)]
@@ -1985,11 +2058,11 @@ fn image_position<'a>(
     before: &Before,
     alphabet: &str,
     placement: &str,
-) -> (Turn, bool) {
+) -> (Turn, Nearby) {
     let mut stated = caption_turn(alt);
     if let Some(side) = before.stated {
         if stated.is_some_and(|s| s != side) {
-            return (Turn::Contradicted, false);
+            return (Turn::Contradicted, Nearby::No);
         }
         stated = Some(side);
     }
@@ -2059,7 +2132,7 @@ fn image_position<'a>(
                 // The numbering names one side but only the other can play the move. After a
                 // caption this is commentary at odds with the board, not proof of a misread.
                 let turn = stated.map_or(Turn::Contradicted, |s| Turn::Disputed(s == Color::White));
-                return (turn, false);
+                return (turn, Nearby::No);
             }
         }
         let prose = found
@@ -2077,7 +2150,7 @@ fn image_position<'a>(
             // Commentary that names the other side than the caption may narrate the move
             // that reached the board or a line from before it: the side stays open.
             if let Some(named) = stated.filter(|&s| s != side) {
-                return (Turn::Disputed(named == Color::White), false);
+                return (Turn::Disputed(named == Color::White), Nearby::No);
             }
             stated = Some(side);
         }
@@ -2086,13 +2159,14 @@ fn image_position<'a>(
             continue;
         };
         if let Some(named) = stated.filter(|&s| s != side) {
-            return (Turn::Disputed(named == Color::White), false);
+            return (Turn::Disputed(named == Color::White), Nearby::No);
         }
-        return (Turn::Confirmed(pos), !led);
+        let nearby = if led { Nearby::No } else { Nearby::MoveAfter };
+        return (Turn::Confirmed(pos), nearby);
     }
     if let Some(side) = stated {
         let turn = placed(placement, side).map_or(Turn::Contradicted, Turn::Confirmed);
-        return (turn, !led);
+        return (turn, if led { Nearby::No } else { Nearby::Prose });
     }
     let sides: Vec<Chess> = [Color::White, Color::Black]
         .into_iter()
@@ -2113,7 +2187,7 @@ fn image_position<'a>(
         }
         _ => Turn::Unknown,
     };
-    (turn, false)
+    (turn, Nearby::No)
 }
 /// Whether the side to move can force checkmate within `n` of its moves.
 fn mates_within(pos: &Chess, n: u8) -> bool {
@@ -3143,6 +3217,36 @@ mod image_tests {
         );
         assert!(matches!(kind, BlockKind::Image { .. }), "{kind:?}");
     }
+    #[test]
+    fn a_solution_under_the_board_corrects_a_side_read_from_nearby_moves() {
+        use crate::books::diagram::{with_caption_side, with_single_solution, with_solution_move};
+        let png = tiny_png();
+        let fen = |kind: &BlockKind| match kind {
+            BlockKind::RecognizedDiagram { fen, .. } => fen.split(' ').nth(1).map(str::to_owned),
+            _ => None,
+        };
+        // The text after the board opens with White's move, but the solution right under it
+        // opens with Black's 1 … Kd8, which only Black can play.
+        let black = with_single_solution(&with_solution_move(&png, false, "Kd8"));
+        let kind = shown_bytes(black.clone(), PLACEMENT, "", &["1. Ra8+"]);
+        assert_eq!(fen(&kind).as_deref(), Some("b"), "{kind:?}");
+        // Lines that do not read as one solution decide nothing.
+        let weighed = with_solution_move(&png, false, "Kd8");
+        let kind = shown_bytes(weighed, PLACEMENT, "", &["1. Ra8+"]);
+        assert_eq!(fen(&kind).as_deref(), Some("w"), "{kind:?}");
+        // Nor does a move both sides can play, or one the solution's side cannot.
+        for san in ["Ra8", "Kd1"] {
+            let solution = with_single_solution(&with_solution_move(&png, false, san));
+            let kind = shown_bytes(solution, PLACEMENT, "", &["1. Ra8+"]);
+            assert_eq!(fen(&kind).as_deref(), Some("w"), "{kind:?}");
+        }
+        // A caption outranks the solution.
+        let kind = shown_bytes(with_caption_side(&black, true), PLACEMENT, "", &["1. Ra8+"]);
+        assert_eq!(fen(&kind).as_deref(), Some("w"), "{kind:?}");
+        let kind = shown_bytes(black, PLACEMENT, "White to play", &["1. Ra8+"]);
+        assert_eq!(fen(&kind).as_deref(), Some("w"), "{kind:?}");
+    }
+
     #[test]
     fn a_nearby_move_abstains_when_the_board_names_the_other_side() {
         use crate::books::diagram::{

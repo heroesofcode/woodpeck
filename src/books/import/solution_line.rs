@@ -2,6 +2,11 @@
 //! "Name – Name (1957): 1 … Qb1+ 2 Bc1". Only a line that opens with move 1 is read. The
 //! mover ("1 …" is Black) and the move are stored beside the pixels; the resolver keeps the
 //! side only when nothing else named one and the move is legal for exactly that side.
+//! Whether the lines read as that one solution is stored too: nothing numbered comes before
+//! move 1, White's move 1 never follows Black's, and the numbering never skips ahead. Only such
+//! a solution may correct a side read from moves elsewhere in the text. Text around the board that
+//! poses the position for both sides ("Whichever side is to move", "White to play … If Black
+//! is to move") stores nothing.
 
 use super::caption::{Rect, TextBox};
 
@@ -17,28 +22,65 @@ const COLUMN_AFTER: f64 = 1.25;
 const LINES: usize = 3;
 /// Words whose bottoms differ by less than this many word heights share a line.
 const SAME_LINE: f64 = 0.35;
+/// Text that poses a position may start this many board widths left of a centred board.
+const POSED_COLUMN_BEFORE: f64 = 0.5;
+/// Text this many board heights under the board's bottom edge may still pose its position.
+const POSED_BELOW_MAX: f64 = 1.0;
+/// Text this many board heights above the board's top edge may still pose its position.
+const ABOVE_MAX: f64 = 0.45;
 
 /// The column window under `board`, cut at the next picture down in it.
 fn window(index: usize, boards: &[Rect]) -> Rect {
+    window_reaching(index, boards, BELOW_MAX, COLUMN_BEFORE)
+}
+
+/// The column window reaching `reach` board heights under `board` and starting `before` board
+/// widths left of it, cut at the next picture down in the board's own column.
+fn window_reaching(index: usize, boards: &[Rect], reach: f64, before: f64) -> Rect {
     let board = boards[index];
     let width = (board.right - board.left).max(1.0);
     let height = (board.top - board.bottom).max(1.0);
-    let left = board.left - COLUMN_BEFORE * width;
+    let column = board.left - COLUMN_BEFORE * width;
     let right = board.left + COLUMN_AFTER * width;
     let top = board.bottom + BELOW_SLACK * height;
     let floor = boards
         .iter()
         .enumerate()
         .filter(|(at, other)| {
-            *at != index && other.top < top && other.right > left && other.left < right
+            *at != index && other.top < top && other.right > column && other.left < right
         })
         .map(|(_, other)| other.top)
-        .fold(board.bottom - BELOW_MAX * height, f64::max);
+        .fold(board.bottom - reach * height, f64::max);
     Rect {
-        left,
+        left: board.left - before * width,
         bottom: floor,
         right,
         top,
+    }
+}
+
+/// The window over `board`, starting [`POSED_COLUMN_BEFORE`] board widths left of it and cut at
+/// the next picture up in the board's own column.
+fn window_above(index: usize, boards: &[Rect]) -> Rect {
+    let board = boards[index];
+    let width = (board.right - board.left).max(1.0);
+    let height = (board.top - board.bottom).max(1.0);
+    let column = board.left - COLUMN_BEFORE * width;
+    let right = board.left + COLUMN_AFTER * width;
+    let bottom = board.top - BELOW_SLACK * height;
+    let ceiling = boards
+        .iter()
+        .enumerate()
+        .filter(|(at, other)| {
+            *at != index && other.bottom > bottom && other.right > column && other.left < right
+        })
+        .map(|(_, other)| other.bottom)
+        .fold(board.top + ABOVE_MAX * height, f64::min);
+    Rect {
+        left: board.left - POSED_COLUMN_BEFORE * width,
+        bottom,
+        right,
+        top: ceiling,
     }
 }
 
@@ -55,6 +97,13 @@ fn word_height(word: &TextBox) -> f64 {
 
 /// The first [`LINES`] lines in `window`, top to bottom, each with its words left to right.
 fn first_lines(window: Rect, words: &[TextBox]) -> Vec<Vec<&TextBox>> {
+    let mut lines = lines_in(window, words);
+    lines.truncate(LINES);
+    lines
+}
+
+/// Every line in `window`, top to bottom, each with its words left to right.
+fn lines_in(window: Rect, words: &[TextBox]) -> Vec<Vec<&TextBox>> {
     let mut inside_words: Vec<&TextBox> = words.iter().filter(|w| inside(window, w)).collect();
     inside_words.sort_by(|a, b| b.rect.bottom.total_cmp(&a.rect.bottom));
     let mut lines: Vec<Vec<&TextBox>> = Vec::new();
@@ -70,20 +119,50 @@ fn first_lines(window: Rect, words: &[TextBox]) -> Vec<Vec<&TextBox>> {
             lines.push(vec![word]);
         }
     }
-    lines.truncate(LINES);
     for line in &mut lines {
         line.sort_by(|a, b| a.rect.left.total_cmp(&b.rect.left));
     }
     lines
 }
 
-/// One move per board: `Some((true, "Qg3"))` when the first line under it opens with White's
-/// move 1. A line that also sits under another board leaves both open.
+/// The first move printed under a board.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SolutionLine {
+    /// `true` when move 1 is White's.
+    pub white: bool,
+    pub san: String,
+    /// The numbered moves in the lines read as this one solution.
+    pub single: bool,
+}
+
+fn joined(lines: &[Vec<&TextBox>]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One move per board, when the first line under it opens with move 1. A line that also sits
+/// under another board leaves both open, and so does text around the board that poses the
+/// position for both sides. Past a board's own lines, text that also sits around another board
+/// is that board's.
 pub(super) fn bind_solution_lines(
     diagrams: &[Rect],
     words: &[TextBox],
-) -> Vec<Option<(bool, String)>> {
+) -> Vec<Option<SolutionLine>> {
     let windows: Vec<Rect> = (0..diagrams.len()).map(|i| window(i, diagrams)).collect();
+    let above: Vec<Rect> = (0..diagrams.len())
+        .map(|i| window_above(i, diagrams))
+        .collect();
+    let far: Vec<Rect> = (0..diagrams.len())
+        .map(|i| window_reaching(i, diagrams, POSED_BELOW_MAX, POSED_COLUMN_BEFORE))
+        .collect();
     windows
         .iter()
         .enumerate()
@@ -98,19 +177,101 @@ pub(super) fn bind_solution_lines(
             if shared {
                 return None;
             }
-            let text = lines
-                .iter()
-                .map(|line| {
-                    line.iter()
-                        .map(|w| w.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            first_move(&text).and_then(|(number, white, san)| (number == 1).then_some((white, san)))
+            let text = joined(&lines);
+            let (number, white, san) = first_move(&text)?;
+            if number != 1 {
+                return None;
+            }
+            // Beyond this board's own lines, text that also sits around another board is that
+            // board's, not this one's.
+            let theirs = |word: &TextBox| {
+                !inside(*own, word)
+                    && (0..diagrams.len()).any(|other| {
+                        other != index
+                            && (inside(windows[other], word)
+                                || inside(above[other], word)
+                                || inside(far[other], word))
+                    })
+            };
+            let mine: Vec<TextBox> = words.iter().filter(|w| !theirs(w)).cloned().collect();
+            let around = format!(
+                "{} {}",
+                joined(&lines_in(above[index], &mine)),
+                joined(&lines_in(far[index], &mine))
+            );
+            if poses_both_sides(&around) {
+                return None;
+            }
+            let single = single_line(&numbered_moves(&text), white, &san);
+            Some(SolutionLine { white, san, single })
         })
         .collect()
+}
+
+/// `true` when `moves` read as one solution opening with `san`: it comes first, no White move 1
+/// follows Black's, and no move number is more than one past the one before it.
+fn single_line(moves: &[(u32, bool, String)], white: bool, san: &str) -> bool {
+    let Some(((1, first_white, first), rest)) = moves.split_first() else {
+        return false;
+    };
+    if *first_white != white || first != san {
+        return false;
+    }
+    let mut last = 1;
+    for (number, mover, _) in rest {
+        if *number > last + 1 || (!white && *number == 1 && *mover) {
+            return false;
+        }
+        last = *number;
+    }
+    true
+}
+
+/// Phrases that pose a position for either side to move.
+const EITHER_SIDE: &[&str] = &[
+    "whichever side",
+    "either side to move",
+    "either side to play",
+    "whoever is to move",
+    "whoever moves",
+    "no matter who moves",
+    "no matter which side",
+];
+
+/// `true` when `text` poses the position for both sides: "Whichever side is to move", or a turn
+/// phrase for White and another for Black ("White to play …  If Black is to move …").
+fn poses_both_sides(text: &str) -> bool {
+    let lower: String = text
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if EITHER_SIDE.iter().any(|phrase| lower.contains(phrase)) {
+        return true;
+    }
+    let words: Vec<&str> = lower
+        .split(' ')
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\''))
+        .collect();
+    let mut white = false;
+    let mut black = false;
+    for (i, word) in words.iter().enumerate() {
+        let side = match *word {
+            "white" => &mut white,
+            "black" => &mut black,
+            _ => continue,
+        };
+        // "White to play", "Black is to move", "White, to move,".
+        let rest: Vec<&str> = words[i + 1..].iter().take(3).copied().collect();
+        let turn = match rest.as_slice() {
+            ["to", verb, ..] | ["is", "to", verb, ..] => matches!(*verb, "play" | "move"),
+            _ => false,
+        };
+        if turn {
+            *side = true;
+        }
+    }
+    white && black
 }
 
 /// Figurines become piece letters, a lone piece letter joins the square after it, and an
@@ -232,6 +393,32 @@ fn ellipsis(word: &str) -> bool {
 /// The first numbered move in `text`: its number, `true` for White, and the move.
 /// "1 …" / "1..." / "1. ..." name Black; "1" / "1." name White.
 pub(super) fn first_move(text: &str) -> Option<(u32, bool, String)> {
+    numbered(text, san).into_iter().next()
+}
+
+/// Every numbered move in `text`, promotions written without `=` ("g8N") included.
+fn numbered_moves(text: &str) -> Vec<(u32, bool, String)> {
+    numbered(text, |word| {
+        san(word).or_else(|| {
+            let bare = word.trim_end_matches(|c: char| "!?+#X,.;:)".contains(c));
+            let chars: Vec<char> = bare.chars().collect();
+            let promotes = matches!(
+                chars.as_slice(),
+                [file, rank, piece] | [_, 'x', file, rank, piece]
+                    if ('a'..='h').contains(file)
+                        && matches!(*rank, '1' | '8')
+                        && "QRBN".contains(*piece)
+            );
+            promotes.then(|| {
+                let (body, piece) = bare.split_at(bare.len() - 1);
+                format!("{body}={piece}")
+            })
+        })
+    })
+}
+
+fn numbered(text: &str, read: impl Fn(&str) -> Option<String>) -> Vec<(u32, bool, String)> {
+    let mut out = Vec::new();
     let words = tokens(text);
     for (i, word) in words.iter().enumerate() {
         if word.is_empty() || word.len() > 3 || !word.chars().all(|c| c.is_ascii_digit()) {
@@ -264,11 +451,11 @@ pub(super) fn first_move(text: &str) -> Option<(u32, bool, String)> {
             (0, false) => (true, i + 1),
             (n, _) => (false, i + 1 + n),
         };
-        if let Some(found) = words.get(j).and_then(|w| san(w)) {
-            return Some((number, white, found));
+        if let Some(found) = words.get(j).and_then(|w| read(w)) {
+            out.push((number, white, found));
         }
     }
-    None
+    out
 }
 
 /// Stamp the first move printed under each board onto its picture. Only pages with a poppler
@@ -302,7 +489,7 @@ pub(super) fn stamp_solution_lines(
             .collect();
         let moves = bind_solution_lines(&diagrams, words);
         for (picture, found) in placed.iter_mut().zip(moves) {
-            let Some((white, san)) = found else {
+            let Some(line) = found else {
                 continue;
             };
             if cover.is_some_and(|bytes| bytes == picture.bytes.as_slice()) {
@@ -311,14 +498,19 @@ pub(super) fn stamp_solution_lines(
             let Some(png) = super::pdf::diagram_png(&picture.bytes) else {
                 continue;
             };
-            picture.bytes = crate::books::diagram::with_solution_move(&png, white, &san);
+            let png = crate::books::diagram::with_solution_move(&png, line.white, &line.san);
+            picture.bytes = if line.single {
+                crate::books::diagram::with_single_solution(&png)
+            } else {
+                png
+            };
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, TextBox, bind_solution_lines, first_move};
+    use super::{Rect, SolutionLine, TextBox, bind_solution_lines, first_move, poses_both_sides};
 
     fn rect(left: f64, bottom: f64, right: f64, top: f64) -> Rect {
         Rect {
@@ -406,7 +598,11 @@ mod tests {
         words.extend(line("Black wins.", 90.0, 455.0));
         assert_eq!(
             bind_solution_lines(&boards, &words),
-            vec![Some((false, "Qb1".into()))]
+            vec![Some(SolutionLine {
+                white: false,
+                san: "Qb1".into(),
+                single: true,
+            })]
         );
     }
 
@@ -428,6 +624,137 @@ mod tests {
         assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
         let words = line("1 Qg3!", 400.0, 470.0);
         assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
+    }
+
+    #[test]
+    fn only_lines_that_read_as_one_solution_are_single() {
+        let boards = [rect(100.0, 500.0, 250.0, 650.0)];
+        // Each half of the text on its own line, so that long texts fit the column.
+        let single = |text: &str| {
+            let words: Vec<&str> = text.split(' ').collect();
+            let (first, second) = words.split_at(words.len().div_ceil(2));
+            let mut lines = line(&first.join(" "), 90.0, 470.0);
+            lines.extend(line(&second.join(" "), 90.0, 455.0));
+            bind_solution_lines(&boards, &lines)[0]
+                .as_ref()
+                .map(|found| found.single)
+        };
+        assert_eq!(
+            single("Aaa – Bbb (1957): 1 … Qb1+ 2 Bc1 Qxc1+ 3 Kxc1"),
+            Some(true)
+        );
+        assert_eq!(single("1 Qxf6! gxf6 (1 … Rxd1 2 Qxg7+) 2 Bh4"), Some(true));
+        // A promotion the move reader skips still counts as White's move 1 first.
+        assert_eq!(single("If we play 1 g8N then 1 … g4! 2 Qe8"), Some(false));
+        // White's move 1 after Black's.
+        assert_eq!(single("1 … Ke8! or 1 Kd6 Kd8"), Some(false));
+        // The text looks back from later in the game.
+        assert_eq!(
+            single("We see why 1 Rg3!! was needed. After 6 … Kd8 7 Kf7"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn a_position_posed_for_both_sides_stores_nothing() {
+        let boards = [rect(100.0, 500.0, 250.0, 650.0)];
+        // Over the board.
+        let mut words = line("Whichever side is to move, it is a draw.", 90.0, 680.0);
+        words.extend(line("1 … Ke8! 2 Kd6 Kd8", 90.0, 470.0));
+        assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
+        // Under it, over several lines.
+        let mut words = line("White to play can win by 1 Ba3+.", 90.0, 470.0);
+        words.extend(line("Black's King must move.", 90.0, 455.0));
+        words.extend(line("If Black is to", 90.0, 440.0));
+        words.extend(line("move he plays 1 … Bb7+.", 90.0, 425.0));
+        assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
+        // The other side's paragraph may sit further down.
+        let mut words = line("White to play can win by 1 Ba3+.", 90.0, 470.0);
+        words.extend(line("If Black is to move he plays 1 … Bb7+.", 90.0, 380.0));
+        assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
+        // A paragraph may start left of a centred board's column.
+        let mut words = line("White to play can win by 1 Ba3+.", 90.0, 470.0);
+        words.extend(line("If Black is to move he plays 1 … Bb7+.", 15.0, 400.0));
+        assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
+        // One side only is a solution.
+        let words = line("White to play wins by 1 Ba3+.", 90.0, 470.0);
+        assert_eq!(
+            bind_solution_lines(&boards, &words),
+            vec![Some(SolutionLine {
+                white: true,
+                san: "Ba3".into(),
+                single: true,
+            })]
+        );
+        assert!(!poses_both_sides("White resigned. Black to move."));
+        assert!(poses_both_sides(
+            "With Black to play 1 … Ke8. With White to move, however"
+        ));
+    }
+
+    #[test]
+    fn text_under_another_board_does_not_pose_this_one() {
+        let boards = [
+            rect(100.0, 500.0, 250.0, 650.0),
+            rect(100.0, 250.0, 250.0, 400.0),
+        ];
+        // The upper board's solution sits over the lower board.
+        let mut words = line("Black to play: 1 … Qb1", 90.0, 470.0);
+        words.extend(line("White to play wins by 1 Ba3+.", 90.0, 220.0));
+        assert_eq!(
+            bind_solution_lines(&boards, &words),
+            vec![
+                Some(SolutionLine {
+                    white: false,
+                    san: "Qb1".into(),
+                    single: true,
+                }),
+                Some(SolutionLine {
+                    white: true,
+                    san: "Ba3".into(),
+                    single: true,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_caption_over_the_next_board_does_not_pose_this_one() {
+        let boards = [
+            rect(100.0, 500.0, 250.0, 650.0),
+            rect(100.0, 250.0, 250.0, 380.0),
+        ];
+        let mut words = line("White to play wins by 1 Ba3+.", 90.0, 470.0);
+        // The lower board's caption, in the gap over it.
+        words.extend(line("Black to play.", 90.0, 395.0));
+        words.extend(line("1 … Qb1", 90.0, 220.0));
+        assert_eq!(
+            bind_solution_lines(&boards, &words),
+            vec![
+                Some(SolutionLine {
+                    white: true,
+                    san: "Ba3".into(),
+                    single: true,
+                }),
+                Some(SolutionLine {
+                    white: false,
+                    san: "Qb1".into(),
+                    single: true,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_board_in_the_next_column_does_not_cut_the_posing_window() {
+        let boards = [
+            rect(100.0, 500.0, 250.0, 650.0),
+            // In the column to the left, its right edge inside the wider posing margin only.
+            rect(-140.0, 380.0, 40.0, 470.0),
+        ];
+        let mut words = line("White to play can win by 1 Ba3+.", 90.0, 470.0);
+        words.extend(line("If Black is to move he plays 1 … Bb7+.", 90.0, 400.0));
+        assert_eq!(bind_solution_lines(&boards, &words)[0], None);
     }
 
     #[test]
