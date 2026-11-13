@@ -22,6 +22,8 @@ const COLUMN_AFTER: f64 = 1.25;
 const LINES: usize = 3;
 /// Words whose bottoms differ by less than this many word heights share a line.
 const SAME_LINE: f64 = 0.35;
+/// Text that poses a position may start this many board widths left of a centred board.
+const POSED_COLUMN_BEFORE: f64 = 0.5;
 /// Text this many board heights under the board's bottom edge may still pose its position.
 const POSED_BELOW_MAX: f64 = 1.0;
 /// Text this many board heights above the board's top edge may still pose its position.
@@ -29,15 +31,16 @@ const ABOVE_MAX: f64 = 0.45;
 
 /// The column window under `board`, cut at the next picture down in it.
 fn window(index: usize, boards: &[Rect]) -> Rect {
-    window_reaching(index, boards, BELOW_MAX)
+    window_reaching(index, boards, BELOW_MAX, COLUMN_BEFORE)
 }
 
-/// The column window reaching `reach` board heights under `board`, cut at the next picture down.
-fn window_reaching(index: usize, boards: &[Rect], reach: f64) -> Rect {
+/// The column window reaching `reach` board heights under `board` and starting `before` board
+/// widths left of it, cut at the next picture down.
+fn window_reaching(index: usize, boards: &[Rect], reach: f64, before: f64) -> Rect {
     let board = boards[index];
     let width = (board.right - board.left).max(1.0);
     let height = (board.top - board.bottom).max(1.0);
-    let left = board.left - COLUMN_BEFORE * width;
+    let left = board.left - before * width;
     let right = board.left + COLUMN_AFTER * width;
     let top = board.bottom + BELOW_SLACK * height;
     let floor = boards
@@ -61,7 +64,7 @@ fn window_above(index: usize, boards: &[Rect]) -> Rect {
     let board = boards[index];
     let width = (board.right - board.left).max(1.0);
     let height = (board.top - board.bottom).max(1.0);
-    let left = board.left - COLUMN_BEFORE * width;
+    let left = board.left - POSED_COLUMN_BEFORE * width;
     let right = board.left + COLUMN_AFTER * width;
     let bottom = board.top - BELOW_SLACK * height;
     let ceiling = boards
@@ -157,7 +160,7 @@ pub(super) fn bind_solution_lines(
         .map(|i| window_above(i, diagrams))
         .collect();
     let far: Vec<Rect> = (0..diagrams.len())
-        .map(|i| window_reaching(i, diagrams, POSED_BELOW_MAX))
+        .map(|i| window_reaching(i, diagrams, POSED_BELOW_MAX, POSED_COLUMN_BEFORE))
         .collect();
     windows
         .iter()
@@ -667,6 +670,10 @@ mod tests {
         // The other side's paragraph may sit further down.
         let mut words = line("White to play can win by 1 Ba3+.", 90.0, 470.0);
         words.extend(line("If Black is to move he plays 1 … Bb7+.", 90.0, 380.0));
+        assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
+        // A paragraph may start left of a centred board's column.
+        let mut words = line("White to play can win by 1 Ba3+.", 90.0, 470.0);
+        words.extend(line("If Black is to move he plays 1 … Bb7+.", 40.0, 400.0));
         assert_eq!(bind_solution_lines(&boards, &words), vec![None]);
         // One side only is a solution.
         let words = line("White to play wins by 1 Ba3+.", 90.0, 470.0);
