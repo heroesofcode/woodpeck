@@ -706,7 +706,8 @@ pub fn with_scan_move(png: &[u8], white: bool, destination: &str) -> Vec<u8> {
     with_text(png, SCAN_MOVE_KEY, &value)
 }
 
-/// The move stored by [`with_scan_move`]: `(true, "e4")` when White plays to e4.
+/// The move stored by [`with_scan_move`]: `(true, "e4")` when White plays to e4. A destination
+/// read only through OCR repairs keeps its leading `~` (`(true, "~e4")`).
 pub fn stated_scan_move(bytes: &[u8]) -> Option<(bool, String)> {
     let text = String::from_utf8(text_chunk(bytes, SCAN_MOVE_KEY)?).ok()?;
     let white = match text.as_bytes().first()? {
@@ -714,12 +715,12 @@ pub fn stated_scan_move(bytes: &[u8]) -> Option<(bool, String)> {
         b'b' => false,
         _ => return None,
     };
-    let destination = &text[1..];
+    let stored = &text[1..];
+    let destination = stored.strip_prefix('~').unwrap_or(stored);
     let square = destination.len() == 2
         && matches!(destination.as_bytes()[0], b'a'..=b'h')
         && matches!(destination.as_bytes()[1], b'1'..=b'8');
-    (square || destination == "O-O" || destination == "O-O-O")
-        .then(|| (white, destination.to_owned()))
+    (square || destination == "O-O" || destination == "O-O-O").then(|| (white, stored.to_owned()))
 }
 
 /// Key of the PNG text chunk holding the first move printed under a board on a text page.
@@ -3393,6 +3394,16 @@ mod tests {
             Some("8/8/8/8/8/8/8/K6k")
         );
         assert!(image::load_from_memory(&both).is_ok());
+        // A printed move read through OCR repairs keeps its mark.
+        assert_eq!(
+            stated_scan_move(&with_scan_move(&png, true, "e4")),
+            Some((true, "e4".into()))
+        );
+        assert_eq!(
+            stated_scan_move(&with_scan_move(&png, false, "~O-O")),
+            Some((false, "~O-O".into()))
+        );
+        assert_eq!(stated_scan_move(&with_scan_move(&png, true, "~e9")), None);
     }
     use super::*;
 

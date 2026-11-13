@@ -325,6 +325,8 @@ pub fn parse(pos: &Chess, text: &str, alphabet: &str) -> Result<Move, MatchError
         _ => Err(MatchError::Ambiguous),
     }
 }
+/// Stands in for a figurine printed as a small picture; it reads as some piece, never a pawn.
+pub const UNMAPPED_FIGURINE: char = '\u{FFFD}';
 /// Every legal move a descriptive text could mean ("B-Kt2" may name either bishop), or failing
 /// that, every piece move an unmapped figurine could mean.
 pub fn candidates(pos: &Chess, text: &str) -> Vec<Move> {

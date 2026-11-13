@@ -595,13 +595,35 @@ fn assign_moves(
                     && frame_distance(*neighbour, line)
                         <= own.mul_add(NEIGHBOUR_DISTANCE_FACTOR, NEIGHBOUR_SLACK_PX)
             });
-            if vetoed {
+            if !vetoed && let Some(read) = printed_move_strict(&line.text) {
+                return Some(read);
+            }
+            // A weaker reading: OCR slips repaired, and a line under a board beside another
+            // one is kept unless it sits as close over another board's top (that board's
+            // lead-in). It is stored apart and never outweighs another signal.
+            #[allow(clippy::cast_precision_loss)]
+            let over = line.top - frames[index][3] as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let lead_in = frames.iter().enumerate().any(|(other, neighbour)| {
+                other != index
+                    && (neighbour[1] as f64 - line.bottom).abs()
+                        <= over
+                            .max(0.0)
+                            .mul_add(NEIGHBOUR_DISTANCE_FACTOR, NEIGHBOUR_SLACK_PX)
+            });
+            // Nor may it start right of the board, in the next text column.
+            #[allow(clippy::cast_precision_loss)]
+            let beside = line.left >= board[2] as f64;
+            if lead_in || beside {
                 return None;
             }
-            printed_move(&line.text)
+            printed_move(&line.text).map(|(white, to)| (white, format!("{WEAK_MOVE}{to}")))
         })
         .collect()
 }
+
+/// Marks a printed move read only through OCR repairs or the looser neighbour rule.
+pub(super) const WEAK_MOVE: char = '~';
 
 /// Top of the first line under the board, at most this many board-widths below its bottom edge.
 const MOVE_GAP_MAX: f64 = 0.3;
@@ -644,9 +666,9 @@ fn first_line_under(board: Frame, lines: &[OcrLine]) -> Option<&OcrLine> {
         .min_by(|a, b| a.left.total_cmp(&b.left))
 }
 
-/// Mover and destination of a line such as `12.Nf3`, `12...Qc7`, `8…dxe4` or `15.0-0`.
+/// Mover and destination, read strictly, of a line such as `12.Nf3`, `12...Qc7`, `8…dxe4` or `15.0-0`.
 /// The figurine may be misread; only the move number, the dots and the target are used.
-fn printed_move(text: &str) -> Option<(bool, String)> {
+fn printed_move_strict(text: &str) -> Option<(bool, String)> {
     let text = text.trim_start();
     let digits = text.chars().take_while(char::is_ascii_digit).count();
     if digits == 0 || digits > 3 || text.starts_with('0') {
@@ -697,6 +719,93 @@ fn printed_move(text: &str) -> Option<(bool, String)> {
         }
     }
     None
+}
+
+/// Mover and destination of a line such as `12.Nf3`, `12...Qc7`, `8…dxe4` or `15.0-0`.
+/// The figurine may be misread; only the move number, the dots and the target are used. OCR
+/// slips common in bold move lines are repaired: `1o.` is move 10, `11-f4` or `11,f4` is `11.f4`,
+/// and a square's rank or file printed as a look-alike (`z` for 2, `s` for 5, `l` for 1, `C` for
+/// c) still names it. The resolver checks the destination against the placement.
+fn printed_move(text: &str) -> Option<(bool, String)> {
+    let repaired = repaired_number(text.trim_start());
+    let text = repaired.as_str();
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 || digits > 3 || text.starts_with('0') {
+        return None;
+    }
+    let mut dots = 0;
+    let mut rest = &text[digits..];
+    loop {
+        let trimmed = rest.trim_start_matches(' ');
+        if let Some(after) = trimmed.strip_prefix('.') {
+            dots += 1;
+            rest = after;
+        } else if let Some(after) = trimmed.strip_prefix('\u{2026}') {
+            dots += 3;
+            rest = after;
+        } else {
+            rest = trimmed;
+            break;
+        }
+    }
+    let white = match dots {
+        1 => true,
+        2..=4 => false,
+        _ => return None,
+    };
+    let compact: String = rest
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .take(8)
+        .collect();
+    for castle in ["O-O-O", "0-0-0", "O-O", "0-0"] {
+        if compact.starts_with(castle) {
+            let long = castle.len() == 5;
+            return Some((white, if long { "O-O-O" } else { "O-O" }.to_owned()));
+        }
+    }
+    let chars: Vec<char> = compact.chars().collect();
+    // The square comes within the first few characters, after a figurine or piece letter
+    // (possibly misread) and a capture or disambiguation.
+    chars.windows(2).take(5).find_map(|pair| {
+        let file = match pair[0] {
+            'C' => 'c',
+            'E' => 'e',
+            c => c,
+        };
+        let rank = match pair[1] {
+            'z' | 'Z' => '2',
+            's' | 'S' => '5',
+            'a' => '4',
+            'l' | 'I' | 'i' | '|' | 't' => '1',
+            'B' => '8',
+            c => c,
+        };
+        (('a'..='h').contains(&file) && ('1'..='8').contains(&rank))
+            .then(|| (white, format!("{file}{rank}")))
+    })
+}
+
+/// `text` with the move number's OCR slips repaired: `1o` reads `10`, and a dash, underscore or
+/// comma right after the number reads as its dot.
+fn repaired_number(text: &str) -> String {
+    let mut out: String = text.to_owned();
+    let bytes = out.as_bytes();
+    if bytes.len() > 1 && bytes[0].is_ascii_digit() && bytes[1] == b'o' {
+        out.replace_range(1..2, "0");
+    }
+    let digits = out.chars().take_while(char::is_ascii_digit).count();
+    if (1..=3).contains(&digits) {
+        let mut tail = out[digits..].chars();
+        if let (Some('-' | '_' | ','), Some(next)) = (tail.next(), tail.next())
+            && (next.is_whitespace()
+                || next.is_ascii_alphabetic()
+                || matches!(next, '.' | '?' | '#'))
+        {
+            out.replace_range(digits..=digits, ".");
+        }
+    }
+    out
 }
 
 fn sole_owner(frames: &[Frame], boards: &[Frame], line: &OcrLine) -> Option<usize> {
@@ -1330,6 +1439,13 @@ mod tests {
         assert_eq!(printed_move("12.....Nf3"), None);
         assert_eq!(printed_move("05.Nf3"), None);
         assert_eq!(printed_move("12.(see page 40)"), None);
+        // OCR slips in bold move lines.
+        assert_eq!(printed_move("1o.Nf3"), mv(true, "f3"));
+        assert_eq!(printed_move("11-f4 e5"), mv(true, "f4"));
+        assert_eq!(printed_move("23...Rcz"), mv(false, "c2"));
+        assert_eq!(printed_move("17.\u{a3})xe5"), mv(true, "e5"));
+        assert_eq!(printed_move("9...QeB+"), mv(false, "e8"));
+        assert_eq!(printed_move("11-12 April"), None);
     }
 
     #[test]
@@ -1359,6 +1475,20 @@ mod tests {
         assert_eq!(
             assign_moves(&pair, &pair, &[between], &open(2)),
             vec![None, None]
+        );
+    }
+
+    #[test]
+    fn a_repaired_move_is_weak_and_never_read_from_the_next_column() {
+        let frames = [board(40, 30, 200)];
+        assert_eq!(
+            assign_moves(&frames, &frames, &[under("1o.Nf3", frames[0])], &open(1)),
+            vec![Some((true, format!("{}f3", super::WEAK_MOVE)))]
+        );
+        let beside = caption("1o.Nf3", frames[0], 20.0, 160.0, 16.0, 0.95);
+        assert_eq!(
+            assign_moves(&frames, &frames, &[beside], &open(1)),
+            vec![None]
         );
     }
 }

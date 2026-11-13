@@ -650,18 +650,54 @@ fn epub(bytes: &[u8]) -> Result<Document, ImportError> {
                 continue;
             }
             // Split containers around images so their text cannot run ahead of an
-            // intervening diagram. Nested images are emitted here exactly once.
+            // intervening diagram. Nested images are emitted here exactly once. A glyph-sized
+            // image between the move number that opens a paragraph and the move's square is a
+            // figurine drawn as a picture: it stays in the text as an unmapped figurine instead.
+            // Pictures inside commentary still split it.
             let mut pieces = Vec::new();
             let mut text = String::new();
-            for node in el.descendants() {
-                if let Some(image) = scraper::ElementRef::wrap(node)
+            let mut figurine = false;
+            let nodes: Vec<_> = el.descendants().collect();
+            for (at, node) in nodes.iter().enumerate() {
+                if let Some(image) = scraper::ElementRef::wrap(*node)
                     && image.value().name() == "img"
                 {
+                    let path = joined(
+                        Path::new(&source).parent().unwrap_or(base),
+                        image.attr("src").unwrap_or(""),
+                    );
+                    let next = nodes[at + 1..].iter().find_map(|n| match n.value() {
+                        scraper::node::Node::Text(value) if !value.trim().is_empty() => {
+                            Some(&**value)
+                        }
+                        _ => None,
+                    });
+                    if files.get(&path).is_some_and(|b| glyph_sized(b))
+                        && pieces.is_empty()
+                        && opens_with_move_number(&text)
+                        && next.is_some_and(starts_with_move_tail)
+                    {
+                        if !text.is_empty() {
+                            text.push(' ');
+                        }
+                        text.push(crate::books::notation::UNMAPPED_FIGURINE);
+                        figurine = true;
+                        continue;
+                    }
                     if !text.is_empty() {
                         pieces.push((el, std::mem::take(&mut text)));
                     }
                     pieces.push((image, String::new()));
                 } else if let scraper::node::Node::Text(value) = node.value() {
+                    if figurine {
+                        // The figurine joins the square after it.
+                        if value.trim().is_empty() {
+                            continue;
+                        }
+                        text.push_str(value.trim_start());
+                        figurine = false;
+                        continue;
+                    }
                     if el.value().name() != "pre" && !text.is_empty() {
                         text.push(' ');
                     }
@@ -741,6 +777,41 @@ fn epub(bytes: &[u8]) -> Result<Document, ImportError> {
         .select(&selector("dc\\:identifier"))
         .find_map(|e| isbn(&e.text().collect::<String>()));
     Ok(doc)
+}
+/// Whether a picture is the size of a glyph in running text (a figurine), not a diagram.
+fn glyph_sized(bytes: &[u8]) -> bool {
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|r| r.into_dimensions().ok())
+        .is_some_and(|(w, h)| (8..=32).contains(&w) && (8..=32).contains(&h))
+}
+/// Whether `text` is only a move number, with or without its dots ("15", "15.", "15 ...").
+fn opens_with_move_number(text: &str) -> bool {
+    let text = text.trim();
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    (1..=3).contains(&digits)
+        && text[digits..]
+            .chars()
+            .all(|c| c == '.' || c == '\u{2026}' || c.is_whitespace())
+}
+/// Whether `text` opens with the rest of a piece move: an optional file or rank, an optional
+/// capture and a square ("f6", "xe5", "bd7", "1xd4").
+fn starts_with_move_tail(text: &str) -> bool {
+    let word: String = text
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_alphanumeric)
+        .collect();
+    let bytes = word.as_bytes();
+    let square = |f: u8, r: u8| (b'a'..=b'h').contains(&f) && (b'1'..=b'8').contains(&r);
+    let core: Vec<u8> = bytes.iter().copied().filter(|&b| b != b'x').collect();
+    match core.as_slice() {
+        [f, r] => square(*f, *r),
+        [d, f, r] => ((b'a'..=b'h').contains(d) || (b'1'..=b'8').contains(d)) && square(*f, *r),
+        [df, dr, f, r] => square(*df, *dr) && square(*f, *r),
+        _ => false,
+    }
 }
 /// Whether a picture decodes as one of the formats the library can draw (PNG, JPEG).
 fn decodes(bytes: &[u8]) -> bool {
@@ -1316,6 +1387,51 @@ mod tests {
                 (6, "Note".into())
             ]
         );
+    }
+
+    #[test]
+    fn glyph_sized_pictures_before_a_square_read_as_figurines() {
+        let mut glyph = std::io::Cursor::new(Vec::new());
+        image::RgbImage::new(20, 20)
+            .write_to(&mut glyph, image::ImageFormat::Png)
+            .unwrap();
+        let body = "<p><b>15 ... <img src='n.png'/>\n f6</b> 16 e4<img src='n.png'/>) and</p><p>White is angling for 20 <img src='n.png'/>xh7.</p>";
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, data) in [
+            (
+                "META-INF/container.xml",
+                "<container><rootfile full-path='book.opf'/></container>".as_bytes(),
+            ),
+            (
+                "book.opf",
+                "<package><manifest><item id='chapter' href='chapter.html'/></manifest><spine><itemref idref='chapter'/></spine></package>".as_bytes(),
+            ),
+            ("chapter.html", body.as_bytes()),
+            ("n.png", glyph.get_ref().as_slice()),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(data).unwrap();
+        }
+        let document = epub(&zip.finish().unwrap().into_inner()).unwrap();
+        let page = &document.pages[0];
+        // The picture after the opening move number is a figurine; the ones before ")" and
+        // inside commentary stay pictures.
+        assert!(page.text.contains("15 ... \u{FFFD}f6"));
+        assert!(!page.text.contains("20 \u{FFFD}"));
+        assert_eq!(
+            page.blocks
+                .iter()
+                .filter(|b| matches!(b.kind, BlockKind::Image { .. }))
+                .count(),
+            2
+        );
+        assert!(opens_with_move_number(" 15 ... "));
+        assert!(!opens_with_move_number("White is angling for 20"));
+        assert!(starts_with_move_tail(" xe5!"));
+        assert!(starts_with_move_tail("bd7"));
+        assert!(!starts_with_move_tail(") and"));
+        assert!(!starts_with_move_tail("is"));
     }
 
     #[test]
