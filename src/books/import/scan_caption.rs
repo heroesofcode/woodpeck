@@ -25,6 +25,9 @@ const NEIGHBOUR_DISTANCE_FACTOR: f64 = 1.5;
 const NEIGHBOUR_SLACK_PX: f64 = 2.0;
 /// Minimum mean line confidence. Below this the line is not evidence.
 const OCR_CONFIDENCE_MIN: f32 = 0.85;
+/// Bold figurine move lines OCR with lower confidence. Their skeleton is read down to this
+/// floor, because it must also agree with the move number printed under the board.
+const SKELETON_CONFIDENCE_MIN: f32 = 0.80;
 /// Raster size implied by the PDF dimensions and scale may disagree by at most this many pixels.
 const TRANSFORM_TOLERANCE_PX: f64 = 1.0;
 
@@ -650,7 +653,7 @@ fn assign_played(
                 return None;
             }
             let line = last_line_above(*board, lines)?;
-            if !(OCR_CONFIDENCE_MIN..=1.0).contains(&line.confidence) {
+            if !(SKELETON_CONFIDENCE_MIN..=1.0).contains(&line.confidence) {
                 return None;
             }
             // The line may be the end of another board's text: a nearer board vetoes it.
@@ -663,7 +666,17 @@ fn assign_played(
             if vetoed {
                 return None;
             }
-            let (white, piece, to) = played_move(&line.text)?;
+            let strict = (OCR_CONFIDENCE_MIN..=1.0)
+                .contains(&line.confidence)
+                .then(|| played_move(&line.text))
+                .flatten();
+            let (white, piece, to) = strict.or_else(|| {
+                let under = first_line_under(*board, lines)?;
+                if !(SKELETON_CONFIDENCE_MIN..=1.0).contains(&under.confidence) {
+                    return None;
+                }
+                skeleton_played(&line.text, &under.text)
+            })?;
             Some((white, format!("{PLAYED_MOVE}{piece}{to}")))
         })
         .collect()
@@ -741,6 +754,133 @@ pub(super) fn played_move(text: &str) -> Option<(bool, char, String)> {
     }
     let (white, (piece, to)) = last?;
     Some((white, piece, to))
+}
+
+/// The last ply of a bold move line whose figurines OCR garbled (`16.9xh2 ?e4`): the move
+/// numbers and most destinations survive, the pieces do not. It is read only when the move
+/// number printed right under the board continues it (`28.fxe5` above and `28...` under, or
+/// `16...e4` above and `17.` under). The piece is unknown (`?`, or `K` for castling), so the
+/// resolver checks only that a piece of the mover's colour stands on the destination.
+/// Abstains on prose, variations in brackets and analysis-diagram captions.
+fn skeleton_played(above: &str, under: &str) -> Option<(bool, char, String)> {
+    let mut above = above.replace('\u{2026}', "...");
+    if above.contains('(') || above.to_lowercase().contains("diagram") {
+        return None;
+    }
+    for glued in ["0-00-0", "O-OO-O", "0-0O-O", "O-O0-0"] {
+        above = above.replace(glued, &format!("{} {}", &glued[..3], &glued[3..]));
+    }
+    // (move number, starts with Black's ply, ply words)
+    let mut groups: Vec<(u32, bool, Vec<String>)> = Vec::new();
+    for word in above.split_whitespace() {
+        if let Some((number, separator, rest)) = numbered(word) {
+            let dots = separator.chars().filter(|c| matches!(c, '.' | ',')).count();
+            let mut plies = Vec::new();
+            if !rest.is_empty() {
+                plies.push(rest.to_string());
+            }
+            groups.push((number, dots >= 2, plies));
+            continue;
+        }
+        let Some((_, _, plies)) = groups.last_mut() else {
+            continue;
+        };
+        match plies.last_mut() {
+            Some(last)
+                if (last.chars().count() == 1
+                    && !last.starts_with(|c: char| c.is_ascii_digit()))
+                    || word.starts_with('x') =>
+            {
+                last.push_str(word);
+            }
+            _ => plies.push(word.to_string()),
+        }
+    }
+    let (number, black_first, plies) = groups.pop()?;
+    let mut merged: Vec<String> = Vec::new();
+    for ply in plies {
+        if matches!(ply.as_str(), "!" | "?" | "!?" | "?!") {
+            continue;
+        }
+        match merged.last_mut() {
+            Some(last) if last.chars().count() == 1 => last.push_str(&ply),
+            _ => merged.push(ply),
+        }
+    }
+    let (white, ply) = match (black_first, merged.as_slice()) {
+        (true, [ply]) | (false, [_, ply]) => (false, ply),
+        (false, [ply]) => (true, ply),
+        _ => return None,
+    };
+    let under = under.trim_start();
+    let digits = under.chars().take_while(char::is_ascii_digit).count();
+    if !(1..=2).contains(&digits) {
+        return None;
+    }
+    let next: u32 = under[..digits].parse().ok()?;
+    let separator: String = under[digits..]
+        .trim_start()
+        .chars()
+        .take_while(|c| matches!(c, '.' | ',' | ':' | ';' | '-'))
+        .collect();
+    let continues = if white {
+        next == number
+    } else {
+        next == number + 1 && separator.matches('.').count() < 2
+    };
+    if !continues {
+        return None;
+    }
+    let ply = ply.trim_end_matches(['+', '#', '!', '?', '=', '-', '.', ',', ';', ':', ')', '±']);
+    let castle: String = ply
+        .chars()
+        .map(|c| if c == 'O' { '0' } else { c })
+        .collect();
+    if castle == "0-0" || castle == "0-0-0" {
+        let file = if castle == "0-0" { 'g' } else { 'c' };
+        return Some((white, 'K', format!("{file}{}", if white { 1 } else { 8 })));
+    }
+    let chars: Vec<char> = ply.chars().collect();
+    let [.., file, rank] = chars.as_slice() else {
+        return None;
+    };
+    let rank = match rank {
+        's' => '5',
+        'z' => '2',
+        'l' | 'i' => '1',
+        other => *other,
+    };
+    (('a'..='h').contains(file) && ('1'..='8').contains(&rank))
+        .then(|| (white, '?', format!("{file}{rank}")))
+}
+
+/// A move number opening a word: `16.`, `13..`, `25?..`, `11-f4` (OCR's dash for a dot).
+fn numbered(word: &str) -> Option<(u32, &str, &str)> {
+    let digits = word.chars().take_while(char::is_ascii_digit).count();
+    if !(1..=2).contains(&digits) {
+        return None;
+    }
+    let after = &word[digits..];
+    let dotted = after
+        .find(|c: char| !matches!(c, '.' | ',' | ':' | ';' | '?'))
+        .unwrap_or(after.len());
+    let separator_len = if dotted > 0 {
+        dotted
+    } else if after.starts_with('-')
+        && after[1..]
+            .chars()
+            .next()
+            .is_some_and(|c| !c.is_ascii_digit() && c != 'O')
+    {
+        1
+    } else {
+        return None;
+    };
+    Some((
+        word[..digits].parse().ok()?,
+        &after[..separator_len],
+        &after[separator_len..],
+    ))
 }
 
 /// Piece letter and destination of one SAN-like ply, after the OCR repairs of
@@ -1114,7 +1254,7 @@ mod tests {
     use super::{
         CAPTION_GAP_MIN, OCR_CONFIDENCE_MIN, OcrLine, RenderFacts, ScanTarget, assign,
         assign_moves, assign_played, bind, certify, explicit_turn_line, page_identity, played_move,
-        printed_move,
+        printed_move, skeleton_played,
     };
     use crate::books::diagram::{Frame, Gray};
 
@@ -1156,6 +1296,43 @@ mod tests {
 
     fn under(text: &str, frame: Frame) -> OcrLine {
         caption(text, frame, 20.0, 0.0, 16.0, 0.95)
+    }
+
+    #[test]
+    fn a_garbled_move_line_above_is_read_when_the_move_under_continues_it() {
+        // Bold figurines garbled by OCR; the numbers and squares survive.
+        assert_eq!(
+            skeleton_played("13.. Ei d7 14.Wxd7 ?xd7 15.C5 ? xh2+ 16.9xh2 ?e4", "17.9f"),
+            Some((false, '?', "e4".into()))
+        );
+        // "28...Bxd5" under the board, its dots lost.
+        assert_eq!(
+            skeleton_played("25?..d5 26.es He8 27.cxd5 ?xe5 28.txes", "28 8xd5"),
+            Some((true, '?', "e5".into()))
+        );
+        assert_eq!(
+            skeleton_played("8... 8xf3 9.xf3 ? bd7 10.0-00-0", "11-f4?!"),
+            Some((false, 'K', "g8".into()))
+        );
+    }
+    #[test]
+    fn a_garbled_move_line_abstains_without_a_continuing_move_under_it() {
+        // The line above is an earlier analysis line: the move under does not continue it.
+        assert_eq!(skeleton_played("23-5f1 ?hs 24.Bidz ?f8", "27 ?xfz+"), None);
+        // Black moved last, so White's move must follow, not another Black one.
+        assert_eq!(skeleton_played("14.?d5 8b6", "14...Bd3"), None);
+        assert_eq!(skeleton_played("14.?d5 8b6", "15...Bd3"), None);
+        assert_eq!(
+            skeleton_played("9...e5 10.C4 0-0", "analysis diagram"),
+            None
+        );
+        assert_eq!(skeleton_played("24.Bidz ?f8 (+0.24)-", "25.Qe2"), None);
+        assert_eq!(
+            skeleton_played("inadequate compensation for the pawn.", "11. ab6"),
+            None
+        );
+        // Three words after a White move number: not one move pair.
+        assert_eq!(skeleton_played("15.Bc1 d5 h6", "16.Bd3"), None);
     }
 
     #[test]
