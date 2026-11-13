@@ -2064,7 +2064,8 @@ fn marked_move(text: &str) -> Option<(bool, char, String)> {
     };
     Some((mover, if pawn { 'P' } else { '*' }, format!("{file}{rank}")))
 }
-/// Whether the mover's `piece` (`*` for any piece but a pawn) stands on `destination`.
+/// Whether the mover's `piece` (`*` for any piece but a pawn, `?` for any piece) stands on
+/// `destination`.
 fn stands(placement: &str, white: bool, piece: char, destination: &str) -> bool {
     use shakmaty::{Role, Square};
     let color = if white { Color::White } else { Color::Black };
@@ -2078,6 +2079,7 @@ fn stands(placement: &str, white: bool, piece: char, destination: &str) -> bool 
         found.color == color
             && match piece {
                 '*' => found.role != Role::Pawn,
+                '?' => true,
                 letter => Role::from_char(letter.to_ascii_lowercase()) == Some(found.role),
             }
     })

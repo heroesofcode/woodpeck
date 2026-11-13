@@ -717,10 +717,11 @@ pub fn stated_scan_move(bytes: &[u8]) -> Option<(bool, String)> {
         _ => return None,
     };
     let stored = &text[1..];
-    // `^Kg5`: the move that led to the board, with the piece that made it.
+    // `^Kg5`: the move that led to the board, with the piece that made it (`?` when the piece
+    // could not be read).
     let played = stored
         .strip_prefix('^')
-        .and_then(|rest| rest.strip_prefix(['K', 'Q', 'R', 'B', 'N', 'P']));
+        .and_then(|rest| rest.strip_prefix(['K', 'Q', 'R', 'B', 'N', 'P', '?']));
     if stored.starts_with('^') && played.is_none() {
         return None;
     }
@@ -3416,6 +3417,10 @@ mod tests {
         assert_eq!(
             stated_scan_move(&with_scan_move(&png, false, "^Bf6")),
             Some((false, "^Bf6".into()))
+        );
+        assert_eq!(
+            stated_scan_move(&with_scan_move(&png, true, "^?e5")),
+            Some((true, "^?e5".into()))
         );
         assert_eq!(stated_scan_move(&with_scan_move(&png, true, "^Xf6")), None);
         assert_eq!(stated_scan_move(&with_scan_move(&png, true, "^O-O")), None);
