@@ -298,9 +298,16 @@ fn bind(
     // Census identity stays on the padded detector crops. The caption window uses the
     // board `locate` finds inside each crop, so that padding is not part of the gap.
     let boards = located_boards(gray, &frames)?;
+    // A move printed under the board wins; the move printed right above it (the one that
+    // led to the board) is read only for a board with none.
+    let moves = assign_moves(&frames, &boards, &payload.lines, targets)
+        .into_iter()
+        .zip(assign_played(&frames, &boards, &payload.lines, targets))
+        .map(|(under, above)| under.or(above))
+        .collect();
     Some((
         assign_edges(&frames, &boards, &payload.lines, targets),
-        assign_moves(&frames, &boards, &payload.lines, targets),
+        moves,
     ))
 }
 
@@ -622,6 +629,182 @@ fn assign_moves(
         .collect()
 }
 
+/// The line right above each board, when it holds nothing but numbered moves (`22.Nc2 Bf6`):
+/// its last ply led to the board. Stored as the mover with `^`, the piece letter (`P` for a
+/// pawn) and the destination (`^Bf6`); the resolver checks that the mover's piece stands there.
+fn assign_played(
+    frames: &[Frame],
+    boards: &[Frame],
+    lines: &[OcrLine],
+    targets: &[ScanTarget],
+) -> Vec<PrintedMove> {
+    if frames.len() != boards.len() || frames.len() != targets.len() {
+        return vec![None; frames.len()];
+    }
+    boards
+        .iter()
+        .enumerate()
+        .map(|(index, board)| {
+            let target = targets[index];
+            if target.confirmed || !target.eligible {
+                return None;
+            }
+            let line = last_line_above(*board, lines)?;
+            if !(OCR_CONFIDENCE_MIN..=1.0).contains(&line.confidence) {
+                return None;
+            }
+            // The line may be the end of another board's text: a nearer board vetoes it.
+            let own = frame_distance(frames[index], line);
+            let vetoed = frames.iter().enumerate().any(|(other, neighbour)| {
+                other != index
+                    && frame_distance(*neighbour, line)
+                        <= own.mul_add(NEIGHBOUR_DISTANCE_FACTOR, NEIGHBOUR_SLACK_PX)
+            });
+            if vetoed {
+                return None;
+            }
+            let (white, piece, to) = played_move(&line.text)?;
+            Some((white, format!("{PLAYED_MOVE}{piece}{to}")))
+        })
+        .collect()
+}
+
+/// Marks the last ply printed right above a board, the move that led to it.
+pub(super) const PLAYED_MOVE: char = '^';
+
+/// Bottom of the line above the board, at most this many board-widths over its top edge.
+const PLAYED_GAP_MAX: f64 = 0.3;
+/// Raster pixels a line above the board may reach into the board's top edge.
+const PLAYED_OVERLAP_PX: f64 = 5.0;
+
+/// The nearest text line over the board that overlaps it horizontally, skipping a bare
+/// diagram label ("Diagram 12").
+fn last_line_above(board: Frame, lines: &[OcrLine]) -> Option<&OcrLine> {
+    let width = (board[2] - board[0]) as f64;
+    if width < 1.0 {
+        return None;
+    }
+    let top = board[1] as f64;
+    let line = lines
+        .iter()
+        .filter(|line| {
+            line_box_ok(line)
+                && line.right > board[0] as f64
+                && line.left < board[2] as f64
+                && line.bottom <= top + PLAYED_OVERLAP_PX
+                && !diagram_label(&line.text)
+        })
+        .max_by(|a, b| a.bottom.total_cmp(&b.bottom))?;
+    (top - line.bottom < PLAYED_GAP_MAX * width).then_some(line)
+}
+
+/// A line that only numbers a diagram: "Diagram 12", "12".
+fn diagram_label(text: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    matches!(words.as_slice(), [number] | [_, number]
+        if number.trim_end_matches(['.', ':']).chars().all(|c| c.is_ascii_digit())
+            && !number.is_empty())
+}
+
+/// The last ply of a line made only of numbered moves: mover, piece letter (`P` for pawns,
+/// `K` for castling) and destination (`g1`/`c1` for castling). OCR slips common in bold move
+/// text are repaired: `l` for the rank 1, `O`/`0` for a queen before a square, `g8-Q` for a
+/// promotion. Any other word makes it prose, and the line is not read.
+fn played_move(text: &str) -> Option<(bool, char, String)> {
+    let text = text.replace('\u{2026}', "...");
+    let mut side: Option<bool> = None;
+    let mut last = None;
+    for word in text.split_whitespace() {
+        let mut word = word;
+        if let Some(digits) = word.find(|c: char| !c.is_ascii_digit())
+            && digits > 0
+            && digits <= 3
+            && word[digits..].starts_with('.')
+        {
+            let dots = word[digits..].chars().take_while(|&c| c == '.').count();
+            side = Some(dots == 1);
+            word = &word[digits + dots..];
+        } else if side.is_none() && word.starts_with("...") {
+            side = Some(false);
+            word = word.trim_start_matches('.');
+        }
+        if word.is_empty() {
+            continue;
+        }
+        let white = side?;
+        let word = word.trim_end_matches(['.', ',', ';']);
+        if matches!(word, "1-0" | "0-1" | "etc" | "mate" | "zugzwang") {
+            continue;
+        }
+        last = Some((white, played_ply(word, white)?));
+        side = Some(!white);
+    }
+    let (white, (piece, to)) = last?;
+    Some((white, piece, to))
+}
+
+/// Piece letter and destination of one SAN-like ply, after the OCR repairs of
+/// [`played_move`].
+fn played_ply(word: &str, white: bool) -> Option<(char, String)> {
+    let word = word.trim_end_matches(['!', '?', '+', '#']);
+    if matches!(word, "O-O" | "0-0") {
+        return Some(('K', if white { "g1" } else { "g8" }.into()));
+    }
+    if matches!(word, "O-O-O" | "0-0-0") {
+        return Some(('K', if white { "c1" } else { "c8" }.into()));
+    }
+    let mut chars: Vec<char> = word.chars().collect();
+    // A promotion ("g8=Q", "g8-Q", "g8Q") puts the new piece on the square.
+    let mut promoted = None;
+    if let [.., rank, sep, piece] = chars.as_slice()
+        && matches!(rank, '1' | '8' | 'l')
+        && matches!(sep, '=' | '-')
+        && matches!(piece, 'Q' | 'R' | 'B' | 'N')
+    {
+        promoted = Some(*piece);
+        chars.truncate(chars.len() - 2);
+    } else if let [.., rank, piece] = chars.as_slice()
+        && matches!(rank, '1' | '8')
+        && matches!(piece, 'Q' | 'R' | 'B' | 'N')
+    {
+        promoted = Some(*piece);
+        chars.truncate(chars.len() - 1);
+    }
+    if let Some(first) = chars.first_mut()
+        && matches!(first, 'O' | '0')
+    {
+        *first = 'Q';
+    }
+    if let Some(rank) = chars.last_mut()
+        && *rank == 'l'
+    {
+        *rank = '1';
+    }
+    let (piece, rest) = match chars.split_first()? {
+        (p @ ('K' | 'Q' | 'R' | 'B' | 'N'), rest) => (*p, rest),
+        _ => ('P', chars.as_slice()),
+    };
+    let [ref from @ .., file, rank] = *rest else {
+        return None;
+    };
+    if !('a'..='h').contains(&file) || !('1'..='8').contains(&rank) {
+        return None;
+    }
+    // At most a disambiguating file or rank and a capture before the square.
+    let from: String = from.iter().collect();
+    let disambiguation = from.strip_suffix('x').unwrap_or(&from);
+    let ok = match disambiguation.chars().collect::<Vec<_>>().as_slice() {
+        [] => true,
+        [c] => ('a'..='h').contains(c) || (piece != 'P' && ('1'..='8').contains(c)),
+        _ => false,
+    };
+    if !ok || (piece == 'P' && from.len() == 1) {
+        return None;
+    }
+    let piece = promoted.unwrap_or(piece);
+    Some((piece, format!("{file}{rank}")))
+}
+
 /// Marks a printed move read only through OCR repairs or the looser neighbour rule.
 pub(super) const WEAK_MOVE: char = '~';
 
@@ -930,7 +1113,8 @@ fn crowds(a: &OcrLine, b: &OcrLine) -> bool {
 mod tests {
     use super::{
         CAPTION_GAP_MIN, OCR_CONFIDENCE_MIN, OcrLine, RenderFacts, ScanTarget, assign,
-        assign_moves, bind, certify, explicit_turn_line, page_identity, printed_move,
+        assign_moves, assign_played, bind, certify, explicit_turn_line, page_identity, played_move,
+        printed_move,
     };
     use crate::books::diagram::{Frame, Gray};
 
@@ -1501,6 +1685,87 @@ mod tests {
         assert_eq!(
             assign_moves(&frames, &frames, &[beside], &open(1)),
             vec![None]
+        );
+    }
+
+    #[test]
+    fn a_pure_move_line_names_the_move_that_led_to_the_board() {
+        let ply = |white: bool, piece: char, to: &str| Some((white, piece, to.to_owned()));
+        assert_eq!(played_move("22.Nc2 Bf6"), ply(false, 'B', "f6"));
+        assert_eq!(
+            played_move("26.b5 Bd8 27.Nb4 Bb6 28.Nc2 Ba5"),
+            ply(false, 'B', "a5")
+        );
+        assert_eq!(
+            played_move("7...Rc1+ 8.Kf2 Nc6 9.Nd1"),
+            ply(true, 'N', "d1")
+        );
+        assert_eq!(played_move("...Kg7 6.Ke2 Kg6"), ply(false, 'K', "g6"));
+        assert_eq!(played_move("1... Nc4+ 2.Bxc4"), ply(true, 'B', "c4"));
+        // OCR slips: 'l' for 1, 'O' for a queen, a dashed promotion.
+        assert_eq!(played_move("4...Kh4 5.Kfl Kh3 6.Kgl"), ply(true, 'K', "g1"));
+        assert_eq!(played_move("6...Oxf2+ 7.Kh1 Qxg3"), ply(false, 'Q', "g3"));
+        assert_eq!(played_move("14.g7! Ke6 15.g8-Q+"), ply(true, 'Q', "g8"));
+        assert_eq!(played_move("9.e6 g5 10.Kxg2 h5"), ply(false, 'P', "h5"));
+        assert_eq!(played_move("12.O-O"), ply(true, 'K', "g1"));
+        assert_eq!(
+            played_move("2...Bc3 3.Bg1 Be1 4.Bh2 a5, zugzwang."),
+            ply(false, 'P', "a5")
+        );
+        // Prose, unnumbered moves and malformed plies are not read.
+        assert_eq!(
+            played_move("to cut the king off by 2.Re6! Kd5 3.Rh6."),
+            None
+        );
+        assert_eq!(played_move("only draws: 21.Ra3 b3"), None);
+        assert_eq!(played_move("Nc2 Bf6"), None);
+        assert_eq!(played_move("22.Nc2 ed6"), None);
+        assert_eq!(played_move("Diagram 547"), None);
+    }
+
+    #[test]
+    fn the_line_right_above_a_board_is_read_unless_another_board_is_nearer() {
+        let frames = [board(40, 300, 200)];
+        let above = |text: &str, gap: f64| OcrLine {
+            text: text.into(),
+            confidence: 0.95,
+            left: 60.0,
+            top: 300.0 - gap - 16.0,
+            right: 220.0,
+            bottom: 300.0 - gap,
+        };
+        assert_eq!(
+            assign_played(&frames, &frames, &[above("22.Nc2 Bf6", 10.0)], &open(1)),
+            vec![Some((false, "^Bf6".to_owned()))]
+        );
+        // A diagram label between them is skipped; prose is not read; a far line is not read.
+        assert_eq!(
+            assign_played(
+                &frames,
+                &frames,
+                &[above("22.Nc2 Bf6", 30.0), above("Diagram 12", 8.0)],
+                &open(1)
+            ),
+            vec![Some((false, "^Bf6".to_owned()))]
+        );
+        assert_eq!(
+            assign_played(
+                &frames,
+                &frames,
+                &[above("as in 22.Nc2 Bf6", 10.0)],
+                &open(1)
+            ),
+            vec![None]
+        );
+        assert_eq!(
+            assign_played(&frames, &frames, &[above("22.Nc2 Bf6", 90.0)], &open(1)),
+            vec![None]
+        );
+        // Under another board that sits closer to the line, it belongs to that board.
+        let pair = [board(40, 60, 200), board(40, 300, 200)];
+        assert_eq!(
+            assign_played(&pair, &pair, &[above("22.Nc2 Bf6", 10.0)], &open(2))[1],
+            None
         );
     }
 }
