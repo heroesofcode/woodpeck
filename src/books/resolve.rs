@@ -1510,6 +1510,7 @@ fn recognized_positions(
                     scan,
                     printed_move.map(|m| m.0),
                     played.as_ref().map(|m| !m.0),
+                    before.marked.as_ref().map(|m| !m.0),
                 ]
                 .into_iter()
                 .flatten()
