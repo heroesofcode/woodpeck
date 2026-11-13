@@ -766,7 +766,17 @@ fn printed_move(text: &str) -> Option<(bool, String)> {
     }
     let chars: Vec<char> = compact.chars().collect();
     // The square comes within the first few characters, after a figurine or piece letter
-    // (possibly misread) and a capture or disambiguation.
+    // (possibly misread) and a capture or disambiguation. A square printed as such wins over a
+    // look-alike one, so the file of `Rfa1` is not read as `f4`.
+    let square =
+        |file: char, rank: char| ('a'..='h').contains(&file) && ('1'..='8').contains(&rank);
+    if let Some(pair) = chars
+        .windows(2)
+        .take(5)
+        .find(|pair| square(pair[0], pair[1]))
+    {
+        return Some((white, pair.iter().collect()));
+    }
     chars.windows(2).take(5).find_map(|pair| {
         let file = match pair[0] {
             'C' => 'c',
@@ -781,8 +791,7 @@ fn printed_move(text: &str) -> Option<(bool, String)> {
             'B' => '8',
             c => c,
         };
-        (('a'..='h').contains(&file) && ('1'..='8').contains(&rank))
-            .then(|| (white, format!("{file}{rank}")))
+        square(file, rank).then(|| (white, format!("{file}{rank}")))
     })
 }
 
@@ -1446,6 +1455,9 @@ mod tests {
         assert_eq!(printed_move("17.\u{a3})xe5"), mv(true, "e5"));
         assert_eq!(printed_move("9...QeB+"), mv(false, "e8"));
         assert_eq!(printed_move("11-12 April"), None);
+        // A printed square wins over a look-alike one.
+        assert_eq!(printed_move("21.Rfa1"), mv(true, "a1"));
+        assert_eq!(printed_move("9...Nca5"), mv(false, "a5"));
     }
 
     #[test]
