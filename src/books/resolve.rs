@@ -2093,7 +2093,8 @@ fn puzzle_label_turn(text: &str) -> Option<Color> {
     let mut black = false;
     for word in text.split_whitespace() {
         // Figurine fonts extract as the tokens "xk" / "çk" (White / Black king).
-        let w = word.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '.'));
+        // Some printings follow the figurine with a stray quote mark ("çk‘").
+        let w = word.trim_matches(|c: char| !c.is_alphanumeric());
         if w == "xk" {
             white = true;
         }
@@ -3888,6 +3889,8 @@ mod image_tests {
     fn puzzle_label_turn_reads_polgar_xk_and_ck() {
         assert_eq!(puzzle_label_turn("No. 187 xk"), Some(Color::White));
         assert_eq!(puzzle_label_turn("No. 1447 çk"), Some(Color::Black));
+        assert_eq!(puzzle_label_turn("No. 5285 çk\u{2018}"), Some(Color::Black));
+        assert_eq!(puzzle_label_turn("No. 5261 xk\u{2018}"), Some(Color::White));
         assert_eq!(puzzle_label_turn("No. 12"), None);
         assert_eq!(puzzle_label_turn("White to move"), None);
         // Long commentary must not look like a label.
