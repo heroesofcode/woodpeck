@@ -1258,10 +1258,14 @@ fn recognized_positions(
                 BlockKind::Image { path, .. } => scan_sides.get(path).copied(),
                 _ => None,
             };
-            let printed_move = match &block.kind {
+            let stored_move = match &block.kind {
                 BlockKind::Image { path, .. } => scan_moves.get(path),
                 _ => None,
             };
+            // A move read only through OCR repairs is weaker: it never outweighs another signal.
+            let printed_move = stored_move.filter(|(_, to)| !to.starts_with('~'));
+            let repaired_move =
+                stored_move.and_then(|(white, to)| Some((*white, to.strip_prefix('~')?)));
             let before = before_image(page, b);
             let (mut turn, mut nearby) = image_position(
                 page.blocks[b + 1..]
@@ -1392,6 +1396,41 @@ fn recognized_positions(
                 .flatten()
                 .any(|named| named != side)
                     || super::game_sides::side(&placement).is_some_and(|w| w != *white);
+                if !other
+                    && let Some(pos) = placed(&placement, side)
+                    && reaches(&pos, destination)
+                {
+                    turn = Turn::Confirmed(pos);
+                }
+            }
+            // A printed move read only through OCR repairs fills a side the same way, but only
+            // when no other reading, including the replayed game text, names the other side.
+            if matches!(turn, Turn::Unknown)
+                && marker.is_none()
+                && caption.is_none()
+                && printed.is_none()
+                && triangle.is_none()
+                && key.is_none()
+                && scan.is_none()
+                && printed_move.is_none()
+                && let BlockKind::Image { path, .. } = &block.kind
+                && let Some((white, destination)) = repaired_move
+            {
+                let side = if white { Color::White } else { Color::Black };
+                let other = [
+                    before.stated,
+                    before.after_move,
+                    before.past_number,
+                    before.puzzle_label,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|named| named != side)
+                    || scan_replays
+                        .get(path)
+                        .and_then(|replayed| replayed_side(replayed, &placement))
+                        .is_some_and(|w| w != white)
+                    || super::game_sides::side(&placement).is_some_and(|w| w != white);
                 if !other
                     && let Some(pos) = placed(&placement, side)
                     && reaches(&pos, destination)
@@ -2040,10 +2079,15 @@ fn image_position<'a>(
             // A diagram prints no castling rights, so castling is checked from where the king
             // and rook stand.
             let castle = castle_token(&text[ts[i + 1].span.clone()]);
+            // A figurine printed as a picture names no piece: any piece of the side reaching
+            // the square makes the move playable, even when more than one could.
+            let word = &text[ts[i + 1].span.clone()];
+            let pictured = word.contains(notation::UNMAPPED_FIGURINE);
             let legal = |side| {
                 placed(placement, side).filter(|pos| {
                     parse_move(pos, &ts, i + 1, text, alphabet).is_some()
                         || castle.is_some_and(|c| reaches(pos, c))
+                        || (pictured && !notation::candidates(pos, word).is_empty())
                 })
             };
             if let Some(pos) = legal(side) {
@@ -2525,6 +2569,14 @@ mod tests {
         assert_eq!(
             b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
             ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"]
+        );
+    }
+    #[test]
+    fn figurines_printed_as_pictures_are_read_as_moves() {
+        let b = book("1. d4 d5 2. \u{FFFD}f3 \u{FFFD}c6");
+        assert_eq!(
+            b.nodes.iter().map(|n| n.uci.as_str()).collect::<Vec<_>>(),
+            ["d2d4", "d7d5", "g1f3", "b8c6"]
         );
     }
     #[test]
