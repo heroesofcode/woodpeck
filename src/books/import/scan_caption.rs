@@ -671,8 +671,22 @@ fn assign_played(
                 .then(|| played_move(&line.text))
                 .flatten();
             let (white, piece, to) = strict.or_else(|| {
+                // The move under the board must be this board's own: not a bare diagram
+                // number, not in the next column, and no other board as near to it.
                 let under = first_line_under(*board, lines)?;
-                if !(SKELETON_CONFIDENCE_MIN..=1.0).contains(&under.confidence) {
+                let own = frame_distance(frames[index], under);
+                let shared = frames.iter().enumerate().any(|(other, neighbour)| {
+                    other != index
+                        && frame_distance(*neighbour, under)
+                            <= own.mul_add(NEIGHBOUR_DISTANCE_FACTOR, NEIGHBOUR_SLACK_PX)
+                });
+                #[allow(clippy::cast_precision_loss)]
+                let beside = under.left >= board[2] as f64;
+                if shared
+                    || beside
+                    || diagram_label(&under.text)
+                    || !(SKELETON_CONFIDENCE_MIN..=1.0).contains(&under.confidence)
+                {
                     return None;
                 }
                 skeleton_played(&line.text, &under.text)
@@ -1944,5 +1958,38 @@ mod tests {
             assign_played(&pair, &pair, &[above("22.Nc2 Bf6", 10.0)], &open(2))[1],
             None
         );
+    }
+
+    #[test]
+    fn a_garbled_line_above_needs_the_boards_own_move_under_it() {
+        let frames = [board(40, 300, 200)];
+        let above = OcrLine {
+            text: "15.C5 ? xh2+ 16.9xh2 ?e4".into(),
+            confidence: 0.9,
+            left: 60.0,
+            top: 274.0,
+            right: 220.0,
+            bottom: 290.0,
+        };
+        let played = |frames: &[Frame], under: OcrLine| {
+            assign_played(frames, frames, &[above.clone(), under], &open(frames.len()))[0].clone()
+        };
+        assert_eq!(
+            played(&frames, under("17.9f", frames[0])),
+            Some((false, "^?e4".to_owned()))
+        );
+        // A bare diagram number under the board is not the next move.
+        assert_eq!(played(&frames, under("17", frames[0])), None);
+        // Nor is a move in the next column, right of the board.
+        assert_eq!(
+            played(
+                &frames,
+                caption("17.9f", frames[0], 20.0, 260.0, 16.0, 0.95)
+            ),
+            None
+        );
+        // Nor a line as close to the top of another board below it.
+        let pair = [board(40, 300, 200), board(40, 540, 200)];
+        assert_eq!(played(&pair, under("17.9f", pair[0])), None);
     }
 }
