@@ -1485,7 +1485,10 @@ fn recognized_positions(
                             .get(path)
                             .and_then(|replayed| replayed_side(replayed, &placement))
                             .is_some_and(|w| w != white)
-                        || super::game_sides::side(&placement).is_some_and(|w| w != white);
+                        || super::game_sides::side(&placement).is_some_and(|w| w != white)
+                        || scan_replays
+                            .get(path)
+                            .is_some_and(|replayed| unreached(replayed, &placement));
                     if !other && let Some(pos) = placed(&placement, side) {
                         turn = Turn::Confirmed(pos);
                     }
@@ -2480,6 +2483,12 @@ fn replayed_side(replayed: &[(String, bool)], placement: &str) -> Option<bool> {
     let first = sides.next()?;
     sides.all(|white| white == first).then_some(first)
 }
+/// Whether the page's game text replays from move 1 yet never reaches `placement` with one side
+/// to move: the text then disagrees with the board, which may be misread (a man lost or
+/// mistaken), so a weaker reading must not vouch for it.
+fn unreached(replayed: &[(String, bool)], placement: &str) -> bool {
+    !replayed.is_empty() && replayed_side(replayed, placement).is_none()
+}
 fn placed(placement: &str, side: Color) -> Option<Chess> {
     position(&format!("{placement} {} - - 0 1", side.char()))
 }
@@ -3141,6 +3150,22 @@ mod image_tests {
         assert_eq!(marked_move("40.h4?! (D) (53...Kg4)"), None);
         assert_eq!(marked_move("2 lDt\"3! (D)"), None);
         assert_eq!(marked_move("Black is better (D)"), None);
+    }
+    #[test]
+    fn replayed_text_that_misses_the_board_marks_it_unreached() {
+        let start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+        let replayed = |p: &str, white: bool| vec![(p.to_owned(), white)];
+        // The board lost White's queen, which the replayed text still has.
+        assert!(unreached(
+            &replayed(start, true),
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR"
+        ));
+        assert!(!unreached(&replayed(start, true), start));
+        // No game text on the page: nothing to disagree with.
+        assert!(!unreached(&[], start));
+        // Reached with both sides to move: no side, so the text cannot vouch for the board.
+        let both = [(start.to_owned(), true), (start.to_owned(), false)];
+        assert!(unreached(&both, start));
     }
     #[test]
     fn a_geometry_caption_confirms_only_an_unknown_side() {
