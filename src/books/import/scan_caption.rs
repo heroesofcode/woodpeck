@@ -671,8 +671,9 @@ fn assign_played(
                 .then(|| played_move(&line.text))
                 .flatten();
             let (white, piece, to) = strict.or_else(|| {
-                // The move under the board must be this board's own: not a bare diagram
-                // number, not in the next column, and no other board as near to it.
+                // The move under the board must be this board's own: not a number that may
+                // only label the diagram, not in the next column, and no other board as near
+                // to it.
                 let under = first_line_under(*board, lines)?;
                 let own = frame_distance(frames[index], under);
                 let shared = frames.iter().enumerate().any(|(other, neighbour)| {
@@ -684,7 +685,7 @@ fn assign_played(
                 let beside = under.left >= board[2] as f64;
                 if shared
                     || beside
-                    || diagram_label(&under.text)
+                    || label_under(&under.text)
                     || !(SKELETON_CONFIDENCE_MIN..=1.0).contains(&under.confidence)
                 {
                     return None;
@@ -731,6 +732,20 @@ fn diagram_label(text: &str) -> bool {
     matches!(words.as_slice(), [number] | [_, number]
         if number.trim_end_matches(['.', ':']).chars().all(|c| c.is_ascii_digit())
             && !number.is_empty())
+}
+
+/// A line under a board that may only number the diagram ("12", "12.", "Diagram 12"). A
+/// number followed by Black's dots ("28...", "28…") continues a move, since diagram numbers
+/// never carry them; a bare "28" or "17." stays ambiguous and is not read as a move.
+fn label_under(text: &str) -> bool {
+    let continues = text.split_whitespace().count() == 1 && {
+        let digits = text.trim().trim_end_matches(['.', '\u{2026}']);
+        let dots = &text.trim()[digits.len()..];
+        !digits.is_empty()
+            && digits.chars().all(|c| c.is_ascii_digit())
+            && (dots.contains('\u{2026}') || dots.len() >= 2)
+    };
+    diagram_label(text) && !continues
 }
 
 /// The last ply of a line made only of numbered moves: mover, piece letter (`P` for pawns,
@@ -1267,8 +1282,8 @@ fn crowds(a: &OcrLine, b: &OcrLine) -> bool {
 mod tests {
     use super::{
         CAPTION_GAP_MIN, OCR_CONFIDENCE_MIN, OcrLine, RenderFacts, ScanTarget, assign,
-        assign_moves, assign_played, bind, certify, explicit_turn_line, page_identity, played_move,
-        printed_move, skeleton_played,
+        assign_moves, assign_played, bind, certify, explicit_turn_line, label_under, page_identity,
+        played_move, printed_move, skeleton_played,
     };
     use crate::books::diagram::{Frame, Gray};
 
@@ -1347,6 +1362,18 @@ mod tests {
         );
         // Three words after a White move number: not one move pair.
         assert_eq!(skeleton_played("15.Bc1 d5 h6", "16.Bd3"), None);
+    }
+
+    #[test]
+    fn a_move_number_with_black_dots_under_the_board_is_not_a_diagram_label() {
+        assert!(!label_under("28..."));
+        assert!(!label_under("28\u{2026}"));
+        assert!(!label_under("17..."));
+        // A bare number may be the diagram's own label, so it never continues a move line.
+        assert!(label_under("28"));
+        assert!(label_under("17."));
+        assert!(label_under("Diagram 12"));
+        assert!(!label_under("17.Nf3"));
     }
 
     #[test]
