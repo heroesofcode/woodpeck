@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.10.0](https://github.com/heroesofcode/woodpeck/compare/v0.9.0...v0.10.0) (2026-11-14)
+
+
+### Features
+
+* **books:** accept turn captions with a result suffix or split over two lines on scans ([c64731d](https://github.com/heroesofcode/woodpeck/commit/c64731d77d0237b07cebb86ca3a5c6591cbea77d))
+* **books:** certify a scanned board's side by replaying the page's game text ([fb01517](https://github.com/heroesofcode/woodpeck/commit/fb01517b5a6cb0e2317d05c2c1314910b258e44c))
+* **books:** certify boards every net reads alike when no template square disagrees ([184408e](https://github.com/heroesofcode/woodpeck/commit/184408efb2aa4aac452d11dca68da747a8553a77))
+* **books:** certify near boards where a net only failed to name a square the templates match ([c039630](https://github.com/heroesofcode/woodpeck/commit/c0396301f9c02415bbcdca78b31cf75b4853e5c7))
+* **books:** certify near reads in endgame and study books from their own confirmed boards ([6e45530](https://github.com/heroesofcode/woodpeck/commit/6e455309281da31812a8dda57fb7e19a255771a8))
+* **books:** certify near-read boards against the book's own squares ([2585de6](https://github.com/heroesofcode/woodpeck/commit/2585de6ca2424af82cfc3d61e24d2f7bae93a516))
+* **books:** fill doubtful squares the templates abstain on when most readings name one piece ([f9649c0](https://github.com/heroesofcode/woodpeck/commit/f9649c06aa9cbf8a4907dce986e0468e52723cef))
+* **books:** keep steady pieces and the nets' colour where the templates abstain or overfill a side ([a73c735](https://github.com/heroesofcode/woodpeck/commit/a73c735e1bdf9b20aa68f13e5a74a8039eb1a0de))
+* **books:** read boards cut off by the image edge from a frame kept inside it ([35225c3](https://github.com/heroesofcode/woodpeck/commit/35225c30a00581d930b7b6aca7d2f410c27a6e51))
+* **books:** read figurine pictures in EPUB moves and OCR-repaired scan move lines ([56756de](https://github.com/heroesofcode/woodpeck/commit/56756de6cc98c639718f9a41f7a244f9a922c7bf))
+* **books:** read mate-in-N side captions and carry column-head captions to the board that ended the column ([47020f3](https://github.com/heroesofcode/woodpeck/commit/47020f3cdeaf749c7282043520c31b7032a5bc3a))
+* **books:** read text from pdftotext when a page's glyphs decode to nothing ([c9453f6](https://github.com/heroesofcode/woodpeck/commit/c9453f6d5c005c9ce8c2f3bc60acd6d5ed86e6f4))
+* **books:** read the move that led to a board from the line above a scan and from a (D) mark ([3173646](https://github.com/heroesofcode/woodpeck/commit/31736461bba50a7e3254b4c9edb1c7958e6eaa0e))
+* **books:** read the side from the solution printed under a board ([987d1b6](https://github.com/heroesofcode/woodpeck/commit/987d1b6d99e9036d30466d9f92b32338d4a92ebe))
+* **books:** read the side to move from a lone W or B beside the board ([68b6e62](https://github.com/heroesofcode/woodpeck/commit/68b6e620c8faacfb12fc47b28e3bea267a78308d))
+* **books:** settle near boards whose doubtful squares the templates name among the nets' own labels ([ffc5de4](https://github.com/heroesofcode/woodpeck/commit/ffc5de4eb38b0ce2bc6854d7a77a02e6a89eb59d))
+* **books:** side to move from real games and from the move printed under a scan ([81bfcf0](https://github.com/heroesofcode/woodpeck/commit/81bfcf0785cd5a63bbae02c119ee978c9f92f2a6))
+
+
+### Bug fixes
+
+* **books:** abstain when replayed game text never reaches the board ([3599133](https://github.com/heroesofcode/woodpeck/commit/3599133a7794ea5a279880a12914a1f5db63697e))
+* **books:** castle only through empty, unattacked squares when reading a printed move ([b9b7e88](https://github.com/heroesofcode/woodpeck/commit/b9b7e88ab4af92ca5f6ffe7905deec6955b209f5))
+* **books:** check castling after a board from the king and rook squares ([defd73e](https://github.com/heroesofcode/woodpeck/commit/defd73e0301ca9bd408f83d95c10fdc671f9045a))
+* **books:** count only read boards as a group and let nothing fill its second board ([7121482](https://github.com/heroesofcode/woodpeck/commit/7121482d61e44b6d22be12cf5669ccccae211c8a))
+* **books:** drop a disputed board unless a printed mark backs its caption ([f3a0533](https://github.com/heroesofcode/woodpeck/commit/f3a05333b390fb4e0525db1cb5d5687b32ecde98))
+* **books:** keep a board unconfirmed when next-page moves dispute its caption ([1c4ac87](https://github.com/heroesofcode/woodpeck/commit/1c4ac87e844760c6ae82fddfbf7fbf5036861106))
+* **books:** keep a captioned board unconfirmed when the moves after it name the other side ([54639dc](https://github.com/heroesofcode/woodpeck/commit/54639dc0ea1ef1edb34c08a078a5f7a5d5db969b))
+* **books:** keep boards shown from a reading out of the inside-frame pass ([a4b2c87](https://github.com/heroesofcode/woodpeck/commit/a4b2c876603a70609e12dda4d42d23230033ffbd))
+* **books:** leave boards the first pass already shows out of the near-read pass ([eac3278](https://github.com/heroesofcode/woodpeck/commit/eac3278f38a79e63ed696d3ef615e1bc34d51447))
+* **books:** leave nearby-move sides open when the board names the other side ([409d0de](https://github.com/heroesofcode/woodpeck/commit/409d0deceabea73755bf0d62087ac4c942557f4f))
+* **books:** leave the second board of a group open when commentary contradicts it ([da89ef4](https://github.com/heroesofcode/woodpeck/commit/da89ef454617a0d49363e1b9f383d61ff3f18a06))
+* **books:** let a (D)-marked move veto a contradicting scan replay ([750efb2](https://github.com/heroesofcode/woodpeck/commit/750efb26892ee65221dea0fbacd6060b4cfd8770))
+* **books:** let a conflicting side letter block the caption too ([33f2381](https://github.com/heroesofcode/woodpeck/commit/33f2381e4336d30bae827b867e4a5aa45735091f))
+* **books:** let a printed mark keep a board whose commentary misnumbers a move ([5fc8478](https://github.com/heroesofcode/woodpeck/commit/5fc84781303e2fe782c855321db39a47606e9027))
+* **books:** let the move that led to a board outweigh a side read from moves after it ([1bab9ef](https://github.com/heroesofcode/woodpeck/commit/1bab9ef00b8b040ef7c21186b11aaddb45e83689))
+* **books:** match template pixels to the grid their placement was read from ([68de0d1](https://github.com/heroesofcode/woodpeck/commit/68de0d16ec8a633f9b160e1bcbea9e2fc40d6cb1))
+* **books:** measure a head caption's column from the boards under it and skip page numbers ([6876a1b](https://github.com/heroesofcode/woodpeck/commit/6876a1b510e5714d13eefa4ed3103b557e08036e))
+* **books:** never read a Unicode figurine as an unmapped piece ([ab477ee](https://github.com/heroesofcode/woodpeck/commit/ab477eea70036b0cb5c4990147a4ec61ca5d061f))
+* **books:** parse castling written with an en or em dash ([11f6037](https://github.com/heroesofcode/woodpeck/commit/11f60374fa7e2a422397387287139899ad65ef9f))
+* **books:** prefer a printed square over a look-alike in repaired move reads ([e9a2588](https://github.com/heroesofcode/woodpeck/commit/e9a2588bcacbaeacb37ef3ff62511189fcfbc3b0))
+* **books:** read a garbled move line above a scanned board when the move under it continues ([95c47d1](https://github.com/heroesofcode/woodpeck/commit/95c47d1bca2444f17397de137f492e8e062f6b9e))
+* **books:** read a garbled move line only over the board's own next move ([134f1d7](https://github.com/heroesofcode/woodpeck/commit/134f1d71b5cbc92578d876f1d61f8dd6a7f4e92b))
+* **books:** read a move number with Black's dots under a scanned board as a continuation ([db41247](https://github.com/heroesofcode/woodpeck/commit/db4124768c8c2fe194533a1adfcbbb841b4a3a70))
+* **books:** read a puzzle label whose side figurine is followed by a quote mark ([bba52ee](https://github.com/heroesofcode/woodpeck/commit/bba52eec08a6775309c3c4d723ce5f4ea6762028))
+* **books:** read a spaced ellipsis after a move number as Black's move in replayed game text ([56de60f](https://github.com/heroesofcode/woodpeck/commit/56de60f33dd390ad440df693b236ddd35defdac2))
+* **books:** read pictured figurines after a board only in reflowed books ([abce912](https://github.com/heroesofcode/woodpeck/commit/abce912354eae77d6ad6304a3ec9fef81432dac9))
+* **books:** read the move that led to a board from the text line above it on drawn pages ([633bb15](https://github.com/heroesofcode/woodpeck/commit/633bb155d8c0daa877a5430b9bbbb729bae5008d))
+* **books:** skip a numbered move that restates how the board was reached ([bac811c](https://github.com/heroesofcode/woodpeck/commit/bac811c01f206d774c69e9e600750be82fb6b1d9))
+* **books:** treat castling already played as restating the board ([99e3c7e](https://github.com/heroesofcode/woodpeck/commit/99e3c7ebbf053296843c13257c774bf188e8d714))
+* **books:** try the capped downscale for inside frames too ([c6bfaec](https://github.com/heroesofcode/woodpeck/commit/c6bfaece5051222743ba67ee3f576055f686db5d))
+* **store:** take &mut self for browser DB serialize ([c738df8](https://github.com/heroesofcode/woodpeck/commit/c738df827ee6c97d51f0348cd931375e0360ff3e))
+
+
+### Refactoring
+
+* **books:** count men per piece without the naive byte count ([6bb15f5](https://github.com/heroesofcode/woodpeck/commit/6bb15f574dd6f6c724dd5de3f51a900ba5f89f78))
+
 ## [0.9.0](https://github.com/heroesofcode/woodpeck/compare/v0.8.0...v0.9.0) (2026-11-07)
 
 
