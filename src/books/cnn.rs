@@ -379,6 +379,11 @@ impl DiagramRecognizer for Cnn {
         }
         None
     }
+    fn placement_unrefined(&self, image: &[u8]) -> Option<String> {
+        diagram::board_cells_unrefined_scales(image)
+            .iter()
+            .find_map(|cells| placement(&self.classify(cells)))
+    }
     fn reading(&self, image: &[u8]) -> Option<String> {
         for cells in diagram::board_cells_scales(image) {
             let squares = self.classify(&cells);

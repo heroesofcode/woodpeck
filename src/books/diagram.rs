@@ -17,6 +17,16 @@ pub trait DiagramRecognizer: Sync {
     fn placement_inside(&self, _image: &[u8]) -> Option<String> {
         None
     }
+    /// Placement from the frame the border lines located, before refining moved it. Asked
+    /// only for boards nothing else reads, after every other way.
+    fn placement_unrefined(&self, _image: &[u8]) -> Option<String> {
+        None
+    }
+    /// Every network's own [`Self::placement_unrefined`], for combinators that need more than
+    /// one of them to agree.
+    fn unrefined_votes(&self, image: &[u8]) -> Vec<String> {
+        self.placement_unrefined(image).into_iter().collect()
+    }
 }
 
 /// Built-in nearest-prototype recognizer.
@@ -500,6 +510,11 @@ pub fn locate(g: &Gray) -> Option<Frame> {
 /// an early square crop there can mask a later good crop and drop boards (N15).
 fn locate_with_light_rim(g: &Gray) -> Option<Frame> {
     locate(g).or_else(|| locate_among(g, &inset_frames(g)))
+}
+
+/// The frame [`locate_with_light_rim`] refines.
+fn located_with_light_rim(g: &Gray) -> Option<Frame> {
+    located(g, &candidates(g)).or_else(|| located(g, &inset_frames(g)))
 }
 
 /// Like [`locate_with_light_rim`], but no refined edge leaves the image; `None` unless that
@@ -2344,6 +2359,28 @@ pub fn board_cells_scales(bytes: &[u8]) -> Vec<Vec<Vec<f32>>> {
     out
 }
 
+/// Square images on the located frame before [`refine`], native then capped like
+/// [`board_cells_scales`], for each scale where refining moved the frame. On hatched dark
+/// squares the contrast that refining maximises is nearly flat, so it can drag an edge a third
+/// of a square off a frame the border lines located exactly. Asked only after every usual
+/// grid abstains (see [`DiagramRecognizer::placement_unrefined`]).
+pub fn board_cells_unrefined_scales(bytes: &[u8]) -> Vec<Vec<Vec<f32>>> {
+    let Some(g0) = Gray::decode(bytes) else {
+        return Vec::new();
+    };
+    let capped =
+        (g0.width.max(g0.height) > MAX_BOARD_SIDE).then(|| g0.fit_max_side(MAX_BOARD_SIDE));
+    std::iter::once(&g0)
+        .chain(capped.as_ref())
+        .filter_map(|g| {
+            let frame = located_with_light_rim(g)?;
+            (refine(g, frame, false) != frame)
+                .then(|| cells(g, frame))
+                .flatten()
+        })
+        .collect()
+}
+
 /// Square images of a board whose usual frame runs past the image edge, from a frame kept
 /// inside the image instead. A last resort for boards no usual grid reads. Like
 /// [`board_cells_scales`], the native grid comes first, then a [`MAX_BOARD_SIDE`] downscale
@@ -2701,6 +2738,18 @@ impl DiagramRecognizer for Agreeing<'_> {
             (None, None) => None,
         }
     }
+    /// Like [`Self::placement_inside`]: a board the two disagree on stays unread.
+    fn placement_unrefined(&self, image: &[u8]) -> Option<String> {
+        match (
+            self.first.placement_unrefined(image),
+            self.second.placement_unrefined(image),
+        ) {
+            (Some(a), Some(b)) => (a == b).then_some(a),
+            (Some(a), None) => self.second.placement(image).is_none().then_some(a),
+            (None, Some(b)) => self.first.placement(image).is_none().then_some(b),
+            (None, None) => None,
+        }
+    }
 }
 
 /// Prefer the primary recognizer; only ask the fallback when the primary abstains.
@@ -2726,6 +2775,18 @@ impl DiagramRecognizer for Fallback<'_> {
         self.primary
             .placement_inside(image)
             .or_else(|| self.fallback.placement_inside(image))
+    }
+    /// A grid the usual frame did not choose is a second chance at a board the networks
+    /// abstained on, so one network is not enough: at least two must read it, and alike.
+    fn placement_unrefined(&self, image: &[u8]) -> Option<String> {
+        let votes = self.unrefined_votes(image);
+        let first = votes.first()?;
+        (votes.len() >= 2 && votes.iter().all(|v| v == first)).then(|| first.clone())
+    }
+    fn unrefined_votes(&self, image: &[u8]) -> Vec<String> {
+        let mut votes = self.primary.unrefined_votes(image);
+        votes.extend(self.fallback.unrefined_votes(image));
+        votes
     }
 }
 
@@ -3602,6 +3663,48 @@ mod tests {
             }
             .placement(&[]),
             None
+        );
+    }
+
+    /// A recognizer that reads nothing but the unrefined frame.
+    struct Unrefined(Option<&'static str>);
+    impl DiagramRecognizer for Unrefined {
+        fn placement(&self, _: &[u8]) -> Option<String> {
+            None
+        }
+        fn placement_unrefined(&self, _: &[u8]) -> Option<String> {
+            self.0.map(str::to_owned)
+        }
+    }
+
+    #[test]
+    fn an_unrefined_grid_is_read_only_when_two_recognizers_agree() {
+        let unrefined = |primary: &dyn DiagramRecognizer, fallback: &dyn DiagramRecognizer| {
+            Fallback { primary, fallback }.placement_unrefined(&[])
+        };
+        let kings = "8/8/8/8/8/8/8/K6k";
+        assert_eq!(
+            unrefined(&Unrefined(Some(kings)), &Unrefined(Some(kings))).as_deref(),
+            Some(kings)
+        );
+        // One network alone is not enough, and two that differ leave the board unread.
+        assert_eq!(unrefined(&Unrefined(Some(kings)), &Unrefined(None)), None);
+        assert_eq!(unrefined(&Unrefined(None), &Unrefined(Some(kings))), None);
+        assert_eq!(
+            unrefined(
+                &Unrefined(Some(kings)),
+                &Unrefined(Some("8/8/8/8/8/8/8/k6K"))
+            ),
+            None
+        );
+        // Votes gather through nested fallbacks.
+        let inner = Fallback {
+            primary: &Unrefined(Some(kings)),
+            fallback: &Unrefined(None),
+        };
+        assert_eq!(
+            unrefined(&inner, &Unrefined(Some(kings))).as_deref(),
+            Some(kings)
         );
     }
 

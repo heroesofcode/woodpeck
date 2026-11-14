@@ -422,6 +422,11 @@ pub fn resolve_using(mut document: Document, recognizer: Option<&dyn DiagramReco
     if recognizer.is_some_and(|r| place_inside_frames(r, &best, &assets, &mut placements)) {
         best = resolve_all(&placements);
     }
+    // Then boards whose refined frame slid off the one the border lines located are read from
+    // that frame. Last of all, so they never vouch for other boards or change a template.
+    if recognizer.is_some_and(|r| place_unrefined_frames(r, &best, &assets, &mut placements)) {
+        best = resolve_all(&placements);
+    }
     best.document.assets = assets;
     best
 }
@@ -443,6 +448,29 @@ fn place_inside_frames(
             && let Some(inside) = recognizer.placement_inside(&asset.bytes)
         {
             *placement = Some(inside);
+            added = true;
+        }
+    }
+    added
+}
+/// Boards still shown as plain images get a placement from their located frame before
+/// refining, when the recognizer offers it. Like [`place_inside_frames`], boards with a
+/// placement or shown from an ungated reading are never touched.
+fn place_unrefined_frames(
+    recognizer: &dyn DiagramRecognizer,
+    book: &Book,
+    assets: &[super::document::Asset],
+    placements: &mut HashMap<String, Option<String>>,
+) -> bool {
+    let shown = shown_paths(book);
+    let mut added = false;
+    for (path, placement) in placements.iter_mut() {
+        if placement.is_none()
+            && !shown.contains(path.as_str())
+            && let Some(asset) = assets.iter().find(|a| &a.path == path)
+            && let Some(unrefined) = recognizer.placement_unrefined(&asset.bytes)
+        {
+            *placement = Some(unrefined);
             added = true;
         }
     }
