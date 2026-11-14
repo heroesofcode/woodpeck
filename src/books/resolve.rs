@@ -1273,6 +1273,7 @@ fn recognized_positions(
                 Some((*white, piece, rest.as_str().to_owned()))
             });
             let before = before_image(page, b);
+            let mut unreadable = None;
             let (mut turn, mut nearby) = image_position(
                 page.blocks[b + 1..]
                         .iter()
@@ -1289,7 +1290,44 @@ fn recognized_positions(
                 // PDF text interleaves columns, so a glyph it could not map there often belongs
                 // to a move beside the board's own; only reflowed books read it as a figurine.
                 document.format != "pdf",
+                &mut unreadable,
             );
+            // The first move after the board lost its figurine: later moves there may follow the
+            // skipped ply or belong to the other column. When anything else about the board names
+            // the other side, they confirm none; the side they would have named still vetoes a
+            // reading of the board's picture or of the moves under it, while the move that led to
+            // the board and the game table are not vetoed. A book whose figurines all read as
+            // junk loses nothing when nothing disputes the moves.
+            let after_veto = if let Some(Unreadable { numbered }) = unreadable
+                && nearby
+                && let Turn::Confirmed(pos) = &turn
+                && [
+                    numbered.map(|side| side == Color::White),
+                    caption,
+                    printed,
+                    triangle,
+                    key,
+                    scan,
+                    before.after_move.map(|side| side == Color::White),
+                    before
+                        .marked
+                        .as_ref()
+                        .map(|m| !m.0)
+                        .or(before.marked_loose.map(|white| !white)),
+                    super::game_sides::side(&placement),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|white| white != (pos.turn() == Color::White))
+            {
+                Some(pos.turn())
+            } else {
+                None
+            };
+            if after_veto.is_some() {
+                turn = Turn::Unknown;
+                nearby = false;
+            }
             // Commentary after a group of boards may be about an earlier one: a board second in
             // the group that it contradicts is shown without a side, and nothing fills one.
             let grouped = matches!(turn, Turn::Contradicted | Turn::Disputed(_))
@@ -1340,10 +1378,30 @@ fn recognized_positions(
             if nearby
                 && marker.is_none()
                 && let Turn::Confirmed(pos) = &turn
-                && [caption, printed, triangle, key, scan]
-                    .into_iter()
-                    .flatten()
-                    .any(|white| white != (pos.turn() == Color::White))
+                && [
+                    caption,
+                    printed,
+                    triangle,
+                    key,
+                    scan,
+                    // In PDF text, the ply closing the paragraph above the board names the side
+                    // to move too; reflowed books often close it with a sideline instead, and a
+                    // printed side that agrees with the moves outweighs it.
+                    before
+                        .after_move
+                        .map(|side| side == Color::White)
+                        .or(before.marked_loose.map(|white| !white))
+                        .filter(|_| document.format == "pdf")
+                        .filter(|_| {
+                            ![caption, printed, triangle, key, scan]
+                                .into_iter()
+                                .flatten()
+                                .any(|white| white == (pos.turn() == Color::White))
+                        }),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|white| white != (pos.turn() == Color::White))
             {
                 if image {
                     unconfirmed.insert((p, b), placement);
@@ -1592,6 +1650,17 @@ fn recognized_positions(
                     from_games.push(((p, b), pos));
                 }
             }
+            // The move that led to the board, read above it, outranks the veto.
+            if let Some(veto) = after_veto
+                && let Turn::Confirmed(pos) = &turn
+                && pos.turn() != veto
+                && !played
+                    .iter()
+                    .chain(before.marked.iter())
+                    .any(|&(mover, _, _)| mover != (pos.turn() == Color::White))
+            {
+                turn = Turn::Unknown;
+            }
             // Self-check: a side printed in the book that the table contradicts means this
             // book poses positions with the other side to move than real games reached them.
             let stated = [marker, caption, printed, triangle, key, scan]
@@ -1792,6 +1861,10 @@ struct Before {
     /// The last ply of the paragraph closed by "(D)" right above the board: mover, piece
     /// (`P`, or `*` for a figurine the text lost) and destination.
     marked: Option<(bool, char, String)>,
+    /// Whether White made the ply closed by "(D)" right above the board, read more loosely
+    /// than [`Self::marked`], which leaves it unset: past the other column glued after the mark,
+    /// and through an OCR `l` for `1` in the move number. Only ever vetoes a side, never names one.
+    marked_loose: Option<bool>,
     /// The page's "mate in N" theme, if one heads the diagrams on it.
     mate: Option<u8>,
     /// The same theme when the nearest statement of it is a section heading.
@@ -1856,8 +1929,15 @@ fn before_image(page: &Page, b: usize) -> Before {
     for (i, (text, heading)) in near.iter().copied().enumerate() {
         if i == 0 {
             before.stated = lead_in_turn(text);
-            before.after_move = side_after_trailing_move(text);
+            // A "(D)" inside the paragraph marks this board; what follows it there is the other
+            // column of the page glued on, so its last ply says nothing about this board.
+            if !glued_after_mark(text) {
+                before.after_move = side_after_trailing_move(text);
+            }
             before.marked = marked_move(text);
+            if before.marked.is_none() {
+                before.marked_loose = loose_marked_mover(text);
+            }
             // A bare "64" between a caption and the image — look one more block up.
             skip_number = before.stated.is_none() && diagram_number(text);
         } else if skip_number {
@@ -1908,6 +1988,31 @@ fn before_image(page: &Page, b: usize) -> Before {
         }
     }
     before
+}
+/// The mover of the ply right before the first "(D)" in `text`, read past whatever follows
+/// the mark and with an OCR `l` for `1` in move numbers ("3l.a5 (D)").
+fn loose_marked_mover(text: &str) -> Option<bool> {
+    let at = text.find("(D)")?;
+    let words: Vec<String> = text[..at]
+        .split_whitespace()
+        .map(|word| {
+            let number = word.split('.').next().unwrap_or("");
+            if word.contains('.')
+                && number.contains(|c: char| c.is_ascii_digit())
+                && number.chars().all(|c| c.is_ascii_digit() || c == 'l')
+            {
+                word.replacen(number, &number.replace('l', "1"), 1)
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect();
+    marked_move(&format!("{} (D)", words.join(" "))).map(|m| m.0)
+}
+/// Whether a "(D)" diagram mark sits inside `text` with more text after it.
+fn glued_after_mark(text: &str) -> bool {
+    text.find("(D)")
+        .is_some_and(|at| !text[at + 3..].trim().is_empty())
 }
 /// A short block that only numbers the diagram ("64", "No. 12", "Diagram 3").
 fn diagram_number(text: &str) -> bool {
@@ -2030,8 +2135,18 @@ fn marked_move(text: &str) -> Option<(bool, char, String)> {
             }
             // "12." and "12 " open a White move, "12..." a Black one.
             let spaced = dots == 0 && bytes.get(i + digits) == Some(&b' ');
+            // Two dots may be "12." and a figurine extracted as a dot plus a mark (". .§c5",
+            // ". .Q.b5"): a White move, or a Black one that lost a dot. Only a plain piece
+            // letter or square after them keeps it Black's.
+            let glyph = dots == 2
+                && outside[j..].split_whitespace().next().is_some_and(|ply| {
+                    !ply.starts_with(|c: char| c.is_ascii_alphanumeric() || figurine(c))
+                        || ply
+                            .trim_end_matches(['!', '?', '+', '#', '.', ','])
+                            .contains('.')
+                });
             if digits <= 3 && (dots > 0 || spaced) {
-                number = Some((j, dots <= 1));
+                number = (!glyph).then_some((j, dots <= 1));
             }
             i = j.max(i + digits);
         } else {
@@ -2174,6 +2289,14 @@ pub(crate) fn caption_turn(text: &str) -> Option<Color> {
         }
     })
 }
+/// The first move after a board, its figurine lost; its move number may still name a side.
+#[derive(Clone, Copy)]
+struct Unreadable {
+    numbered: Option<Color>,
+}
+/// Side from the text after a board, and whether moves printed after it set the side.
+/// `unreadable` is set when the first move after the board lost its figurine, holding the side
+/// its move number names when read loosely ("38. ..d 4!" is Black's), if any.
 #[allow(clippy::too_many_lines)] // Captions, numbering and board rules are weighed in one pass.
 fn image_position<'a>(
     following: impl Iterator<Item = (&'a Page, &'a Block)>,
@@ -2182,6 +2305,7 @@ fn image_position<'a>(
     alphabet: &str,
     placement: &str,
     figurines: bool,
+    unreadable: &mut Option<Unreadable>,
 ) -> (Turn, bool) {
     let mut stated = caption_turn(alt);
     if let Some(side) = before.stated {
@@ -2193,6 +2317,8 @@ fn image_position<'a>(
     // Whether the image's alt text or the caption just above it named the side.
     let led = stated.is_some();
     let mut mate = mate_in(alt).or(before.mate);
+    // Whether a move number was already passed over in the text after the board.
+    let mut numbered = false;
     for (page, block) in following {
         let text = &page.text[block.span.clone()];
         if block.kind == BlockKind::Heading && caption(text) {
@@ -2219,6 +2345,8 @@ fn image_position<'a>(
             if depth > 0 || !matches!(t.kind, Kind::Number(_)) {
                 continue;
             }
+            let first = !numbered;
+            numbered = true;
             let mut i = n;
             let mut side = Color::White;
             if text[t.span.clone()].ends_with("...") {
@@ -2256,6 +2384,14 @@ fn image_position<'a>(
             // move that reached the board; it names no side to move.
             if restates(placement, side, &text[ts[i + 1].span.clone()]) {
                 continue;
+            }
+            // In PDF text, the first move after the board continuing with a figurine extracted
+            // as junk ("36 ...� d3?!", "37 . .Q.e5+") is unreadable, not a non-move number: a
+            // later move would be read past the skipped ply, so the side stays open.
+            if first && !figurines && garbled(word) && legal(side.other()).is_none() {
+                *unreadable = Some(Unreadable {
+                    numbered: loose_number_side(&text[t.span.start..]),
+                });
             }
             if legal(side.other()).is_some() {
                 // The numbering names one side but only the other can play the move. After a
@@ -2316,6 +2452,42 @@ fn image_position<'a>(
         _ => Turn::Unknown,
     };
     (turn, false)
+}
+/// A move token whose piece came out of the text layer as junk: anything but letters,
+/// digits and move punctuation (`�`, `.§c5`, `4)c3`, `'it'g5`).
+fn garbled(word: &str) -> bool {
+    let word = word.trim_end_matches(['!', '?', '+', '#', '.', ',']);
+    !word.is_empty()
+        && !word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || figurine(c) || matches!(c, '-' | '=' | ':'))
+}
+/// The side a move number names, counting the dots OCR split around it: "38. ..d 4!" and
+/// "36 . .Q.e5+" are Black's, "22 tJes" and "29. Bd1" White's. A number running into letters
+/// ("2S ...e xds!", an OCR 5) names neither.
+fn loose_number_side(number: &str) -> Option<Color> {
+    let rest = number.trim_start_matches(|c: char| c.is_ascii_digit());
+    if rest.starts_with(|c: char| c.is_alphanumeric()) {
+        return None;
+    }
+    let dots: usize = rest
+        .chars()
+        .take_while(|&c| matches!(c, '.' | '\u{2022}' | '\u{2026}') || c.is_whitespace())
+        .map(|c| match c {
+            '.' | '\u{2022}' => 1,
+            '\u{2026}' => 3,
+            _ => 0,
+        })
+        .sum();
+    Some(if dots >= 2 {
+        Color::Black
+    } else {
+        Color::White
+    })
+}
+/// A Unicode chess figurine (`♔`..`♟`), which names a piece like a letter does.
+fn figurine(c: char) -> bool {
+    ('\u{2654}'..='\u{265F}').contains(&c)
 }
 /// Whether the side to move can force checkmate within `n` of its moves.
 fn mates_within(pos: &Chess, n: u8) -> bool {
@@ -3161,6 +3333,146 @@ mod image_tests {
         assert_eq!(marked_move("40.h4?! (D) (53...Kg4)"), None);
         assert_eq!(marked_move("2 lDt\"3! (D)"), None);
         assert_eq!(marked_move("Black is better (D)"), None);
+    }
+    #[test]
+    fn a_figurine_extracted_as_a_dot_leaves_the_marked_mover_open() {
+        // "50 . .§c5" is White's 50.Rc5 with the rook printed as ".§", and "67 . .Q.b5" a bishop:
+        // two dots then a glyph could be either side's move.
+        assert_eq!(marked_move("49.Axc3 .§xa3 50 . .§c5 (D)"), None);
+        assert_eq!(marked_move("66.4)d2+ \u{FFFD}d3 67 . .Q.b5 (D)"), None);
+        // Three dots, or two before a plain move, stay Black's.
+        assert_eq!(
+            marked_move("46 . . .§c5 (D)"),
+            Some((false, '*', "c5".into()))
+        );
+        assert_eq!(
+            marked_move("30 \u{2022} .Ra2! (D)"),
+            Some((false, '*', "a2".into()))
+        );
+    }
+    #[test]
+    fn the_other_column_glued_after_a_d_mark_names_no_side() {
+        assert!(glued_after_mark("101.Rd3 (D) Rc8 35.Ra7 Rc1+ 36.Kf2 Kc5"));
+        assert!(!glued_after_mark("101.Rd3 (D)"));
+        assert!(!glued_after_mark("36.Kf2 Kc5"));
+        let placement = "4k3/8/8/4q3/8/8/8/3K4";
+        let side = |kind: &BlockKind| match kind {
+            BlockKind::RecognizedDiagram { fen, .. } => fen.split(' ').nth(1).map(str::to_owned),
+            _ => None,
+        };
+        // Alone, "36.Kf2 Kc5" would name White.
+        assert_eq!(
+            side(&after_marked("36.Kf2 Kc5", placement)).as_deref(),
+            Some("w")
+        );
+        assert_eq!(
+            side(&after_marked(
+                "101.Rd3 (D) Rc8 35.Ra7 Rc1+ 36.Kf2 Kc5",
+                placement
+            )),
+            None
+        );
+    }
+    #[test]
+    fn an_unreadable_move_after_the_board_stops_the_search_for_a_side() {
+        let placement = "4k3/8/8/4q3/8/8/8/3K4";
+        let side = |kind: &BlockKind| match kind {
+            BlockKind::RecognizedDiagram { fen, .. } => fen.split(' ').nth(1).map(str::to_owned),
+            _ => None,
+        };
+        // Black's 36th move lost its figurine; 37.Kc2 is playable here for White but only
+        // after a Black move nobody can read.
+        assert_eq!(
+            side(&around_marked(
+                "Black now plays on.",
+                &["36 ...\u{FFFD} d3?! 37.Kc2 Qe2"],
+                placement
+            )),
+            None
+        );
+        assert_eq!(
+            side(&around_marked(
+                "Black now plays on.",
+                &["36 ... .§d3 37.Kc2 Qe2"],
+                placement
+            )),
+            None
+        );
+        // A clean move that is illegal here is still passed over.
+        assert_eq!(
+            side(&around_marked(
+                "Black now plays on.",
+                &["36 ... Rd3 37.Kc2 Qe2"],
+                placement
+            ))
+            .as_deref(),
+            Some("w")
+        );
+    }
+    #[test]
+    fn an_unreadable_move_keeps_the_side_its_own_number_and_everything_else_agree_on() {
+        let placement = "4k3/8/8/4q3/8/8/8/3K4";
+        let side = |kind: &BlockKind| match kind {
+            BlockKind::RecognizedDiagram { fen, .. } => fen.split(' ').nth(1).map(str::to_owned),
+            _ => None,
+        };
+        // White's 36th move lost its figurine, but its number is White's and nothing else about
+        // the board disputes the White move read next.
+        assert_eq!(
+            side(&around_marked(
+                "The game went on.",
+                &["36 \u{FFFD}d3 37.Kc2 Qe2"],
+                placement
+            ))
+            .as_deref(),
+            Some("w")
+        );
+    }
+    #[test]
+    fn a_loosely_read_d_mark_vetoes_a_side_read_from_moves_after_the_board() {
+        let placement = "4k3/8/8/4q3/8/8/8/3K4";
+        // "3l.Kd2 (D)": an OCR l in the number; White just moved, the moves under the board
+        // name White.
+        assert!(matches!(
+            around_marked("3l.Kd2 (D)", &["37.Kc2 Qe2"], placement),
+            BlockKind::UnconfirmedDiagram { .. }
+        ));
+    }
+    #[test]
+    fn a_loose_d_mark_reads_past_ocr_numbers_and_glued_text() {
+        assert_eq!(loose_marked_mover("30.a4! Kf7 3l.a5 (D)"), Some(true));
+        assert_eq!(
+            loose_marked_mover("85.Kc6 Ke5 86.Rd3 (D) continuation according to"),
+            Some(true)
+        );
+        assert_eq!(
+            loose_marked_mover("20.Nxe5 Nxe5 (D) 28.Qh5 Nd8"),
+            Some(false)
+        );
+        assert_eq!(loose_marked_mover("no mark here"), None);
+    }
+    #[test]
+    fn a_move_number_names_a_side_through_ocr_split_dots() {
+        assert_eq!(loose_number_side("38. ..d 4!"), Some(Color::Black));
+        assert_eq!(loose_number_side("36 . .Q.e5+"), Some(Color::Black));
+        assert_eq!(
+            loose_number_side("10 \u{2022} \u{2022} \u{2022},U c8!"),
+            Some(Color::Black)
+        );
+        assert_eq!(loose_number_side("41\u{2026}Re8"), Some(Color::Black));
+        assert_eq!(loose_number_side("22 tJes"), Some(Color::White));
+        assert_eq!(loose_number_side("29. Bd1"), Some(Color::White));
+        assert_eq!(loose_number_side("2S ...e xds!"), None);
+    }
+    #[test]
+    fn a_nearby_move_abstains_when_the_ply_above_the_board_names_the_other_side() {
+        let placement = "4k3/8/8/4q3/8/8/8/3K4";
+        // "36.Kf2 Kc5" closing the paragraph leaves White to move; "12 ... Kd7" after the board
+        // names Black.
+        assert!(matches!(
+            around_marked("36.Kf2 Kc5", &["12 ... Kd7 13 Kc2"], placement),
+            BlockKind::UnconfirmedDiagram { .. }
+        ));
     }
     #[test]
     fn a_d_marked_move_outweighs_a_side_read_from_moves_after_the_board() {
