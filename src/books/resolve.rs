@@ -1352,13 +1352,15 @@ fn recognized_positions(
             }
             // Trailing ply or a caption above a diagram number — only when nothing else
             // (including a printed side marker) names the side, so a wrong inference cannot
-            // demote a marker-confirmed board.
+            // demote a marker-confirmed board. It never restores a side the unreadable first
+            // move vetoed: something else about the board named the other one.
             if matches!(turn, Turn::Unknown)
                 && marker.is_none()
                 && let Some(side) = before
                     .after_move
                     .or(before.past_number)
                     .or(before.puzzle_label)
+                && after_veto != Some(side)
             {
                 turn = placed(&placement, side).map_or(Turn::Unknown, Turn::Confirmed);
                 nearby = true;
@@ -1944,7 +1946,7 @@ fn before_image(page: &Page, b: usize) -> Before {
             // Only `past_number` (Unknown fallback): never `stated`, so a look-past caption
             // cannot Contradict following moves or demote a printed marker.
             before.past_number = lead_in_turn(text);
-            if before.after_move.is_none() {
+            if before.after_move.is_none() && !glued_after_mark(text) {
                 before.after_move = side_after_trailing_move(text);
             }
             skip_number = false;
@@ -2317,7 +2319,7 @@ fn image_position<'a>(
     // Whether the image's alt text or the caption just above it named the side.
     let led = stated.is_some();
     let mut mate = mate_in(alt).or(before.mate);
-    // Whether a move number was already passed over in the text after the board.
+    // Whether a move after the board was already passed over (one restating the board aside).
     let mut numbered = false;
     for (page, block) in following {
         let text = &page.text[block.span.clone()];
@@ -2345,8 +2347,6 @@ fn image_position<'a>(
             if depth > 0 || !matches!(t.kind, Kind::Number(_)) {
                 continue;
             }
-            let first = !numbered;
-            numbered = true;
             let mut i = n;
             let mut side = Color::White;
             if text[t.span.clone()].ends_with("...") {
@@ -2385,6 +2385,9 @@ fn image_position<'a>(
             if restates(placement, side, &text[ts[i + 1].span.clone()]) {
                 continue;
             }
+            // Only a move that does not restate the board counts as the first one after it.
+            let first = !numbered;
+            numbered = true;
             // In PDF text, the first move after the board continuing with a figurine extracted
             // as junk ("36 ...� d3?!", "37 . .Q.e5+") is unreadable, not a non-move number: a
             // later move would be read past the skipped ply, so the side stays open.
@@ -3427,6 +3430,61 @@ mod image_tests {
             .as_deref(),
             Some("w")
         );
+    }
+    #[test]
+    fn a_trailing_ply_does_not_restore_a_side_the_unreadable_move_vetoed() {
+        let placement = "4k3/8/8/4q3/8/8/8/3K4";
+        let side = |kind: &BlockKind| match kind {
+            BlockKind::RecognizedDiagram { fen, .. } => fen.split(' ').nth(1).map(str::to_owned),
+            _ => None,
+        };
+        // "35.Kd2 Kd7" above the board leaves White to move, as "37.Kc2" would, but the junk
+        // move under the board is numbered as Black's.
+        assert_eq!(
+            side(&around_marked(
+                "35.Kd2 Kd7",
+                &["36 ...\u{FFFD} d3?! 37.Kc2 Qe2"],
+                placement
+            )),
+            None
+        );
+    }
+    #[test]
+    fn a_glued_d_mark_above_a_diagram_number_names_no_side() {
+        let placement = "4k3/8/8/4q3/8/8/8/3K4";
+        let mut page = Page::default();
+        page.push(
+            "101.Rd3 (D) Rc8 35.Ra7 Rc1+ 36.Kf2 Kc5",
+            BlockKind::Paragraph,
+        );
+        page.push("64", BlockKind::Paragraph);
+        page.push(
+            "",
+            BlockKind::Image {
+                path: "images/d.png".into(),
+                alt: String::new(),
+            },
+        );
+        let document = Document {
+            cover: None,
+            isbn: None,
+            title: String::new(),
+            author: String::new(),
+            format: "pdf".into(),
+            pages: vec![page],
+            assets: vec![Asset {
+                path: "images/d.png".into(),
+                bytes: tiny_png(),
+            }],
+        };
+        let kind = resolve_using(document, Some(&Fixed(placement)))
+            .document
+            .pages[0]
+            .blocks[2]
+            .kind
+            .clone();
+        // Alone, the glued column's "36.Kf2 Kc5" would name White.
+        assert!(!matches!(kind, BlockKind::RecognizedDiagram { .. }));
     }
     #[test]
     fn a_loosely_read_d_mark_vetoes_a_side_read_from_moves_after_the_board() {
